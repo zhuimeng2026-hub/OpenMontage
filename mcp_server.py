@@ -92,6 +92,14 @@ class DryRunResult(BaseModel):
     would_execute: bool
 
 
+class UploadAssetResult(BaseModel):
+    success: bool = Field(description="Whether the asset was stored")
+    asset: dict[str, Any] = Field(default_factory=dict, description="Asset manifest entry")
+    asset_manifest: dict[str, Any] = Field(default_factory=dict, description="Manifest fragment ready for video tools")
+    deduplicated: bool = Field(default=False, description="Whether an identical existing file was reused")
+    error: Optional[str] = Field(default=None, description="Error message if upload failed")
+
+
 class CheckpointData(BaseModel):
     version: str
     project_id: str
@@ -257,6 +265,43 @@ async def execute_tool(
             success=False,
             error=f"Execution failed: {type(e).__name__}: {e}",
         )
+
+
+@mcp.tool()
+def upload_asset(
+    project_id: str,
+    filename: str,
+    content_base64: str,
+    mime_type: Optional[str] = None,
+    sha256: Optional[str] = None,
+    overwrite: bool = False,
+) -> UploadAssetResult:
+    """Upload client-local media into a project-scoped assets directory.
+
+    The returned path is safe to pass to ``video_compose`` or an AI video
+    provider on this server.  ``content_base64`` may be raw base64 or a
+    ``data:...;base64,...`` URI.  Client-local paths are intentionally not
+    accepted because the MCP server cannot access the caller's filesystem.
+    """
+    tool = registry.get("upload_asset")
+    if tool is None:
+        return UploadAssetResult(success=False, error="upload_asset tool is not registered")
+    result = tool.execute({
+        "project_id": project_id,
+        "filename": filename,
+        "content_base64": content_base64,
+        "mime_type": mime_type,
+        "sha256": sha256,
+        "overwrite": overwrite,
+    })
+    data = result.data or {}
+    return UploadAssetResult(
+        success=result.success,
+        asset=data.get("asset", {}),
+        asset_manifest=data.get("asset_manifest", {}),
+        deduplicated=bool(data.get("deduplicated", False)),
+        error=result.error,
+    )
 
 
 @mcp.tool()

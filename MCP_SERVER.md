@@ -143,7 +143,7 @@ openclaw gateway --restart
 
 ## 4. MCP 工具一览
 
-共 13 个工具，分为 4 组。
+共 14 个工具，分为 5 组。
 
 ### 4.1 工具发现（4 个）
 
@@ -240,7 +240,48 @@ openclaw agent --message "调用 openmontage 的 list_tools，过滤 status=avai
 
 ---
 
-### 4.3 Pipeline 管理（3 个）
+### 4.3 素材管理（1 个）
+
+#### `upload_asset` — 上传项目素材
+
+将客户端的图片、视频或音频以 Base64 上传到远程 OpenMontage 项目的
+`projects/<project_id>/assets/` 目录。返回的 `asset_manifest` 可直接传给
+`execute_tool(tool_name="video_compose", ...)`，或传给图生视频工具。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| project_id | string | 是 | 项目 ID，只允许字母、数字、`.`、`_`、`-` |
+| filename | string | 是 | 文件名，不允许路径分隔符；支持常见图片/视频/音频格式 |
+| content_base64 | string | 是 | 原始 Base64 或 `data:...;base64,...` |
+| mime_type | string? | 否 | MIME 类型，不填则按扩展名推断 |
+| sha256 | string? | 否 | 64 位 SHA-256，用于完整性校验 |
+| overwrite | boolean | 否 | 默认 false；同名不同内容时拒绝覆盖 |
+
+**安全限制：** 单文件默认最大 100 MB，可通过 `OPENMONTAGE_MAX_UPLOAD_MB`
+调整；文件始终限制在对应项目的 `assets` 子目录内。
+
+**返回示例：**
+
+```json
+{
+  "success": true,
+  "asset": {
+    "id": "bag-demo-a1b2c3d4e5f6",
+    "path": ".../projects/bag-demo/assets/bag.png",
+    "mime_type": "image/png",
+    "sha256": "..."
+  },
+  "asset_manifest": {
+    "assets": [
+      {"id": "bag-demo-a1b2c3d4e5f6", "path": ".../projects/bag-demo/assets/bag.png"}
+    ]
+  }
+}
+```
+
+### 4.4 Pipeline 管理（3 个）
 
 #### `list_pipelines` — 列出生产线
 
@@ -276,7 +317,7 @@ openclaw agent --message "调用 openmontage 的 list_tools，过滤 status=avai
 
 ---
 
-### 4.4 Checkpoint 管理（4 个）
+### 4.5 Checkpoint 管理（4 个）
 
 #### `read_checkpoint` — 读取检查点
 
@@ -357,6 +398,7 @@ openclaw agent --message "调用 openmontage 的 list_tools，过滤 status=avai
 | tts_selector | TTS 选择 | 自动选择最优 TTS 工具 |
 | direct_clip_search | 素材搜索 | 直接素材检索 |
 | clip_search | 素材检索 | CLIP 语义检索 |
+| upload_asset | 素材上传 | 将客户端 Base64 图片/视频/音频写入项目 assets 目录 |
 
 ### 付费 / 需要 API Key 的工具
 
