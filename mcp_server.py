@@ -305,6 +305,30 @@ def upload_asset(
 
 
 @mcp.tool()
+def upload_asset_chunk(
+    operation: str,
+    project_id: Optional[str] = None,
+    filename: Optional[str] = None,
+    total_bytes: Optional[int] = None,
+    mime_type: Optional[str] = None,
+    sha256: Optional[str] = None,
+    upload_id: Optional[str] = None,
+    offset: Optional[int] = None,
+    chunk_base64: Optional[str] = None,
+) -> dict[str, Any]:
+    """Resumable upload for 1080p-class media through small MCP requests.
+
+    Call in order: start, append one or more chunks, complete. Each chunk
+    should be at most 1 MiB; the server verifies size, offset and SHA-256.
+    """
+    tool = registry.get("upload_asset_chunk")
+    if tool is None:
+        return {"success": False, "error": "upload_asset_chunk is not registered"}
+    result = tool.execute({"operation": operation, "project_id": project_id, "filename": filename, "total_bytes": total_bytes, "mime_type": mime_type, "sha256": sha256, "upload_id": upload_id, "offset": offset, "chunk_base64": chunk_base64})
+    return {"success": result.success, **(result.data or {}), "artifacts": result.artifacts, "error": result.error}
+
+
+@mcp.tool()
 def dry_run_tool(
     tool_name: str,
     inputs: dict[str, Any],
