@@ -143,7 +143,7 @@ openclaw gateway --restart
 
 ## 4. MCP 工具一览
 
-共 14 个工具，分为 5 组。
+共 15 个工具，分为 5 组。
 
 ### 4.1 工具发现（4 个）
 
@@ -261,6 +261,19 @@ openclaw agent --message "调用 openmontage 的 list_tools，过滤 status=avai
 
 **安全限制：** 单文件默认最大 100 MB，可通过 `OPENMONTAGE_MAX_UPLOAD_MB`
 调整；文件始终限制在对应项目的 `assets` 子目录内。
+
+对于 1080p 图片、视频或批量素材，优先使用 `upload_asset_chunk`，避免
+Base64 请求经过 Nginx/网关时超限。每个分块建议不超过 1 MiB，流程为：
+
+```text
+start(project_id, filename, total_bytes, mime_type, sha256)
+→ append(upload_id, offset, chunk_base64) × N
+→ complete(upload_id)
+```
+
+推荐的视频网站素材规格：图片按 1920×1080（16:9）准备；视频使用
+1920×1080、H.264、25/30 FPS；单个素材控制在 100 MB 以内。上传接口不
+强制重编码，保持源文件质量，并在完成时校验 SHA-256。
 
 **返回示例：**
 
