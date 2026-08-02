@@ -105,8 +105,11 @@ class TestContract:
     def test_status_unavailable_without_server(self, cls):
         """Without a running server, status should be UNAVAILABLE."""
         tool = cls()
-        # Point to a port that's almost certainly not running ComfyUI
-        tool._client.server_url = "http://127.0.0.1:19999"
+        # Point to a port that's almost certainly not running ComfyUI.
+        # NOTE: 19999 was the original choice but netdata listens there on
+        # this host and answers ANY path with 200, which makes is_available()
+        # report the tool as reachable. 19998 is verified free here.
+        tool._client.server_url = "http://127.0.0.1:19998"
         assert tool.get_status() == ToolStatus.UNAVAILABLE
 
     def test_idempotency_key_fields(self, cls):

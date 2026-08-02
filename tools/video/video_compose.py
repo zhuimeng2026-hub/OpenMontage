@@ -201,6 +201,15 @@ class VideoCompose(BaseTool):
             "codec": {"type": "string", "default": "libx264"},
             "crf": {"type": "integer", "default": 23},
             "preset": {"type": "string", "default": "medium"},
+            "remotion_timeout_ms": {
+                "type": "integer",
+                "description": (
+                    "Remotion render timeout in milliseconds, passed through as "
+                    "`--timeout` (governs headless-browser setup and delayRender). "
+                    "Raise this when the browser is slow to start (e.g. restricted "
+                    "networks). The subprocess timeout is widened to match."
+                ),
+            },
         },
     }
 
@@ -256,6 +265,12 @@ class VideoCompose(BaseTool):
         except Exception:
             return False
 
+    def _ffmpeg_available(self) -> bool:
+        """Check if the ffmpeg binary is actually resolvable on PATH."""
+        import shutil as _shutil
+
+        return bool(_shutil.which("ffmpeg"))
+
     def get_info(self) -> dict[str, Any]:
         """Extend base get_info to surface all available render runtimes.
 
@@ -264,10 +279,11 @@ class VideoCompose(BaseTool):
         fallback between runtimes is forbidden.
         """
         info = super().get_info()
+        ffmpeg_ok = self._ffmpeg_available()
         remotion_ok = self._remotion_available()
         hyperframes_ok = self._hyperframes_available()
         info["render_engines"] = {
-            "ffmpeg": True,
+            "ffmpeg": ffmpeg_ok,
             "remotion": remotion_ok,
             "hyperframes": hyperframes_ok,
         }
@@ -403,8 +419,22 @@ class VideoCompose(BaseTool):
         preset = inputs.get("preset", "medium")
         profile_name = inputs.get("profile")
 
-        # Resolve target resolution from profile or default
+        # Resolve target resolution + fit mode. Priority: explicit `profile`
+        # arg > edit_decisions.metadata.compose_target > default (landscape HD).
+        # compose_target = {"width": W, "height": H, "fit": "pad"|"cover"} lets a
+        # caller request vertical (9:16) or any aspect without a named profile.
+        # fit="pad" letterboxes (no content loss, the historical default);
+        # fit="cover" scales-to-fill and centre-crops (better for vertical social).
         resolution = "1920x1080"
+        fit_mode = "pad"
+        compose_target = (edit_decisions.get("metadata") or {}).get("compose_target")
+        if isinstance(compose_target, dict):
+            try:
+                resolution = f"{int(compose_target['width'])}x{int(compose_target['height'])}"
+            except (KeyError, ValueError, TypeError):
+                pass
+            if compose_target.get("fit") in ("pad", "cover"):
+                fit_mode = compose_target["fit"]
         if profile_name:
             try:
                 from lib.media_profiles import get_profile
@@ -412,6 +442,10 @@ class VideoCompose(BaseTool):
                 resolution = f"{p.width}x{p.height}"
             except (ImportError, ValueError):
                 pass
+        try:
+            target_w, target_h = (int(v) for v in resolution.split("x"))
+        except ValueError:
+            target_w, target_h = 1920, 1080
 
         cuts = edit_decisions.get("cuts", [])
         if not cuts:
@@ -488,17 +522,22 @@ class VideoCompose(BaseTool):
                     # pix_fmt / sar across ALL segments — otherwise it throws
                     # "Non-monotonous DTS" or silently produces corrupt output.
                     #
-                    # Default target is 1920x1080 @ 30fps, yuv420p, sar=1. If the
-                    # source is smaller it letterboxes; if larger it downscales.
-                    # Callers can override via edit_decisions.metadata.compose_target
-                    # (future extension) but the defaults match the most common
-                    # delivery profile (YouTube landscape).
-                    vf_parts: list[str] = [
-                        "scale=1920:1080:force_original_aspect_ratio=decrease",
-                        "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black",
-                        "setsar=1",
-                        "fps=30",
-                    ]
+                    # Target is target_w x target_h @ 30fps, yuv420p, sar=1
+                    # (default 1920x1080; overridable via `profile` or
+                    # edit_decisions.metadata.compose_target — see above).
+                    # fit="pad" letterboxes to preserve all content; fit="cover"
+                    # scales-to-fill then centre-crops (no bars, for vertical social).
+                    if fit_mode == "cover":
+                        geom = [
+                            f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase",
+                            f"crop={target_w}:{target_h}",
+                        ]
+                    else:
+                        geom = [
+                            f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease",
+                            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        ]
+                    vf_parts: list[str] = [*geom, "setsar=1", "fps=30"]
                     af_parts: list[str] = []
                     if speed != 1.0:
                         vf_parts.append(f"setpts={1.0/speed}*PTS")
@@ -1044,6 +1083,11 @@ class VideoCompose(BaseTool):
             }
             if profile:
                 remotion_inputs["profile"] = profile
+            # Forward the creator-facing render timeout through the high-level
+            # render path (execute(operation="render") -> _render), otherwise it
+            # would only take effect on a direct _remotion_render() call.
+            if inputs.get("remotion_timeout_ms") is not None:
+                remotion_inputs["remotion_timeout_ms"] = inputs["remotion_timeout_ms"]
             render_result = self._remotion_render(remotion_inputs)
 
             # Governance: NEVER silently fall back to FFmpeg when Remotion fails.
@@ -1414,12 +1458,45 @@ class VideoCompose(BaseTool):
             cmd = [c for c in cmd if not c.startswith("--concurrency")]
             cmd.extend(["--concurrency", str(custom_concurrency)])
 
+        # Optional creator-facing render timeout. Remotion's `--timeout` (ms)
+        # governs headless-browser setup and delayRender(); on slow machines or
+        # restricted networks the default 30s browser setup times out with an
+        # opaque failure. Pass it through and give the subprocess enough headroom
+        # so run_command() does not kill Remotion before its own timeout fires.
+        remotion_timeout_ms = inputs.get("remotion_timeout_ms")
+        subprocess_timeout = 600
+        if remotion_timeout_ms:
+            try:
+                ms = int(remotion_timeout_ms)
+                cmd.append(f"--timeout={ms}")
+                subprocess_timeout = max(subprocess_timeout, ms // 1000 + 60)
+            except (TypeError, ValueError):
+                pass
+
         try:
             # Invoke from inside the composer dir so npx can resolve the
             # local remotion binary via node_modules/.bin. Without this,
             # Windows npx cannot locate the CLI and returns "could not
             # determine executable to run".
-            self.run_command(cmd, timeout=600, cwd=composer_dir)
+            self.run_command(cmd, timeout=subprocess_timeout, cwd=composer_dir)
+        except subprocess.CalledProcessError as e:
+            # run_command uses check=True + capture_output, so the useful
+            # Remotion diagnostics live in stderr/stdout — surface the tail
+            # instead of the bare "returned non-zero exit status 1".
+            detail = (e.stderr or e.stdout or "").strip()
+            tail = "\n".join(detail.splitlines()[-25:]) if detail else "(no output captured)"
+            return ToolResult(
+                success=False,
+                error=f"Remotion render failed (exit {e.returncode}):\n{tail}",
+            )
+        except subprocess.TimeoutExpired as e:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Remotion render timed out after {e.timeout}s. If the headless "
+                    "browser is slow to start, raise remotion_timeout_ms (ms)."
+                ),
+            )
         except Exception as e:
             return ToolResult(success=False, error=f"Remotion render failed: {e}")
         finally:

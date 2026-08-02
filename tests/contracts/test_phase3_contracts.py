@@ -681,6 +681,7 @@ class TestCapabilityMetadata:
         assert providers == {
             "dashscope",
             "doubao",
+            "edge_tts",
             "elevenlabs",
             "google_tts",
             "kling_official",
