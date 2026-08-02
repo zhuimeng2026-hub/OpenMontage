@@ -1,0 +1,32 @@
+{
+  "cuts": [
+    {
+      "id": "title_card.png",
+      "source": "title_card.png",
+      "in_seconds": 0,
+      "out_seconds": 3
+    },
+    {
+      "id": "features.png",
+      "source": "features.png",
+      "in_seconds": 3,
+      "out_seconds": 10
+    },
+    {
+      "id": "flow_diagram.png",
+      "source": "flow_diagram.png",
+      "in_seconds": 10,
+      "out_seconds": 19
+    },
+    {
+      "id": "outro.png",
+      "source": "outro.png",
+      "in_seconds": 19,
+      "out_seconds": 24
+    }
+  ],
+  "audio": {
+    "narration": null,
+    "music": null
+  }
+}

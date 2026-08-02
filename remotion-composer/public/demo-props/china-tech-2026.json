@@ -1,0 +1,79 @@
+{
+  "theme": "flat-motion-graphics",
+  "cuts": [
+    {
+      "id": "ct-hook",
+      "source": "",
+      "type": "hero_title",
+      "in_seconds": 0,
+      "out_seconds": 4,
+      "text": "中国科技脉搏",
+      "subtitle": "CHINA TECH PULSE 2026",
+      "backgroundColor": "#0F172A"
+    },
+    {
+      "id": "ct-5g",
+      "source": "",
+      "type": "stat_card",
+      "in_seconds": 4,
+      "out_seconds": 9,
+      "stat": "60%",
+      "subtitle": "全球5G基站占比 — 中国引领连接未来",
+      "accentColor": "#22D3EE",
+      "backgroundColor": "#0F172A"
+    },
+    {
+      "id": "ct-ai",
+      "source": "",
+      "type": "stat_card",
+      "in_seconds": 9,
+      "out_seconds": 14,
+      "stat": "#1",
+      "subtitle": "AI专利申请量 — 连续五年全球第一",
+      "accentColor": "#A78BFA",
+      "backgroundColor": "#0F172A"
+    },
+    {
+      "id": "ct-ev-bar",
+      "source": "",
+      "type": "bar_chart",
+      "in_seconds": 14,
+      "out_seconds": 20,
+      "title": "新能源汽车年产 (万辆)",
+      "chartData": [
+        { "label": "2020", "value": 137 },
+        { "label": "2022", "value": 706 },
+        { "label": "2024", "value": 1010 },
+        { "label": "2026E", "value": 1400 }
+      ],
+      "chartColors": ["#334155", "#60A5FA", "#22D3EE", "#34D399"],
+      "showGrid": true,
+      "showValues": true,
+      "backgroundColor": "#0F172A"
+    },
+    {
+      "id": "ct-close",
+      "source": "",
+      "type": "text_card",
+      "in_seconds": 20,
+      "out_seconds": 26,
+      "text": "从追赶到引领\n中国创新从未停步",
+      "color": "#F8FAFC",
+      "backgroundColor": "#0F172A"
+    }
+  ],
+  "overlays": [
+    {
+      "type": "section_title",
+      "in_seconds": 14.5,
+      "out_seconds": 17.5,
+      "text": "新能源",
+      "subtitle": "加速驶向零碳未来",
+      "position": "top-right"
+    }
+  ],
+  "captions": [],
+  "audio": {
+    "narration_src": "projects/china-tech-2026/assets/narration.wav"
+  }
+}
