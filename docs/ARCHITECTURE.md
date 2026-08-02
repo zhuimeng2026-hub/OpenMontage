@@ -48,12 +48,12 @@ OpenMontage/
 │   ├── audio/              # TTS (ElevenLabs, OpenAI, Piper), music gen, mixing, enhancement
 │   ├── avatar/             # Talking head animation, lip sync
 │   ├── enhancement/        # Upscale, bg removal, face enhance/restore, color grading
-│   ├── graphics/           # Image gen (FLUX, DALL-E, Recraft, local diffusion), stock, diagrams, code snippets, math animation
+│   ├── graphics/           # Image gen (FLUX, GPT Image, Recraft, local diffusion), stock, diagrams, code snippets, math animation
 │   ├── publishers/         # (Reserved)
 │   ├── subtitle/           # SRT/VTT generation from timestamps
 │   └── video/              # 13 video gen providers, composition, stitching, trimming
 │
-├── pipeline_defs/          # 11 YAML pipeline manifests
+├── pipeline_defs/          # YAML pipeline manifests
 ├── schemas/                # JSON Schema definitions for validation
 │   ├── artifacts/          # 11 artifact schemas (brief → publish_log)
 │   ├── checkpoints/        # Checkpoint state schema
@@ -65,9 +65,9 @@ OpenMontage/
 │   ├── core/               # FFmpeg, Remotion, WhisperX, color grading skills
 │   ├── creative/           # Video editing, enhancement, data viz, prompt engineering
 │   ├── meta/               # reviewer, checkpoint-protocol, skill-creator
-│   └── pipelines/          # Per-pipeline stage-director skills (10 pipelines)
+│   └── pipelines/          # Per-pipeline stage-director skills
 │
-├── .agents/skills/         # Layer 3: 47 external technology skills (FFmpeg, ElevenLabs, FLUX, etc.)
+├── .agents/skills/         # Layer 3: external technology skills (FFmpeg, HyperFrames, GSAP, etc.)
 ├── styles/                 # Visual style playbooks (YAML) + loader
 ├── remotion-composer/      # Node.js/React — Remotion video composition renderer
 ├── tests/                  # Contract tests, QA integration tests, eval harness
@@ -200,13 +200,14 @@ stages:
   # ... through publish
 ```
 
-### Available Pipelines (11)
+### Available Pipelines
 
 | Pipeline | Category | Description |
 |----------|----------|-------------|
 | `animated-explainer` | generated | AI-produced explainer with research, narration, visuals, music |
 | `animation` | animation | Motion graphics, kinetic typography |
 | `avatar-spokesperson` | talking_head | Avatar-driven presenter videos |
+| `character-animation` | animation | Local rigged cartoon characters with SVG rigs, pose libraries, GSAP timelines, and HyperFrames rendering |
 | `cinematic` | cinematic | Trailer, teaser, mood-driven edits |
 | `clip-factory` | custom | Batch short-form clips from long source |
 | `hybrid` | hybrid | Source footage + AI-generated support visuals |
@@ -218,7 +219,7 @@ stages:
 
 ### Standard Stage Progression
 
-All production pipelines follow a canonical 8-stage flow:
+Most production pipelines follow a canonical 8-stage flow:
 
 ```
 research → proposal → script → scene_plan → assets → edit → compose → publish
@@ -230,6 +231,11 @@ Each stage:
 3. **Produces** one or more canonical artifacts
 4. Has **review_focus** criteria and **success_criteria**
 5. Can require **human approval** before proceeding
+
+Specialized pipelines may insert domain-specific stages. For example,
+`character-animation` adds `character_design` and `rig_plan` before
+`scene_plan`, then emits a HyperFrames workspace and final deliverable at
+`projects/<project-name>/renders/final.mp4`.
 
 ---
 
@@ -377,9 +383,11 @@ All config is validated via Pydantic models in `lib/config_model.py`.
 | Variable | Used By | Purpose |
 |----------|---------|---------|
 | `ELEVENLABS_API_KEY` | elevenlabs_tts, music_gen | TTS, music, sound effects |
-| `OPENAI_API_KEY` | openai_tts, openai_image | TTS fallback, DALL-E 3 |
+| `OPENAI_API_KEY` | openai_tts, openai_image | TTS fallback, GPT Image 2 |
 | `XAI_API_KEY` | grok_image, grok_video | Grok image editing/generation, Grok video generation |
 | `FAL_KEY` | flux_image, kling_video, veo_video, minimax_video, recraft_image | fal.ai hosted models (FLUX, Veo, Kling, MiniMax, Recraft) |
+| `KLING_API_KEY` | kling_official_video, kling_official_image, kling_tts, kling_avatar, kling_lip_sync | Official Kling direct API for video, image, TTS, avatar, and lip sync |
+| `KLING_API_BASE_URL` | kling_official_video, kling_official_image, kling_tts, kling_avatar, kling_lip_sync | Optional official Kling API endpoint override |
 | `HEYGEN_API_KEY` | heygen_video | Multi-provider video generation |
 | `PEXELS_API_KEY` | pexels_image, pexels_video | Stock media |
 | `PIXABAY_API_KEY` | pixabay_image, pixabay_video | Stock media |
@@ -389,6 +397,18 @@ All config is validated via Pydantic models in `lib/config_model.py`.
 | `MODAL_LTX2_ENDPOINT_URL` | ltx_video_modal | Self-hosted LTX-2 |
 | `VIDEO_GEN_LOCAL_ENABLED` | local video tools | Enable local GPU generation |
 | `VIDEO_GEN_LOCAL_MODEL` | wan, hunyuan, ltx, cogvideo | Select local model |
+
+Kling Official support stays inside the existing provider and capability model.
+`kling_official_video` and `kling_official_image` handle Classic, Turbo, and Omni
+request shapes, while Elements and Account Usage live under `tools/_kling/` as
+internal helpers for element ID references and low-frequency account diagnostics;
+they are not separate pipeline stages, selectors, or generated-asset capabilities.
+
+Kling Official also adds provider tools only where OpenMontage already has a
+matching capability slot: `kling_tts` for `tts`, plus `kling_avatar` and
+`kling_lip_sync` for `avatar`. Official Kling audio effects and video effects are
+not registered as tools because current pipelines do not define stable
+`sound_effects` or `video_effects` capability routing.
 
 ---
 
@@ -439,9 +459,10 @@ A standalone Node.js/React subproject in `remotion-composer/` using [Remotion](h
 
 Consumed via `npx hyperframes` (no monorepo checkout needed). Runtime floor: Node.js ≥ 22, FFmpeg, `npx`.
 
-- Handles kinetic typography, product promos, launch reels, website-to-video, registry blocks
+- Handles kinetic typography, product promos, launch reels, website-to-video, registry blocks, and SVG/GSAP character rigs
 - Driver: `tools/video/hyperframes_compose.py` materializes a workspace under `projects/<name>/hyperframes/`, then runs `lint → validate → render`
 - Layer 3 skills vendored at `.agents/skills/hyperframes*/`; Layer 2 guide at `skills/core/hyperframes.md`
+- The `character-animation` pipeline uses HyperFrames as the production render package. Browser previews are QA/debug artifacts only, not the render path.
 
 ### FFmpeg (fallback / simple cuts)
 

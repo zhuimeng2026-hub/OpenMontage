@@ -1,12 +1,14 @@
-"""Alibaba Cloud DashScope (通义万相 - Tongyi Wanxiang) image generation."""
+"""DashScope (Alibaba Cloud Bailian) image generation via Qwen-Image models.
+
+Uses the DashScope-native multimodal-generation endpoint (NOT OpenAI-compatible
+mode, which only supports /chat/completions and /embeddings). The response
+contains a temporary image URL (valid ~24h) that must be downloaded separately.
+"""
 
 from __future__ import annotations
 
-import json
 import os
 import time
-import urllib.request
-import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -24,278 +26,248 @@ from tools.base_tool import (
 )
 
 
-class DashScopeImage(BaseTool):
+class DashscopeImage(BaseTool):
     name = "dashscope_image"
     version = "0.1.0"
     tier = ToolTier.GENERATE
     capability = "image_generation"
     provider = "dashscope"
-    stability = ToolStability.BETA
+    stability = ToolStability.EXPERIMENTAL
     execution_mode = ExecutionMode.SYNC
-    determinism = Determinism.SEEDED
+    determinism = Determinism.STOCHASTIC
     runtime = ToolRuntime.API
 
     dependencies = []
     install_instructions = (
-        "Set DASHSCOPE_KEY or DashScope_key to your Alibaba Cloud DashScope API key.\n"
-        "  Get one at https://dashscope.aliyuncs.com/"
+        "Set DASHSCOPE_API_KEY to your Alibaba Cloud DashScope API key.\n"
+        "  Get one at https://dashscope.aliyun.com/"
     )
+    fallback = "grok_image"
+    fallback_tools = ["grok_image", "openai_image", "flux_image", "recraft_image"]
+    agent_skills = ["dashscope"]
 
-    capabilities = ["generate_image", "text_to_image", "image_to_image", "generate_illustration"]
+    capabilities = ["generate_image", "text_to_image"]
     supports = {
-        "negative_prompt": False,
-        "seed": False,
-        "custom_size": True,
-        "image_to_image": True,
+        "multiple_outputs": True,
+        "aspect_ratio": True,
+        "resolution": True,
+        "negative_prompt": True,
+        "seed": True,
     }
     best_for = [
-        "Chinese-themed image generation",
-        "cost-effective general image generation",
-        "multi-style image generation (animé, oil painting, sketch)",
-        "image-to-image transformation and editing",
+        "high-quality image generation with Qwen-Image models",
+        "Chinese-language prompt understanding",
+        "cost-effective image generation via Alibaba Cloud",
     ]
-    not_good_for = ["photorealistic faces", "offline generation"]
+    not_good_for = ["offline generation", "image editing (use grok_image edit mode)"]
 
     input_schema = {
         "type": "object",
         "required": ["prompt"],
         "properties": {
-            "prompt": {"type": "string", "description": "Text description of the image or transformation instruction"},
-            "image_path": {"type": "string", "description": "Source image path (local file) for image-to-image transformation"},
+            "prompt": {"type": "string"},
+            "model": {
+                "type": "string",
+                "enum": [
+                    "qwen-image-2.0-pro",
+                    "qwen-image-max",
+                    "wan2.7-image",
+                    "z-image-turbo",
+                ],
+                "default": "qwen-image-2.0-pro",
+            },
             "size": {
                 "type": "string",
-                "enum": ["1024*1024", "720*1280", "1280*720", "768*1152", "1152*768"],
                 "default": "1024*1024",
+                "description": (
+                    'Image size as "W*H" (asterisk separator, NOT "x"). '
+                    'Examples: "1024*1024", "2048*2048", "2688*1536".'
+                ),
             },
-            "style": {
+            "n": {"type": "integer", "default": 1, "minimum": 1, "maximum": 6},
+            "negative_prompt": {
                 "type": "string",
-                "enum": ["<auto>", "<animé>", "<oil-painting>", "<watercolor>", "<sketch>", "<chinese-water-ink>", "<3d-model>"],
-                "default": "<auto>",
-                "description": "Image style (use <auto> for automatic)",
+                "description": "Negative prompt (max 500 chars). Things to avoid in the image.",
             },
-            "n": {
-                "type": "integer",
-                "default": 1,
-                "minimum": 1,
-                "maximum": 4,
-                "description": "Number of images to generate",
+            "prompt_extend": {
+                "type": "boolean",
+                "default": True,
+                "description": "Enable DashScope prompt auto-rewrite for better results.",
             },
-            "output_path": {"type": "string", "description": "Local path to save the generated image"},
+            "watermark": {"type": "boolean", "default": False},
+            "seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+            "output_path": {"type": "string"},
         },
     }
 
     resource_profile = ResourceProfile(
         cpu_cores=1, ram_mb=512, vram_mb=0, disk_mb=100, network_required=True
     )
-    retry_policy = RetryPolicy(max_retries=2, retryable_errors=["rate_limit", "timeout"])
-    idempotency_key_fields = ["prompt", "size", "style"]
-    side_effects = ["writes image file to output_path", "calls Alibaba Cloud DashScope API"]
-    user_visible_verification = ["Inspect generated image for relevance and quality"]
+    retry_policy = RetryPolicy(
+        max_retries=2, retryable_errors=["rate_limit", "timeout"]
+    )
+    idempotency_key_fields = [
+        "prompt",
+        "model",
+        "size",
+        "n",
+        "negative_prompt",
+        "seed",
+        "prompt_extend",
+        "watermark",
+    ]
+    side_effects = [
+        "writes image file to output_path",
+        "calls DashScope (Alibaba Cloud) image generation API",
+    ]
+    user_visible_verification = [
+        "Inspect generated image for relevance and quality"
+    ]
 
-    def _get_api_key(self) -> str | None:
-        return os.environ.get("DASHSCOPE_KEY") or os.environ.get("DashScope_key") or os.environ.get("DASHSCOPE_API_KEY")
-
-    def _get_api_url(self) -> str:
-        return os.environ.get("DASHSCOPE_URL", "https://dashscope.aliyuncs.com")
+    ENDPOINT = (
+        "https://dashscope.aliyuncs.com/api/v1/services/aigc/"
+        "multimodal-generation/generation"
+    )
 
     def get_status(self) -> ToolStatus:
-        if self._get_api_key():
+        if os.environ.get("DASHSCOPE_API_KEY"):
             return ToolStatus.AVAILABLE
         return ToolStatus.UNAVAILABLE
 
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
-        return 0.02  # ~0.02 USD per image
-
-    def _call_api(self, api_url: str, payload: dict, api_key: str, timeout: int = 120) -> dict:
-        """Submit async task to DashScope API and return response with task_id."""
-        import urllib.request as urllib_req
-        import urllib.error as urllib_err
-
-        req = urllib_req.Request(
-            api_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "X-DashScope-Async": "enable",
-            },
-            method="POST",
-        )
-        with urllib_req.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-
-    def _poll_task(self, task_id: str, api_key: str, base_url: str, timeout: int = 120) -> dict | None:
-        """Poll DashScope task until completion or timeout."""
-        import urllib.request as urllib_req
-        import urllib.error as urllib_err
-
-        poll_url = f"{base_url}/api/v1/tasks/{task_id}"
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            req = urllib_req.Request(
-                poll_url,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            with urllib_req.urlopen(req, timeout=30) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-            output = body.get("output", {})
-            status = output.get("task_status", "")
-            if status == "SUCCEEDED":
-                return body
-            if status in ("FAILED", "CANCELED"):
-                return None
-            time.sleep(2)
-        return None  # timeout
+        # Conservative per-image estimate; DashScope bills per image.
+        # Check the DashScope console for actual pricing.
+        n = int(inputs.get("n", 1))
+        return n * 0.02
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
-        api_key = self._get_api_key()
+        api_key = os.environ.get("DASHSCOPE_API_KEY")
         if not api_key:
             return ToolResult(
                 success=False,
-                error="No DashScope API key found. " + self.install_instructions,
+                error="DASHSCOPE_API_KEY not set. " + self.install_instructions,
             )
+
+        import requests
 
         start = time.time()
-        prompt = inputs["prompt"]
-        size = inputs.get("size", "1024*1024")
-        style = inputs.get("style", "<auto>")
-        n = min(inputs.get("n", 1), 4)
+        try:
+            payload = self._build_payload(inputs)
+            response = requests.post(
+                self.ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=180,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        # Support both image_path and source_image (pipeline alias)
-        source_image = inputs.get("image_path") or inputs.get("source_image", "")
-        base_url = self._get_api_url()
-
-        # wanx-v1 uses text2image endpoint for both text-to-image and image-to-image.
-        # Image-to-image via input.image_url (public URL required).
-        api_url = f"{base_url}/api/v1/services/aigc/text2image/image-synthesis"
-        payload: dict[str, Any] = {
-            "model": "wanx-v1",
-            "input": {
-                "prompt": prompt,
-            },
-            "parameters": {
-                "n": n,
-                "size": size,
-            },
-        }
-
-        if source_image:
-            if source_image.startswith(("http://", "https://")):
-                payload["input"]["image_url"] = source_image
-            else:
+            image_urls = self._extract_image_urls(data)
+            if not image_urls:
                 return ToolResult(
                     success=False,
-                    error=(
-                        "dashscope_image image-to-image needs a public image URL. "
-                        "Local files not supported. Provide http(s) URL or use grok_image. "
-                        f"Path: {source_image}"
-                    ),
-                    duration_seconds=time.time() - start,
+                    error="DashScope returned no image URLs",
                 )
-        if style and style != "<auto>":
-            payload["parameters"]["style"] = style
 
-        # Step 1: Submit async task
-        try:
-            # Use async mode (DashScope requires async for this API key)
-            body = self._call_api(api_url, payload, api_key)
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8", errors="replace")
-            return ToolResult(
-                success=False,
-                error=f"DashScope API HTTP {e.code}: {error_body}",
-                duration_seconds=time.time() - start,
+            # DashScope bills per image and URLs expire ~24h; save every one.
+            output_paths = self._resolve_output_paths(
+                inputs.get("output_path", "dashscope_image.png"),
+                count=len(image_urls),
             )
-        except urllib.error.URLError as e:
-            return ToolResult(
-                success=False,
-                error=f"DashScope API connection error: {e.reason}",
-                duration_seconds=time.time() - start,
-            )
+            for path, url in zip(output_paths, image_urls):
+                download = requests.get(url, timeout=120)
+                download.raise_for_status()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(download.content)
 
-        # Check for API-level errors
-        if body.get("code"):
-            return ToolResult(
-                success=False,
-                error=f"DashScope API error: {body.get('code')} - {body.get('message', '')}",
-                duration_seconds=time.time() - start,
-            )
+            usage = data.get("usage", {})
+            n_generated = len(image_urls)
 
-        # Step 2: Get task_id from response
-        output = body.get("output", {})
-        task_id = output.get("task_id", "")
-        results = output.get("results", [])
-
-        # If results already present (sync mode), use them directly
-        if results:
-            return self._process_results(results, inputs, start)
-
-        # Otherwise poll for async completion
-        if not task_id:
-            return ToolResult(
-                success=False,
-                error="DashScope returned no task_id and no results",
-                duration_seconds=time.time() - start,
-            )
-
-        poll_result = self._poll_task(task_id, api_key, base_url)
-        if poll_result is None:
-            return ToolResult(
-                success=False,
-                error=f"DashScope task {task_id} failed or timed out",
-                duration_seconds=time.time() - start,
-            )
-
-        results = poll_result.get("output", {}).get("results", [])
-        if not results:
-            return ToolResult(
-                success=False,
-                error=f"DashScope task {task_id} completed but no image results",
-                duration_seconds=time.time() - start,
-            )
-
-        return self._process_results(results, inputs, start)
-
-    def _process_results(self, results: list, inputs: dict, start: float) -> ToolResult:
-        """Download images from results and return ToolResult."""
-        image_url = results[0].get("url", "")
-        if not image_url:
-            return ToolResult(
-                success=False,
-                error="DashScope result missing image URL",
-                duration_seconds=time.time() - start,
-            )
-
-        # Determine output path
-        output_path = inputs.get("output_path", "")
-        if output_path:
-            dest = Path(output_path)
-        else:
-            base = Path(os.environ.get("PIPELINE_WORK_DIR", "/tmp"))
-            dest = base / f"dashscope_{int(time.time())}.png"
-
-        dest.parent.mkdir(parents=True, exist_ok=True)
-
-        # Download the image
-        try:
-            img_req = urllib.request.Request(image_url, headers={"User-Agent": "OpenMontage/1.0"})
-            with urllib.request.urlopen(img_req, timeout=60) as img_resp:
-                dest.write_bytes(img_resp.read())
         except Exception as e:
             return ToolResult(
                 success=False,
-                error=f"Failed to download generated image: {e}",
-                duration_seconds=time.time() - start,
+                error=f"DashScope image generation failed: {self._safe_error(e)}",
             )
 
-        elapsed = time.time() - start
         return ToolResult(
             success=True,
             data={
-                "image_path": str(dest),
-                "image_url": image_url,
+                "provider": "dashscope",
+                "model": payload["model"],
+                "prompt": inputs["prompt"],
+                "size": payload["parameters"]["size"],
+                "output": str(output_paths[0]),
+                "outputs": [str(p) for p in output_paths],
+                "images_generated": n_generated,
+                "usage": usage,
             },
-            duration_seconds=elapsed,
+            artifacts=[str(p) for p in output_paths],
             cost_usd=self.estimate_cost(inputs),
-            artifacts=[str(dest)],
+            duration_seconds=round(time.time() - start, 2),
+            model=payload["model"],
+        )
+
+    @staticmethod
+    def _extract_image_urls(data: dict[str, Any]) -> list[str]:
+        """Collect image URLs from every choice whose finish_reason is "stop".
+
+        Per Qwen Cloud docs, a multi-output task is SUCCEEDED if at least one
+        image is generated; failed choices carry finish_reason != "stop" and
+        must be skipped to avoid downloading partial/empty results.
+        """
+        urls: list[str] = []
+        for choice in data.get("output", {}).get("choices", []):
+            if choice.get("finish_reason") != "stop":
+                continue
+            for item in choice.get("message", {}).get("content", []):
+                url = item.get("image")
+                if url:
+                    urls.append(url)
+        return urls
+
+    @staticmethod
+    def _resolve_output_paths(base: str, count: int) -> list[Path]:
+        """Derive distinct paths for `count` images. Single image keeps the
+        base path unchanged; multiple images insert an index before the
+        extension (foo.png -> foo_1.png, foo_2.png, ...)."""
+        base_path = Path(base)
+        if count <= 1:
+            return [base_path]
+        stem = base_path.stem
+        suffix = base_path.suffix
+        parent = base_path.parent
+        return [parent / f"{stem}_{i}{suffix}" for i in range(1, count + 1)]
+
+    def _build_payload(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        parameters: dict[str, Any] = {
+            "size": inputs.get("size", "1024*1024"),
+            "n": int(inputs.get("n", 1)),
+            "prompt_extend": bool(inputs.get("prompt_extend", True)),
+            "watermark": bool(inputs.get("watermark", False)),
+        }
+        if inputs.get("negative_prompt"):
+            parameters["negative_prompt"] = inputs["negative_prompt"]
+        if inputs.get("seed") is not None:
+            parameters["seed"] = int(inputs["seed"])
+
+        return {
+            "model": inputs.get("model", "qwen-image-2.0-pro"),
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": inputs["prompt"]}],
+                    }
+                ]
+            },
+            "parameters": parameters,
+        }
+
+    @staticmethod
+    def _safe_error(exc: Exception) -> str:
+        return str(exc).replace(
+            os.environ.get("DASHSCOPE_API_KEY", ""), "[redacted]"
         )
