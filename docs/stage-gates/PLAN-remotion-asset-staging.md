@@ -1,6 +1,6 @@
 # Plan: Extend Remotion Asset Staging to audio / backgroundImage
 
-**Status:** Pending
+**Status:** Implemented (2026-08-03) — helper extracted, all fields staged, unit tests + smoke render pass
 **Created:** 2026-08-02
 **Owner:** agent (OpenMontage)
 **Task:** task #1 in session tracker
@@ -113,8 +113,8 @@ if audio:
 
 ## Acceptance Criteria
 
-- [ ] `audio.music.src` local file renders into final MP4 audio track
-- [ ] `cut.backgroundImage` local file shows behind a component cut
-- [ ] `cut.backgroundVideo` local file plays behind a component cut
-- [ ] anime_scene `images[]` and screenshot_scene `backgroundImage` staged
-- [ ] existing single-image Ken Burns render still passes (regression)
+- [x] `audio.music.src` local file renders into final MP4 audio track
+- [x] `cut.backgroundImage` local file shows behind a component cut
+- [x] `cut.backgroundVideo` local file plays behind a component cut
+- [x] anime_scene `images[]` and screenshot_scene `backgroundImage` staged
+- [x] existing single-image Ken Burns render still passes (regression)

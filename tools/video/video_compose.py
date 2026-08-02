@@ -1327,16 +1327,16 @@ class VideoCompose(BaseTool):
         props = json.loads(json.dumps(composition_data))
 
         # Stage local media files into Remotion's public/ dir and reference
-        # them by relative path so Img/OffthreadVideo load via staticFile().
+        # them by relative path so Img/OffthreadVideo/Audio load via
+        # staticFile().
         #
         # Headless Chrome (used by `npx remotion render`) runs the composition
         # on http://localhost:3001 and REFUSES file:// URLs from that origin
         # ("Not allowed to load local resource"). So absolute paths must NOT
         # be passed as file:// URIs — they are copied into public/_staged/
-        # and the cut source is rewritten to the public-relative path, which
-        # resolveAsset() routes through staticFile().
-        import hashlib
-
+        # and every local-resource field (cut sources, background layers,
+        # anime images, narration/music) is rewritten to the public-relative
+        # path, which resolveAsset() routes through staticFile().
         composer_dir = Path(__file__).resolve().parent.parent.parent / "remotion-composer"
         if not composer_dir.exists():
             return ToolResult(
@@ -1344,23 +1344,27 @@ class VideoCompose(BaseTool):
                 error=f"Remotion composer project not found at {composer_dir}",
             )
         staged_dir = composer_dir / "public" / "_staged"
+
         for idx, cut in enumerate(props.get("cuts", [])):
-            source = cut.get("source", "")
-            if not source or source.startswith(("http://", "https://", "data:")):
-                continue
-            resolved = Path(source.replace("file://", ""))
-            if not resolved.exists():
-                continue
-            staged_dir.mkdir(parents=True, exist_ok=True)
-            # Namespace staged files by content-hash + cut index to avoid
-            # collisions when two cuts reference different files with the
-            # same basename.
-            digest = hashlib.md5(resolved.as_posix().encode()).hexdigest()[:8]
-            target = staged_dir / f"{idx}_{digest}_{resolved.name}"
-            if not target.exists():
-                import shutil
-                shutil.copy2(resolved, target)
-            cut["source"] = f"_staged/{target.name}"
+            # cuts[].source (Ken Burns / still) + background image/video layers
+            for field in ("source", "backgroundImage", "backgroundVideo"):
+                if cut.get(field):
+                    cut[field] = self._stage_remotion_asset(cut[field], idx, staged_dir)
+            # anime_scene / collage scenes: images[]
+            if cut.get("images"):
+                cut["images"] = [
+                    self._stage_remotion_asset(img, idx, staged_dir)
+                    for img in cut["images"]
+                ]
+
+        # audio.narration.src / audio.music.src
+        audio = props.get("audio")
+        if audio:
+            for layer in ("narration", "music"):
+                if audio.get(layer, {}).get("src"):
+                    audio[layer]["src"] = self._stage_remotion_asset(
+                        audio[layer]["src"], -1, staged_dir
+                    )
 
         # Build a custom themeConfig from the playbook's actual colors.
         # This ensures every video gets a unique visual identity derived
@@ -1437,6 +1441,31 @@ class VideoCompose(BaseTool):
             },
             artifacts=[str(output_path)],
         )
+
+    def _stage_remotion_asset(self, source: str, idx: int, staged_dir: Path) -> str:
+        """Stage one local media file into remotion-composer/public/_staged/
+        and return the public-relative path (loadable via staticFile()).
+
+        http/https/data: URIs pass through unchanged; missing files pass
+        through unchanged (Remotion will surface the load error). The index
+        only disambiguates colliding basenames — the content-hash is the real
+        namespace, so reuse of one file across narration/music/backgrounds is
+        safe.
+        """
+        if not source or source.startswith(("http://", "https://", "data:")):
+            return source
+        resolved = Path(source.replace("file://", ""))
+        if not resolved.exists():
+            return source
+        import hashlib
+        import shutil
+
+        staged_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.md5(resolved.as_posix().encode()).hexdigest()[:8]
+        target = staged_dir / f"{idx}_{digest}_{resolved.name}"
+        if not target.exists():
+            shutil.copy2(resolved, target)
+        return f"_staged/{target.name}"
 
     # ------------------------------------------------------------------
     # Final self-review — mandatory post-render inspection
