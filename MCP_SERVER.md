@@ -271,6 +271,30 @@ start(project_id, filename, total_bytes, mime_type, sha256)
 → complete(upload_id)
 ```
 
+#### `rsync_upload_artifact` — 上传生成产物到公网服务器
+
+通过 SSH/rsync 将 OpenMontage 服务器上的生成视频或其他产物上传到已配置的
+公网服务器。连接参数全部从项目 `.env` 读取，不在 MCP 请求中传递密钥。
+
+配置示例见 `.env.example` 中的 `RSYNC_*` 项。`source_path` 可在调用时传入，
+不传时使用 `RSYNC_SOURCE_PATH`。成功后返回远程路径；配置
+`RSYNC_PUBLIC_BASE_URL` 时同时返回 HTTPS `download_url`。
+
+```json
+{
+  "tool_name": "rsync_upload_artifact",
+  "inputs": {
+    "source_path": "C:/OpenMontage/projects/bag-demo/renders/final.mp4",
+    "remote_name": "bag-demo-final.mp4"
+  }
+}
+```
+
+生产环境应为该工具配置专用 SSH 用户、密钥和仅可写入的远程目录，并在公网
+服务器上用 Nginx/Caddy 提供 HTTPS 下载。首次连接前请将服务器指纹写入
+OpenMontage 运行用户的 `known_hosts`；工具使用 `BatchMode=yes` 和
+`StrictHostKeyChecking=yes`，不会交互式接受未知主机。
+
 推荐的视频网站素材规格：图片按 1920×1080（16:9）准备；视频使用
 1920×1080、H.264、25/30 FPS；单个素材控制在 100 MB 以内。上传接口不
 强制重编码，保持源文件质量，并在完成时校验 SHA-256。
