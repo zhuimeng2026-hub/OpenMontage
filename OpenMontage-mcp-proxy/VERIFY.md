@@ -8,8 +8,9 @@
     UPSTREAM_MCP_TOKEN=<上游 Token>
     PROXY_CLIENT_TOKEN=<独立客户端 Token>
     PORT=8080
+    LOG_FILE=/var/log/openmontage-mcp-proxy/proxy.log
 
-两个 Token 必须不同；`.env` 不得提交 Git。若使用旧配置，可用 `mcp_key` 代替 `UPSTREAM_MCP_TOKEN`。
+两个 Token 必须不同；`.env` 不得提交 Git。若使用旧配置，可用 `mcp_key` 代替 `UPSTREAM_MCP_TOKEN`。代理日志默认写入运行目录下的 `proxy.log`；可用 `LOG_FILE` 指定绝对路径（如 systemd 部署时指向 `/var/log/...`），不再混入 journald。文件打开失败时回退到 stderr。
 
 ## 编译与本机检查
 

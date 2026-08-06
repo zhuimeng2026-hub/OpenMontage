@@ -84,7 +84,7 @@ func buildProxy(cfg proxyConfig) *httputil.ReverseProxy {
 			*r = *r.WithContext(context.WithValue(r.Context(), "mcp_start", start))
 			r.URL.Scheme, r.URL.Host = cfg.upstreamURL.Scheme, cfg.upstreamURL.Host
 			r.URL.Path, r.URL.RawPath = cfg.upstreamURL.Path, cfg.upstreamURL.RawPath
-			r.URL.RawQuery, r.Host = r.URL.RawQuery, cfg.upstreamURL.Host
+			r.Host = cfg.upstreamURL.Host // 保留客户端 RawQuery，仅改写 Host 头
 			r.Header.Set("Authorization", "Bearer "+cfg.upstreamToken)
 			r.Header.Set("Accept", acceptHeader(r.Header.Get("Accept")))
 			r.Header.Set("Cache-Control", "no-cache")
@@ -125,7 +125,21 @@ func auth(next http.Handler, expected string) http.Handler {
 	})
 }
 
+func setupLogging() {
+	// 写独立日志文件，避免与 systemd journald 中其他服务日志混在一起。
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	path := firstNonEmpty(os.Getenv("LOG_FILE"), "proxy.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("WARN: cannot open log file %q (%v); falling back to stderr/journald", path, err)
+		return
+	}
+	log.SetOutput(f)
+	log.Printf("logging to file %q", path)
+}
+
 func main() {
+	setupLogging()
 	cfg := loadConfig()
 	proxy := buildProxy(cfg)
 	mux := http.NewServeMux()

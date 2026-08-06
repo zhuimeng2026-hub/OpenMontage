@@ -97,3 +97,8 @@ venv/
 
 # Backlot local cache (thumbnails)
 .backlot/
+
+# OpenMontage MCP proxy build artifact & local log (regenerable / runtime)
+OpenMontage-mcp-proxy/openmontage-mcp-proxy
+OpenMontage-mcp-proxy/proxy.log
+OpenMontage-mcp-proxy/*.log
