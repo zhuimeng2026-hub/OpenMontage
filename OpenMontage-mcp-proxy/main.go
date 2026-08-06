@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -69,6 +72,7 @@ func newTransport() http.RoundTripper {
 		ForceAttemptHTTP2: true, MaxIdleConns: 100, MaxIdleConnsPerHost: 20,
 		IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 15 * time.Second,
 		ExpectContinueTimeout: time.Second,
+		ResponseHeaderTimeout: 120 * time.Second, // 上游处理重枚举/渲染可能较慢；超过则记日志而非静默挂起
 	}
 }
 
@@ -76,15 +80,36 @@ func buildProxy(cfg proxyConfig) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Transport: newTransport(), FlushInterval: -1,
 		Director: func(r *http.Request) {
+			start := time.Now()
+			*r = *r.WithContext(context.WithValue(r.Context(), "mcp_start", start))
 			r.URL.Scheme, r.URL.Host = cfg.upstreamURL.Scheme, cfg.upstreamURL.Host
 			r.URL.Path, r.URL.RawPath = cfg.upstreamURL.Path, cfg.upstreamURL.RawPath
 			r.URL.RawQuery, r.Host = r.URL.RawQuery, cfg.upstreamURL.Host
 			r.Header.Set("Authorization", "Bearer "+cfg.upstreamToken)
 			r.Header.Set("Accept", acceptHeader(r.Header.Get("Accept")))
 			r.Header.Set("Cache-Control", "no-cache")
+			log.Printf("[mcp] >> %s %s -> %s (client=%s)", r.Method, r.URL.Path, cfg.upstreamURL.String(), r.RemoteAddr)
+		},
+		ModifyResponse: func(r *http.Response) error {
+			startVal := r.Request.Context().Value("mcp_start")
+			elapsed := "?"
+			if t, ok := startVal.(time.Time); ok {
+				elapsed = time.Since(t).Round(time.Millisecond).String()
+			}
+			method := r.Request.Method
+			path := r.Request.URL.Path
+			if r.StatusCode >= 500 {
+				// 抓取上游错误体前 512 字节，便于定位是公网代理还是上游 8900 报错
+				body, _ := io.ReadAll(io.LimitReader(r.Body, 512))
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				log.Printf("[mcp] << %s %s upstream=%d (%s) BODY=%q", method, path, r.StatusCode, elapsed, string(body))
+			} else {
+				log.Printf("[mcp] << %s %s upstream=%d (%s) len=%d", method, path, r.StatusCode, elapsed, r.ContentLength)
+			}
+			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("upstream MCP request failed: %v", err)
+			log.Printf("[mcp] XX %s %s transport error after %v: %v", r.Method, r.URL.Path, time.Since(time.Now()), err)
 			http.Error(w, "MCP upstream unavailable", http.StatusBadGateway)
 		},
 	}
