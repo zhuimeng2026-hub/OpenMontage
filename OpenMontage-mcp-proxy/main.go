@@ -118,6 +118,8 @@ func buildProxy(cfg proxyConfig) *httputil.ReverseProxy {
 func auth(next http.Handler, expected string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+expected {
+			// 鉴权失败属于安全事件，即使未进入代理也要留痕（区分于 [mcp] 流量日志）
+			log.Printf("[auth] 401 unauthorized %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -146,6 +148,7 @@ func main() {
 	mux.Handle("/mcp", auth(proxy, cfg.clientToken))
 	mux.Handle("/mcp/", auth(proxy, cfg.clientToken))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[health] %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "upstream": cfg.upstreamURL.String(), "upstream_auth": true, "client_auth": true})
 	})
