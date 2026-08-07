@@ -143,7 +143,7 @@ openclaw gateway --restart
 
 ## 4. MCP 工具一览
 
-共 15 个工具，分为 5 组。
+共 16 个工具，分为 5 组。
 
 ### 4.1 工具发现（4 个）
 
@@ -240,7 +240,7 @@ openclaw agent --message "调用 openmontage 的 list_tools，过滤 status=avai
 
 ---
 
-### 4.3 素材管理（1 个）
+### 4.3 素材管理与视频发布（3 个）
 
 #### `upload_asset` — 上传项目素材
 
@@ -317,6 +317,98 @@ OpenMontage 运行用户的 `known_hosts`；工具使用 `BatchMode=yes` 和
   }
 }
 ```
+
+#### `s3_upload` — S3 兼容存储上传
+
+把已渲染的视频上传到任意 AWS S3 兼容对象存储（AWS S3、MinIO、Cloudflare
+R2、阿里云 OSS、腾讯云 COS、七牛云等）。签名使用纯 `requests` 实现的
+AWS SigV4，无需安装 `boto3`/`minio` 等依赖，只需配置 `.env` 中的四个
+必填变量：
+
+- `S3_ENDPOINT_URL` — 端点（含 scheme，如 `https://s3.cn-hangzhou.aliyuncs.com`）
+- `S3_ACCESS_KEY` / `S3_SECRET_KEY` — 密钥对
+- `S3_BUCKET` — 目标桶名（桶需提前建好）
+
+**三种交付模式（通过 `visibility` + `make_download_page` 控制）：**
+
+| 模式 | 适用场景 | 返回字段 |
+|------|----------|---------|
+| `visibility=public` | 公开链接，直接可访问 | `url`（永久直链） |
+| `visibility=private` | 临时链接，过期自动失效 | `url`（预签名 GET，默认 7 天） |
+| `make_download_page=true` | 多文件打包交付 | `download_page_url` + `uploaded_files` 列表 |
+
+> `visibility=public` 且需要 CDN 域名时，额外配置 `S3_PUBLIC_BASE_URL`，否则
+> 返回的是端点原始 URL（外部客户端可能 403）。
+
+**关键参数：**
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| `video_path` | string | 是 | — | 已渲染视频路径（来自 `render_report.outputs[].path`） |
+| `visibility` | enum | 否 | `public` | `public` 或 `private` |
+| `expire_seconds` | int | 否 | 604800 | private 模式下的链接有效期（60~604800 秒） |
+| `project_id` | string | 否 | 从路径推断 | 命名空间，决定 object key 前缀 |
+| `object_key` | string | 否 | `videos/<project_id>/<filename>` | 显式指定对象键 |
+| `make_download_page` | bool | 否 | `false` | 是否生成 HTML 下载页 |
+| `additional_files` | string[] | 否 | — | 要一起上传并展示在下载页中的额外文件 |
+| `page_title` | string | 否 | — | 下载页标题 |
+| `platform_label` | string | 否 | `s3` | `publish_log` 中的平台标识 |
+
+**调用示例（公开链接）：**
+
+```json
+{
+  "tool_name": "s3_upload",
+  "inputs": {
+    "video_path": "/opt/OpenMontage/projects/my-video/renders/final.mp4",
+    "project_id": "my-video",
+    "visibility": "public"
+  }
+}
+```
+
+**返回示例（公开链接）：**
+
+```json
+{
+  "success": true,
+  "url": "https://cdn.example.com/videos/my-video/final.mp4",
+  "object_key": "videos/my-video/final.mp4",
+  "bucket": "my-bucket",
+  "visibility": "public",
+  "uploaded_files": [...],
+  "publish_log": { "platform": "s3", "status": "published", ... }
+}
+```
+
+**返回示例（私钥预签名 + 下载页）：**
+
+```json
+{
+  "success": true,
+  "url": "https://bucket.s3.amazonaws.com/videos/...?X-Amz-Signature=...",
+  "visibility": "private",
+  "expires_at": "2026-08-15T12:00:00Z",
+  "download_page_url": "https://cdn.example.com/videos/my-video/download.html",
+  "uploaded_files": [
+    {"key": "videos/my-video/final.mp4", "url": "...", "size_bytes": 12345678},
+    {"key": "videos/my-video/subtitle.srt", "url": "...", "size_bytes": 1234}
+  ],
+  "publish_log": { "platform": "s3", "status": "published", ... }
+}
+```
+
+**注意事项：**
+- 该工具执行的是服务器本地文件的 `PUT` 上传，不涉及客户端 Base64 编码，适合
+  大文件（无 100 MB 限制，单文件 PUT 上限取决于 S3 服务端，通常 5 GB）。
+- 上传失败会返回 `success=false` 和 `error` 字段，不含密钥明文。
+- 重复调用同一 `object_key` 会覆盖已有对象；如需保留历史版本，传不同的
+  `object_key` 或在 `project_id` 后追加时间戳。
+- 该工具在 `tier=publish`、`capability=publish`，可通过
+  `list_tools(tier="publish")` 或 `list_tools(capability="publish")` 发现。
+- 外部智能体调用前建议先用 `dry_run_tool` 检查 `missing_env` 和文件是否存在。
+
+---
 
 ### 4.4 Pipeline 管理（3 个）
 
@@ -436,6 +528,7 @@ OpenMontage 运行用户的 `known_hosts`；工具使用 `BatchMode=yes` 和
 | direct_clip_search | 素材搜索 | 直接素材检索 |
 | clip_search | 素材检索 | CLIP 语义检索 |
 | upload_asset | 素材上传 | 将客户端 Base64 图片/视频/音频写入项目 assets 目录 |
+| s3_upload | 视频发布 | S3 兼容存储上传，返回公开链接/预签名 URL/下载页 |
 
 ### 付费 / 需要 API Key 的工具
 
@@ -454,6 +547,7 @@ OpenMontage 运行用户的 `known_hosts`；工具使用 `BatchMode=yes` 和
 | grok_image / grok_video | XAI_API_KEY | Grok 图片/视频 |
 | suno_music | SUNO_API_KEY | AI 音乐生成 |
 | music_gen | ELEVENLABS_API_KEY | ElevenLabs 音乐 |
+| s3_upload | S3_ACCESS_KEY / S3_SECRET_KEY | S3 兼容存储上传（见 §4.3 s3_upload） |
 
 ---
 

@@ -100,6 +100,19 @@ class UploadAssetResult(BaseModel):
     error: Optional[str] = Field(default=None, description="Error message if upload failed")
 
 
+class S3UploadResult(BaseModel):
+    success: bool = Field(description="Whether the upload completed")
+    url: Optional[str] = Field(default=None, description="Public or pre-signed download URL")
+    object_key: Optional[str] = Field(default=None, description="S3 object key")
+    bucket: Optional[str] = Field(default=None, description="Target bucket name")
+    visibility: Optional[str] = Field(default=None, description="public or private")
+    expires_at: Optional[str] = Field(default=None, description="ISO expiry for private URLs")
+    download_page_url: Optional[str] = Field(default=None, description="HTML download page URL (when requested)")
+    uploaded_files: list[dict[str, Any]] = Field(default_factory=list, description="Per-file upload records")
+    publish_log: dict[str, Any] = Field(default_factory=dict, description="Schema-valid publish_log entry")
+    error: Optional[str] = Field(default=None, description="Error message if upload failed")
+
+
 class CheckpointData(BaseModel):
     version: str
     project_id: str
@@ -326,6 +339,63 @@ def upload_asset_chunk(
         return {"success": False, "error": "upload_asset_chunk is not registered"}
     result = tool.execute({"operation": operation, "project_id": project_id, "filename": filename, "total_bytes": total_bytes, "mime_type": mime_type, "sha256": sha256, "upload_id": upload_id, "offset": offset, "chunk_base64": chunk_base64})
     return {"success": result.success, **(result.data or {}), "artifacts": result.artifacts, "error": result.error}
+
+
+@mcp.tool()
+def s3_upload(
+    video_path: str,
+    visibility: str = "public",
+    project_id: Optional[str] = None,
+    object_key: Optional[str] = None,
+    expire_seconds: Optional[int] = None,
+    make_download_page: bool = False,
+    additional_files: Optional[list[str]] = None,
+    page_title: Optional[str] = None,
+    platform_label: str = "s3",
+) -> S3UploadResult:
+    """Upload a rendered video to an S3-compatible object store.
+
+    Returns a public permanent link or a time-limited pre-signed GET URL,
+    and optionally builds a standalone HTML download page for multi-file
+    delivery.  Configuration is read from the server environment variables
+    (S3_ENDPOINT_URL, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET, etc.); these
+    must be set in the OpenMontage ``.env`` before calling.
+    """
+    tool = registry.get("s3_upload")
+    if tool is None:
+        return S3UploadResult(success=False, error="s3_upload tool is not registered")
+
+    if visibility not in ("public", "private"):
+        return S3UploadResult(success=False, error="visibility must be 'public' or 'private'")
+
+    inputs: dict[str, Any] = {
+        "video_path": video_path,
+        "visibility": visibility,
+        "project_id": project_id,
+        "object_key": object_key,
+        "make_download_page": make_download_page,
+        "page_title": page_title,
+        "platform_label": platform_label,
+    }
+    if expire_seconds is not None:
+        inputs["expire_seconds"] = expire_seconds
+    if additional_files is not None:
+        inputs["additional_files"] = additional_files
+
+    result = tool.execute(inputs)
+    data = result.data or {}
+    return S3UploadResult(
+        success=result.success,
+        url=data.get("url"),
+        object_key=data.get("object_key"),
+        bucket=data.get("bucket"),
+        visibility=data.get("visibility"),
+        expires_at=data.get("expires_at"),
+        download_page_url=data.get("download_page_url"),
+        uploaded_files=data.get("uploaded_files") or [],
+        publish_log=data.get("publish_log") or {},
+        error=result.error,
+    )
 
 
 @mcp.tool()
