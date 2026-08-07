@@ -1,0 +1,974 @@
+[
+  {
+    "name": "audio_energy",
+    "capability": "analysis",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "audio_probe",
+    "capability": "analysis",
+    "provider": "ffprobe",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "azure_stt",
+    "capability": "analysis",
+    "provider": "azure",
+    "status": "unavailable",
+    "tier": "core",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "composition_validator",
+    "capability": "analysis",
+    "provider": "local",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "dashscope_asr",
+    "capability": "analysis",
+    "provider": "dashscope",
+    "status": "unavailable",
+    "tier": "analyze",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "face_tracker",
+    "capability": "analysis",
+    "provider": "mediapipe",
+    "status": "unavailable",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "frame_sampler",
+    "capability": "analysis",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "scene_detect",
+    "capability": "analysis",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "transcriber",
+    "capability": "analysis",
+    "provider": "whisperx",
+    "status": "unavailable",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "transcript_fetcher",
+    "capability": "analysis",
+    "provider": "youtube-transcript-api",
+    "status": "unavailable",
+    "tier": "analyze",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "video_analyzer",
+    "capability": "analysis",
+    "provider": "multi",
+    "status": "available",
+    "tier": "analyze",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "video_downloader",
+    "capability": "source_ingest",
+    "provider": "yt-dlp",
+    "status": "unavailable",
+    "tier": "source",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "video_understand",
+    "capability": "analysis",
+    "provider": "transformers",
+    "status": "unavailable",
+    "tier": "analyze",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "visual_qa",
+    "capability": "analysis",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "upload_asset",
+    "capability": "asset_management",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "upload_asset_chunk",
+    "capability": "asset_management",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "audio_enhance",
+    "capability": "audio_processing",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "audio_mixer",
+    "capability": "audio_processing",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "dashscope_tts",
+    "capability": "tts",
+    "provider": "dashscope",
+    "status": "unavailable",
+    "tier": "voice",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "doubao_tts",
+    "capability": "tts",
+    "provider": "doubao",
+    "status": "unavailable",
+    "tier": "voice",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "edge_tts",
+    "capability": "tts",
+    "provider": "edge_tts",
+    "status": "unavailable",
+    "tier": "voice",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "elevenlabs_tts",
+    "capability": "tts",
+    "provider": "elevenlabs",
+    "status": "unavailable",
+    "tier": "voice",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "freesound_music",
+    "capability": "music_search",
+    "provider": "freesound",
+    "status": "unavailable",
+    "tier": "source",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "google_music",
+    "capability": "music_generation",
+    "provider": "google",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "google_tts",
+    "capability": "tts",
+    "provider": "google_tts",
+    "status": "unavailable",
+    "tier": "voice",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "kling_tts",
+    "capability": "tts",
+    "provider": "kling_official",
+    "status": "unavailable",
+    "tier": "voice",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "music_gen",
+    "capability": "music_generation",
+    "provider": "elevenlabs",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "music_library",
+    "capability": "music_library",
+    "provider": "local",
+    "status": "unavailable",
+    "tier": "source",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "openai_tts",
+    "capability": "tts",
+    "provider": "openai",
+    "status": "available",
+    "tier": "voice",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "piper_tts",
+    "capability": "tts",
+    "provider": "piper",
+    "status": "available",
+    "tier": "voice",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "pixabay_music",
+    "capability": "music_search",
+    "provider": "pixabay_music",
+    "status": "available",
+    "tier": "source",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "suno_music",
+    "capability": "music_generation",
+    "provider": "suno",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "tts_selector",
+    "capability": "tts",
+    "provider": "selector",
+    "status": "available",
+    "tier": "voice",
+    "runtime": "hybrid",
+    "stability": "beta"
+  },
+  {
+    "name": "kling_avatar",
+    "capability": "avatar",
+    "provider": "kling_official",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "kling_lip_sync",
+    "capability": "avatar",
+    "provider": "kling_official",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "lip_sync",
+    "capability": "avatar",
+    "provider": "wav2lip",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "talking_head",
+    "capability": "avatar",
+    "provider": "sadtalker",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "cap_recorder",
+    "capability": "screen_capture",
+    "provider": "cap",
+    "status": "available",
+    "tier": "source",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "screen_capture_selector",
+    "capability": "screen_capture",
+    "provider": "selector",
+    "status": "available",
+    "tier": "source",
+    "runtime": "hybrid",
+    "stability": "beta"
+  },
+  {
+    "name": "screen_recorder",
+    "capability": "screen_capture",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "source",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "action_timeline_compiler",
+    "capability": "character_animation",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "character_animation_reviewer",
+    "capability": "character_animation",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "analyze",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "character_rig_renderer",
+    "capability": "character_animation",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "character_spec_generator",
+    "capability": "character_animation",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "pose_library_builder",
+    "capability": "character_animation",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "svg_rig_builder",
+    "capability": "character_animation",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "bg_remove",
+    "capability": "enhancement",
+    "provider": "rembg",
+    "status": "unavailable",
+    "tier": "enhance",
+    "runtime": "hybrid",
+    "stability": "experimental"
+  },
+  {
+    "name": "color_grade",
+    "capability": "enhancement",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "eye_enhance",
+    "capability": "enhancement",
+    "provider": "mediapipe",
+    "status": "unavailable",
+    "tier": "enhance",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "face_enhance",
+    "capability": "enhancement",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "face_restore",
+    "capability": "enhancement",
+    "provider": "codeformer",
+    "status": "unavailable",
+    "tier": "enhance",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "upscale",
+    "capability": "enhancement",
+    "provider": "realesrgan",
+    "status": "unavailable",
+    "tier": "enhance",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "code_snippet",
+    "capability": "graphics",
+    "provider": "pygments",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "comfyui_image",
+    "capability": "image_generation",
+    "provider": "comfyui",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "dashscope_image",
+    "capability": "image_generation",
+    "provider": "dashscope",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "diagram_gen",
+    "capability": "graphics",
+    "provider": "mermaid",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "flux_image",
+    "capability": "image_generation",
+    "provider": "flux",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "google_imagen",
+    "capability": "image_generation",
+    "provider": "google_imagen",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "grok_image",
+    "capability": "image_generation",
+    "provider": "grok",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "image_gen",
+    "capability": "image_generation",
+    "provider": "multi",
+    "status": "available",
+    "tier": "core",
+    "runtime": "hybrid",
+    "stability": "experimental"
+  },
+  {
+    "name": "image_selector",
+    "capability": "image_generation",
+    "provider": "selector",
+    "status": "available",
+    "tier": "generate",
+    "runtime": "hybrid",
+    "stability": "beta"
+  },
+  {
+    "name": "kling_official_image",
+    "capability": "image_generation",
+    "provider": "kling_official",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "local_diffusion",
+    "capability": "image_generation",
+    "provider": "local_diffusion",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "math_animate",
+    "capability": "graphics",
+    "provider": "manim",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "openai_image",
+    "capability": "image_generation",
+    "provider": "openai",
+    "status": "available",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "pexels_image",
+    "capability": "image_generation",
+    "provider": "pexels",
+    "status": "unavailable",
+    "tier": "source",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "pixabay_image",
+    "capability": "image_generation",
+    "provider": "pixabay",
+    "status": "unavailable",
+    "tier": "source",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "recraft_image",
+    "capability": "image_generation",
+    "provider": "recraft",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "export_bundle",
+    "capability": "publish",
+    "provider": "local",
+    "status": "available",
+    "tier": "publish",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "rsync_upload_artifact",
+    "capability": "artifact_delivery",
+    "provider": "rsync",
+    "status": "available",
+    "tier": "publish",
+    "runtime": "local",
+    "stability": "production"
+  },
+  {
+    "name": "subtitle_gen",
+    "capability": "subtitle",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "auto_reframe",
+    "capability": "video_post",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "clip_search",
+    "capability": "clip_retrieval",
+    "provider": "openmontage",
+    "status": "unavailable",
+    "tier": "analyze",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "cogvideo_video",
+    "capability": "video_generation",
+    "provider": "cogvideo",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "comfyui_video",
+    "capability": "video_generation",
+    "provider": "comfyui",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "corpus_builder",
+    "capability": "corpus_population",
+    "provider": "openmontage",
+    "status": "degraded",
+    "tier": "source",
+    "runtime": "hybrid",
+    "stability": "experimental"
+  },
+  {
+    "name": "direct_clip_search",
+    "capability": "clip_acquisition",
+    "provider": "openmontage",
+    "status": "available",
+    "tier": "source",
+    "runtime": "hybrid",
+    "stability": "beta"
+  },
+  {
+    "name": "gemini_omni_video",
+    "capability": "video_generation",
+    "provider": "gemini_omni",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "green_screen_composite",
+    "capability": "video_post",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "green_screen_processor",
+    "capability": "video_post",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "grok_video",
+    "capability": "video_generation",
+    "provider": "grok",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "heygen_video",
+    "capability": "video_generation",
+    "provider": "heygen",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "higgsfield_video",
+    "capability": "video_generation",
+    "provider": "higgsfield",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "hunyuan_video",
+    "capability": "video_generation",
+    "provider": "hunyuan",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "hyperframes_compose",
+    "capability": "video_post",
+    "provider": "hyperframes",
+    "status": "unavailable",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "beta"
+  },
+  {
+    "name": "jimeng_video",
+    "capability": "video_generation",
+    "provider": "volcengine",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "kling_official_video",
+    "capability": "video_generation",
+    "provider": "kling_official",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "kling_relay",
+    "capability": "video_generation",
+    "provider": "kling_relay",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "kling_video",
+    "capability": "video_generation",
+    "provider": "kling",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "ltx_video_local",
+    "capability": "video_generation",
+    "provider": "ltx",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  },
+  {
+    "name": "ltx_video_modal",
+    "capability": "video_generation",
+    "provider": "ltx-modal",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "minimax_video",
+    "capability": "video_generation",
+    "provider": "minimax",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "pexels_video",
+    "capability": "video_generation",
+    "provider": "pexels",
+    "status": "unavailable",
+    "tier": "source",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "pixabay_video",
+    "capability": "video_generation",
+    "provider": "pixabay",
+    "status": "unavailable",
+    "tier": "source",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "remotion_caption_burn",
+    "capability": "subtitle",
+    "provider": "remotion",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "runway_video",
+    "capability": "video_generation",
+    "provider": "runway",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "seedance_relay",
+    "capability": "video_generation",
+    "provider": "seedance_relay",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "seedance_replicate",
+    "capability": "video_generation",
+    "provider": "seedance",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "seedance_video",
+    "capability": "video_generation",
+    "provider": "seedance",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "showcase_card",
+    "capability": "video_post",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "silence_cutter",
+    "capability": "video_post",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "sora_video",
+    "capability": "video_generation",
+    "provider": "openai",
+    "status": "available",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "beta"
+  },
+  {
+    "name": "veo_video",
+    "capability": "video_generation",
+    "provider": "veo",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "api",
+    "stability": "experimental"
+  },
+  {
+    "name": "video_compose",
+    "capability": "video_post",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "video_selector",
+    "capability": "video_generation",
+    "provider": "selector",
+    "status": "available",
+    "tier": "generate",
+    "runtime": "hybrid",
+    "stability": "beta"
+  },
+  {
+    "name": "video_stitch",
+    "capability": "video_post",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "video_trimmer",
+    "capability": "video_post",
+    "provider": "ffmpeg",
+    "status": "available",
+    "tier": "core",
+    "runtime": "local",
+    "stability": "experimental"
+  },
+  {
+    "name": "wan_video",
+    "capability": "video_generation",
+    "provider": "wan",
+    "status": "unavailable",
+    "tier": "generate",
+    "runtime": "local_gpu",
+    "stability": "experimental"
+  }
+]

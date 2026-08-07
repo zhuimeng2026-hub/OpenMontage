@@ -240,7 +240,7 @@ openclaw agent --message "调用 openmontage 的 list_tools，过滤 status=avai
 
 ---
 
-### 4.3 素材管理与视频发布（3 个）
+### 4.3 素材管理与视频发布（5 个）
 
 #### `upload_asset` — 上传项目素材
 
@@ -407,6 +407,23 @@ AWS SigV4，无需安装 `boto3`/`minio` 等依赖，只需配置 `.env` 中的�
 - 该工具在 `tier=publish`、`capability=publish`，可通过
   `list_tools(tier="publish")` 或 `list_tools(capability="publish")` 发现。
 - 外部智能体调用前建议先用 `dry_run_tool` 检查 `missing_env` 和文件是否存在。
+
+#### `export_bundle` — 打包渲染产物
+
+将已渲染的视频及关联素材打包为自包含的导出目录，并生成合法的
+`publish_log`（`status: "exported"`）。无需网络上传，仅做本地整理，
+适用于交付给创作者或手动上传到视频平台的场景。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `video_path` | string | 是 | 已渲染视频路径（来自 `render_report.outputs[].path`） |
+| `project_name` | string? | 否 | 项目名，默认从路径推断 |
+| `chapters` | dict[]? | 否 | 章节信息列表，用于生成时间轴元数据 |
+| `metadata` | dict? | 否 | 附加 SEO 元数据（标题、描述、标签等） |
+
+**返回：** 包含 `export_dir`（打包目录路径）、`publish_log`（合法的发布日志）
 
 ---
 

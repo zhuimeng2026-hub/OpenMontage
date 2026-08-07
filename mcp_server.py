@@ -615,6 +615,56 @@ def write_checkpoint(
 
 
 # ---------------------------------------------------------------------------
+# Publish-tier tools (rsync, export bundle)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def rsync_upload_artifact(
+    source_path: str,
+    remote_name: Optional[str] = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Upload a rendered artifact to a public server via SSH/rsync.
+
+    Configuration is read from .env (RSYNC_* variables).
+    Returns remote_path and download_url when RSYNC_PUBLIC_BASE_URL is set.
+    """
+    tool = registry.get("rsync_upload_artifact")
+    if tool is None:
+        return {"success": False, "error": "rsync_upload_artifact tool is not registered"}
+    result = tool.execute({
+        "source_path": source_path,
+        "remote_name": remote_name,
+        "dry_run": dry_run,
+    })
+    return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
+
+
+@mcp.tool()
+def export_bundle(
+    video_path: str,
+    project_name: Optional[str] = None,
+    chapters: Optional[list[dict[str, Any]]] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Package a rendered video with metadata into a self-contained export bundle.
+
+    Writes a schema-valid publish_log with status='exported'.
+    """
+    tool = registry.get("export_bundle")
+    if tool is None:
+        return {"success": False, "error": "export_bundle tool is not registered"}
+    result = tool.execute({
+        "video_path": video_path,
+        "project_name": project_name,
+        "chapters": chapters,
+        "metadata": metadata,
+    })
+    return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
+
+
+# ---------------------------------------------------------------------------
 # Bearer token auth
 # ---------------------------------------------------------------------------
 
