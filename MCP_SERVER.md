@@ -427,6 +427,28 @@ AWS SigV4，无需安装 `boto3`/`minio` 等依赖，只需配置 `.env` 中的�
 
 ---
 
+### 4.3 weiyun_video_upload — 上传视频到微云（完整 FTN 流程）
+
+将本地视频文件上传到腾讯微云，支持大文件（≥1 MB）的两阶段 FTN 分块上传。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| `video_path` | string | 是 | — | 本地视频文件路径 |
+| `target_dir` | string | 否 | `""`（根目录） | 微云目标目录 key |
+| `overwrite` | bool | 否 | `false` | 是否覆盖同名文件 |
+
+**返回：** `file_id`、`filename`、`size_bytes`、`share_link`（如有）
+
+**前置条件：**
+- 已安装 `mcporter` CLI：`npm install -g mcporter@0.8.1`
+- 已配置微云 Token：`export WEIYUN_MCP_TOKEN=<token>` 或执行 `bash /root/.claude/skills/weiyun/setup.sh weiyun_set_token <token>`
+
+> 注：此工具取代旧版 `weiyun_upload`（旧版不支持 ≥1 MB 文件的完整分块上传）。
+
+---
+
 ### 4.4 Pipeline 管理（3 个）
 
 #### `list_pipelines` — 列出生产线
@@ -546,6 +568,7 @@ AWS SigV4，无需安装 `boto3`/`minio` 等依赖，只需配置 `.env` 中的�
 | clip_search | 素材检索 | CLIP 语义检索 |
 | upload_asset | 素材上传 | 将客户端 Base64 图片/视频/音频写入项目 assets 目录 |
 | s3_upload | 视频发布 | S3 兼容存储上传，返回公开链接/预签名 URL/下载页 |
+| weiyun_video_upload | 视频发布 | 上传视频到腾讯微云（完整 FTN 分块上传，支持大文件） |
 
 ### 付费 / 需要 API Key 的工具
 
