@@ -9,13 +9,23 @@ Run with stdio (for local agent integration):
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
+import logging
 import os
 import secrets
 import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
+
+# Configure logging
+_log = logging.getLogger("mcp_server")
+_log.setLevel(logging.INFO)
+_handler = logging.StreamHandler(sys.stderr)
+_handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+_log.addHandler(_handler)
 
 # Ensure OpenMontage project root is on sys.path so tools/ and lib/ resolve.
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -730,13 +740,36 @@ class BearerTokenAuthMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+
+        # Extract client info for logging
+        client_host = ""
+        client_port = ""
+        if scope.get("client"):
+            client_host = scope["client"][0]
+            client_port = scope["client"][1]
+
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        path = scope.get("path", "")
+        method = scope.get("method", "GET")
+
+        # Log request
+        auth_present = bool(headers.get(b"authorization", b"").startswith(b"Bearer "))
+        _log.info(
+            "Request: %s %s from %s:%s auth=%s",
+            method, path, client_host, client_port, "YES" if auth_present else "NO"
+        )
+
         provided = headers.get(b"authorization", b"")
         if not provided.startswith(b"Bearer "):
+            _log.warning("401 Unauthorized: Missing Bearer token from %s:%s", client_host, client_port)
             return await self._reject(scope, receive, send)
+
         token = provided[len(b"Bearer "):].strip()
         if not hmac.compare_digest(token, self._expected):
+            _log.warning("401 Unauthorized: Invalid token from %s:%s", client_host, client_port)
             return await self._reject(scope, receive, send)
+
+        _log.info("Auth OK: %s:%s", client_host, client_port)
         return await self.app(scope, receive, send)
 
     @staticmethod
@@ -761,16 +794,16 @@ if __name__ == "__main__":
         sys.exit(0)
 
     transport = sys.argv[1] if len(sys.argv) > 1 else "streamable-http"
-    print(f"[mcp_server] Starting OpenMontage MCP server on port 8900 (transport={transport})")
-    print(f"[mcp_server] {_AVAILABLE}/{len(_discovered)} tools available")
+    _log.info("Starting OpenMontage MCP server on port 8900 (transport=%s)", transport)
+    _log.info("%s/%s tools available", _AVAILABLE, len(_discovered))
 
     _api_token = _load_mcp_token()
     if _api_token:
-        print("[mcp_server] Bearer token auth ENABLED — clients must send 'Authorization: Bearer <MCP_API_TOKEN>'")
+        _log.info("Bearer token auth ENABLED — clients must send 'Authorization: Bearer <MCP_API_TOKEN>'")
     else:
-        print("[mcp_server] WARNING: MCP_API_TOKEN is not set — server is running WITHOUT authentication.")
-        print("[mcp_server] Do NOT expose port 8900 to the public internet until you set a token.")
-        print("[mcp_server] Generate one with:  python mcp_server.py gen-token")
+        _log.warning("MCP_API_TOKEN is not set — server is running WITHOUT authentication.")
+        _log.warning("Do NOT expose port 8900 to the public internet until you set a token.")
+        _log.warning("Generate one with:  python mcp_server.py gen-token")
 
     if transport == "streamable-http":
         import socket
