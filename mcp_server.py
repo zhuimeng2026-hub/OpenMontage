@@ -17,15 +17,39 @@ import os
 import secrets
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
 
-# Configure logging
+# Ensure OpenMontage project root is on sys.path so tools/ and lib/ resolve.
+_PROJECT_ROOT = Path(__file__).resolve().parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+# Change CWD so relative paths (pipeline/, projects/, output/) resolve correctly.
+os.chdir(_PROJECT_ROOT)
+
+# Logging setup (must be after _PROJECT_ROOT is defined)
+_LOG_DIR = _PROJECT_ROOT / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
 _log = logging.getLogger("mcp_server")
 _log.setLevel(logging.INFO)
-_handler = logging.StreamHandler(sys.stderr)
-_handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S"))
-_log.addHandler(_handler)
+_formatter = logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
+
+# File handler with rotation (10 MB per file, keep 5 backups)
+_file_handler = RotatingFileHandler(
+    _LOG_DIR / "mcp_server.log",
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(_formatter)
+_log.addHandler(_file_handler)
+
+# Stderr handler (for journal/systemd)
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setFormatter(_formatter)
+_log.addHandler(_stderr_handler)
 
 # Ensure OpenMontage project root is on sys.path so tools/ and lib/ resolve.
 _PROJECT_ROOT = Path(__file__).resolve().parent

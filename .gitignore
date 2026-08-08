@@ -102,3 +102,4 @@ venv/
 OpenMontage-mcp-proxy/openmontage-mcp-proxy*
 OpenMontage-mcp-proxy/proxy.log
 OpenMontage-mcp-proxy/*.log
+logs/mcp_server.log
