@@ -276,7 +276,7 @@ async def execute_tool(
     import logging as _logging
 
     _log = _logging.getLogger("mcp_server")
-    _log.info("execute_tool called: %s", tool_name)
+    _log.info("execute_tool called: %s inputs=%s", tool_name, json.dumps(inputs, ensure_ascii=False))
 
     tool = registry.get(tool_name)
     if tool is None:
@@ -297,6 +297,9 @@ async def execute_tool(
         result = await asyncio.to_thread(tool.execute, inputs)
         _log.info("execute_tool done: %s success=%s duration=%.2fs",
                   tool_name, result.success, result.duration_seconds or 0)
+        _log.info("execute_tool response: tool=%s success=%s data_keys=%s error=%s",
+                  tool_name, result.success, list(result.data.keys()) if result.data else None,
+                  result.error[:80] if result.error else None)
         return ExecuteResult(
             success=result.success,
             data=result.data,
@@ -308,6 +311,7 @@ async def execute_tool(
             model=result.model,
         )
     except Exception as e:
+        _log.exception("execute_tool exception: %s", tool_name)
         return ExecuteResult(
             success=False,
             error=f"Execution failed: {type(e).__name__}: {e}",
@@ -776,25 +780,43 @@ class BearerTokenAuthMiddleware:
         path = scope.get("path", "")
         method = scope.get("method", "GET")
 
-        # Log request
+        # Log request with method and path
         auth_present = bool(headers.get(b"authorization", b"").startswith(b"Bearer "))
         _log.info(
             "Request: %s %s from %s:%s auth=%s",
             method, path, client_host, client_port, "YES" if auth_present else "NO"
         )
 
+        # Read and log request body for POST to /mcp
+        if method == "POST" and path == "/mcp":
+            body = b""
+            while True:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    break
+                body += message.get("body", b"")
+                if not message.get("more_body", False):
+                    break
+            _log.info("Body from %s:%s: %s", client_host, client_port, body.decode("utf-8", errors="replace")[:500])
+            # Re-dispatch body by wrapping receive
+            async def _receive():
+                return {"type": "http.request", "body": body, "more_body": False}
+            scope["_body_consumed"] = True
+        else:
+            _receive = receive
+
         provided = headers.get(b"authorization", b"")
         if not provided.startswith(b"Bearer "):
             _log.warning("401 Unauthorized: Missing Bearer token from %s:%s", client_host, client_port)
-            return await self._reject(scope, receive, send)
+            return await self._reject(scope, _receive, send)
 
         token = provided[len(b"Bearer "):].strip()
         if not hmac.compare_digest(token, self._expected):
             _log.warning("401 Unauthorized: Invalid token from %s:%s", client_host, client_port)
-            return await self._reject(scope, receive, send)
+            return await self._reject(scope, _receive, send)
 
         _log.info("Auth OK: %s:%s", client_host, client_port)
-        return await self.app(scope, receive, send)
+        return await self.app(scope, _receive, send)
 
     @staticmethod
     async def _reject(scope, receive, send):

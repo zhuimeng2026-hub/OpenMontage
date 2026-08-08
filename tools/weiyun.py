@@ -183,6 +183,35 @@ class WeiyunListByCategory(BaseTool):
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.list_by_category", inputs)
 
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
+
 
 class WeiyunDownload(BaseTool):
     name = "weiyun.download"
@@ -213,6 +242,35 @@ class WeiyunDownload(BaseTool):
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.download", inputs)
 
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
+
 
 class WeiyunDelete(BaseTool):
     name = "weiyun.delete"
@@ -240,6 +298,35 @@ class WeiyunDelete(BaseTool):
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.delete", inputs)
+
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
 
 
 class WeiyunUpload(BaseTool):
@@ -332,6 +419,35 @@ class WeiyunGenShareLink(BaseTool):
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.gen_share_link", inputs)
 
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
+
 
 class WeiyunRenameFile(BaseTool):
     name = "weiyun.rename_file"
@@ -360,6 +476,35 @@ class WeiyunRenameFile(BaseTool):
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.rename_file", inputs)
+
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
 
 
 class WeiyunRenameDir(BaseTool):
@@ -391,6 +536,35 @@ class WeiyunRenameDir(BaseTool):
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.rename_dir", inputs)
 
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
+
 
 class WeiyunCreateDir(BaseTool):
     name = "weiyun.create_dir"
@@ -418,6 +592,35 @@ class WeiyunCreateDir(BaseTool):
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.create_dir", inputs)
+
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
 
 
 class WeiyunMoveFile(BaseTool):
@@ -449,6 +652,35 @@ class WeiyunMoveFile(BaseTool):
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.move_file", inputs)
 
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
+
 
 class WeiyunMoveDir(BaseTool):
     name = "weiyun.move_dir"
@@ -478,6 +710,35 @@ class WeiyunMoveDir(BaseTool):
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("weiyun.move_dir", inputs)
+
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
 
 
 class CheckSkillUpdate(BaseTool):
@@ -512,6 +773,35 @@ class CheckSkillUpdate(BaseTool):
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         return self._call_mcporter("check_skill_update", inputs)
+
+    def _call_mcporter(self, tool_name: str, inputs: dict[str, Any]) -> ToolResult:
+        mcporter = _mcporter_path()
+        if not mcporter:
+            return ToolResult(success=False, error="mcporter not found. Install with: npm install -g mcporter@0.8.1")
+
+        args = ["call", "--server", "weiyun", "--tool", tool_name, "--output", "json"]
+        if inputs:
+            args.extend(["--args", json.dumps(inputs, ensure_ascii=False)])
+
+        returncode, stdout, stderr = _run_mcporter(args)
+
+        if returncode != 0:
+            error_msg = stderr.strip() or stdout.strip()
+            if "token" in error_msg.lower() or "auth" in error_msg.lower() or "401" in error_msg:
+                error_msg = "Weiyun authentication failed. Check WEIYUN_MCP_TOKEN or run setup.sh"
+            return ToolResult(success=False, error=error_msg)
+
+        try:
+            result = _parse_json_output(stdout)
+            if result.get("error") or result.get("code"):
+                return ToolResult(
+                    success=False,
+                    error=f"weiyun error: {result.get('error') or result.get('message', result.get('code'))}",
+                    data=result,
+                )
+            return ToolResult(success=True, data=result)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to parse response: {exc}")
 
 
 # ---------------------------------------------------------------------------
