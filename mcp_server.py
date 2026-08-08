@@ -664,6 +664,62 @@ def export_bundle(
     return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
 
 
+@mcp.tool()
+def weiyun_upload(
+    video_path: str,
+    target_dir: str = "/video",
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Upload a local video file to Tencent Weiyun cloud storage.
+
+    Requires ``mcporter`` to be installed (``npm install -g mcporter@0.8.1``)
+    and a Weiyun MCP token configured (set ``WEIYUN_MCP_TOKEN`` env var or
+    run ``setup.sh weiyun_set_token <token>``).
+
+    Returns the upload result including ``file_id``, ``filename``, ``size_bytes``
+    and a share link when available.
+    """
+    # Trigger weiyun tool registration (module has a side-effect import on load)
+    import tools.weiyun  # noqa: F401 — side-effect registers the tools
+
+    tool = registry.get("weiyun.upload")
+    if tool is None:
+        return {"success": False, "error": "weiyun.upload tool is not registered. Is mcporter installed?"}
+
+    from pathlib import Path
+    p = Path(video_path).expanduser()
+    if not p.is_file():
+        return {"success": False, "error": f"video_path not found or not a file: {p}"}
+
+    import hashlib
+    file_size = p.stat().st_size
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    file_sha = h.hexdigest()
+
+    # weiyun.upload requires block_sha_list; for small files (<1 MB) a single
+    # empty block is accepted.  For larger files the tool delegates to mcporter
+    # which handles the two-phase FTN upload internally.
+    block_sha_list: list[str] = [file_sha] if file_size < 1024 * 1024 else []
+
+    result = tool.execute({
+        "filename": p.name,
+        "file_size": file_size,
+        "file_sha": file_sha,
+        "block_sha_list": block_sha_list,
+        "pdir_key": target_dir,
+        "overwrite": overwrite,
+    })
+    return {
+        "success": result.success,
+        "data": result.data,
+        "artifacts": result.artifacts,
+        "error": result.error,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Bearer token auth
 # ---------------------------------------------------------------------------
