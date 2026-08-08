@@ -664,6 +664,31 @@ def export_bundle(
     return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
 
 
+@mcp.tool()
+def weiyun_upload(
+    video_path: str,
+    target_dir: str = "",
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Upload a rendered video to Tencent Weiyun (腾讯微云) via the MCP-token flow.
+
+    Token-based upload (no QR-code login / cookies needed). Reads
+    WEIYUN_MCP_TOKEN from the server environment (.env). Returns the Weiyun
+    file_id and filename on success. Configure the token in the OpenMontage
+    `.env` before calling. This is the token-based counterpart to the
+    cookie-based weiyun_publish tool.
+    """
+    tool = registry.get("weiyun_upload")
+    if tool is None:
+        return {"success": False, "error": "weiyun_upload tool is not registered"}
+    result = tool.execute({
+        "video_path": video_path,
+        "target_dir": target_dir,
+        "overwrite": overwrite,
+    })
+    return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
+
+
 # ---------------------------------------------------------------------------
 # Bearer token auth
 # ---------------------------------------------------------------------------
