@@ -263,3 +263,37 @@ ps -ef | grep -E 'mcp_server|openmontage-mcp' | grep -v grep
 - (a) 客户端是否每次请求都回带了服务端**轮换后的 `Mcp-Session-Id`**（代理透明转发、不改写头；中间件 `mcp_server.py:1040/1073` 每次请求从请求头取 session 注入 `ContextVar`）。
 - (b) `ContextVar` 是否跨线程传播：同步工具函数经 `anyio.to_thread` 执行，正常会随任务复制上下文；若仍丢值，需把 session 改为随请求显式下传，而非依赖 `ContextVar`。
 复测：`python om_mcp_probe.py upload`（传图）→ `create_remotion_video_share`，并查 `OpenMontage-mcp-proxy/proxy.log` 每条 `[mcp] >>` 的 `session_hash` 是否非空且稳定。
+
+---
+
+## 11. 复核结论（2026-08-11 深夜，线上 `dw.aixifs.com/mcp`）
+
+线上实测（本报告对应工具 `om_mcp_probe.py`）：
+
+| 项 | 结果 | 结论 |
+|---|---|---|
+| `tools/list` | ✅ 21 个工具，`weiyun_gen_share_link` 已暴露 | 暴露提交 `154b427` 已上线 |
+| `weiyun_gen_share_link`（`dir_list=[...]`） | ❌ 仍 `"file_list or dir_list is required"`（连续 3 次：探针 `share` / `call` / `share -d` 全复现） | **数组绑定修复 `830720a` 未生效**——生产仍跑旧代码 |
+| `upload_asset` → `create_remotion_video_share`（同进程同 SID） | ❌ `"Streamable HTTP Mcp-Session-Id is required"` | **单副本未能修复 session** |
+
+### 11.1 session 真因已坐实（非负载均衡，是 ContextVar 跨线程丢失）
+- 调度点 `mcp_server.py:352`：`result = await asyncio.to_thread(tool.execute, inputs)`。
+- **`asyncio.to_thread` 默认不复制 ContextVar** 到 worker 线程；中间件在 async 层 `set_mcp_session_id(...)` 注入的值，在同步工具的 worker 线程里读不到 → `get_mcp_session_id()` 返回 `None` → 报错。
+- 这与副本数无关，因此"单副本"调整**打错了层**——它本就不是多实例存储问题（§10.4 的 (b) 推断被本次代码核对证实，但文档原写的 `anyio.to_thread` 不准确，实际是 `asyncio.to_thread`，后者不复制上下文）。
+
+### 11.2 已落地的代码修复（commit 待推送）
+`mcp_server.py:352` 改为显式复制上下文带入线程：
+```python
+ctx = contextvars.copy_context()
+result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+```
+（并在文件头 `import contextvars`。）工具体内 `get_mcp_session_id()` 即可在 worker 线程读到 session，无需改任何单个工具。本地 `py_compile` 通过。这是 §10.4 (b) 所指"改仓库即可根治"的路线，已实施。
+
+### 11.3 待运维执行（两处都必须重部署才会生效）
+1. **微云分享绑定**：生产进程须拉取 `origin/main`（含 `830720a`）后**重启 `openmontage-mcp`**，否则 `weiyun_gen_share_link` 仍丢数组参数。
+2. **session 跨线程**：同样须重启以加载本节 11.2 的 `contextvars.copy_context` 修复（§11.1 的 root cause）。
+3. 重启后复测：
+   - `python om_mcp_probe.py share -d /opt/OpenMontage/renders` → 期望返回 `data.short_url`（退化=微云 token 缺失类错误，说明绑定已通）。
+   - 单次会话 `upload` → `create_remotion_video_share` → 期望不再报 `Mcp-Session-Id is required`。
+
+> 注：单副本决策（§10）仍有价值——它约束日后别无共享存储就扩副本；但**它不能替代本节 11.2 的代码修复**。

@@ -10,6 +10,7 @@ Run with stdio (for local agent integration):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hmac
 import json
 import logging
@@ -349,7 +350,12 @@ async def execute_tool(
         )
 
     try:
-        result = await asyncio.to_thread(tool.execute, inputs)
+        # 同步工具经 asyncio.to_thread 在 worker 线程执行；该方法默认不复制
+        # ContextVar，导致中间件注入的 mcp-session-id 在工具体内读不到
+        # （get_mcp_session_id() 返回 None → "Mcp-Session-Id is required"）。
+        # 显式复制当前上下文并带入线程，使 session 跨线程可见。
+        ctx = contextvars.copy_context()
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
         _log.info("execute_tool done: %s success=%s duration=%.2fs",
                   tool_name, result.success, result.duration_seconds or 0)
         _log.info("execute_tool response: tool=%s success=%s data_keys=%s error=%s",
