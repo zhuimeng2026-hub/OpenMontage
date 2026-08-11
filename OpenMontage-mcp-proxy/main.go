@@ -88,7 +88,7 @@ func buildProxy(cfg proxyConfig) *httputil.ReverseProxy {
 			r.Header.Set("Authorization", "Bearer "+cfg.upstreamToken)
 			r.Header.Set("Accept", acceptHeader(r.Header.Get("Accept")))
 			r.Header.Set("Cache-Control", "no-cache")
-			log.Printf("[mcp] >> %s %s -> %s (client=%s)", r.Method, r.URL.Path, cfg.upstreamURL.String(), r.RemoteAddr)
+			log.Printf("[mcp] >> %s %s -> %s (client=%s session=%s)", r.Method, r.URL.Path, cfg.upstreamURL.String(), r.RemoteAddr, r.Header.Get("Mcp-Session-Id"))
 		},
 		ModifyResponse: func(r *http.Response) error {
 			startVal := r.Request.Context().Value("mcp_start")

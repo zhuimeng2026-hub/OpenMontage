@@ -244,6 +244,11 @@ openclaw agent --message "调用 openmontage 的 list_tools，过滤 status=avai
 
 #### `upload_asset` — 上传项目素材
 
+通过 Streamable HTTP 使用时，服务端会使用 MCP 标准的 `Mcp-Session-Id` 区分不同
+WorkBuddy 会话。上传文件会保存到该会话对应的隔离目录；分片上传的
+`upload_id` 也只能由创建它的会话继续使用。客户端不需要把会话 ID 作为工具参数
+传入，只需按 MCP 协议在后续 HTTP 请求中原样携带服务端返回的 `Mcp-Session-Id`。
+
 将客户端的图片、视频或音频以 Base64 上传到远程 OpenMontage 项目的
 `projects/<project_id>/assets/` 目录。返回的 `asset_manifest` 可直接传给
 `execute_tool(tool_name="video_compose", ...)`，或传给图生视频工具。

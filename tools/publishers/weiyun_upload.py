@@ -83,6 +83,10 @@ class WeiyunUpload(BaseTool):
                 "default": False,
                 "description": "Kept for API parity; the FTN protocol overwrites by file identity regardless.",
             },
+            "mcp_session_id": {
+                "type": "string",
+                "description": "Server-injected MCP session identifier used to correlate the result.",
+            },
         },
     }
     output_schema = {
@@ -172,6 +176,7 @@ class WeiyunUpload(BaseTool):
                 "filename": result.get("filename"),
                 "mcp_url": mcp_url,
                 "target_dir": pdir_key or "",
+                "mcp_session_id": inputs.get("mcp_session_id"),
             },
             artifacts=[str(video_path)],
             duration_seconds=elapsed,

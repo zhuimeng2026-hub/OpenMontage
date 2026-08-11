@@ -36,6 +36,12 @@ def _max_upload_bytes() -> int:
         return 100 * 1024 * 1024
 
 
+def _session_key(session_id: Any) -> str:
+    """Return a filesystem-safe namespace for one MCP session."""
+    value = str(session_id or "legacy").strip()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+
+
 class UploadAsset(BaseTool):
     """Upload one image/video/audio asset into a project workspace."""
 
@@ -130,7 +136,8 @@ class UploadAsset(BaseTool):
                 raise ValueError("sha256 does not match uploaded content")
 
             project_dir = self._project_dir(project_id)
-            assets_dir = project_dir / "assets"
+            session_id = inputs.get("mcp_session_id")
+            assets_dir = project_dir / "assets" / "_sessions" / _session_key(session_id)
             assets_dir.mkdir(parents=True, exist_ok=True)
             target = (assets_dir / filename).resolve()
             try:
@@ -169,6 +176,7 @@ class UploadAsset(BaseTool):
                 "bytes": len(content),
                 "sha256": digest,
                 "source": "mcp_upload",
+                "mcp_session_id": session_id,
             }
             return ToolResult(
                 success=True,

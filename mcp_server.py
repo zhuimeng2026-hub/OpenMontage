@@ -66,6 +66,7 @@ from tools.tool_registry import registry
 from tools.base_tool import ToolStatus
 from lib import checkpoint as ckpt
 from lib import pipeline_loader
+from lib.mcp_session import get_mcp_session_id, reset_mcp_session_id, set_mcp_session_id
 
 # ---------------------------------------------------------------------------
 # Discover tools at import time
@@ -81,7 +82,9 @@ mcp = FastMCP(
     "OpenMontage",
     host="::",
     port=8900,
-    stateless_http=True,
+    # Keep the MCP transport stateful so clients receive and reuse
+    # Mcp-Session-Id.  The session id is also used to isolate uploads.
+    stateless_http=False,
     json_response=True,
     instructions=(
         "OpenMontage agentic video production system. "
@@ -344,6 +347,7 @@ def upload_asset(
         "mime_type": mime_type,
         "sha256": sha256,
         "overwrite": overwrite,
+        "mcp_session_id": get_mcp_session_id(),
     })
     data = result.data or {}
     return UploadAssetResult(
@@ -375,7 +379,18 @@ def upload_asset_chunk(
     tool = registry.get("upload_asset_chunk")
     if tool is None:
         return {"success": False, "error": "upload_asset_chunk is not registered"}
-    result = tool.execute({"operation": operation, "project_id": project_id, "filename": filename, "total_bytes": total_bytes, "mime_type": mime_type, "sha256": sha256, "upload_id": upload_id, "offset": offset, "chunk_base64": chunk_base64})
+    result = tool.execute({
+        "operation": operation,
+        "project_id": project_id,
+        "filename": filename,
+        "total_bytes": total_bytes,
+        "mime_type": mime_type,
+        "sha256": sha256,
+        "upload_id": upload_id,
+        "offset": offset,
+        "chunk_base64": chunk_base64,
+        "mcp_session_id": get_mcp_session_id(),
+    })
     return {"success": result.success, **(result.data or {}), "artifacts": result.artifacts, "error": result.error}
 
 
@@ -723,6 +738,7 @@ def weiyun_upload(
         "video_path": video_path,
         "target_dir": target_dir,
         "overwrite": overwrite,
+        "mcp_session_id": get_mcp_session_id(),
     })
     return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
 
@@ -816,7 +832,12 @@ class BearerTokenAuthMiddleware:
             return await self._reject(scope, _receive, send)
 
         _log.info("Auth OK: %s:%s", client_host, client_port)
-        return await self.app(scope, _receive, send)
+        session_id = headers.get(b"mcp-session-id", b"").decode("ascii", errors="ignore").strip() or None
+        session_token = set_mcp_session_id(session_id)
+        try:
+            return await self.app(scope, _receive, send)
+        finally:
+            reset_mcp_session_id(session_token)
 
     @staticmethod
     async def _reject(scope, receive, send):
