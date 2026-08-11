@@ -227,3 +227,39 @@ def weiyun_gen_share_link(
   - 成功标志：返回 `data.short_url`（微云分享短链）。
   - 退化标志：返回 `WEIYUN_MCP_TOKEN` 缺失类凭据错误 → 那是独立的令牌配置问题，说明数组绑定已修通。
 - ⚠️ 仍未解决：`upload_asset` 等的 session 非粘性（负载均衡）问题，属部署层，需单独处理才能端到端出片。
+
+---
+
+## 10. 部署决策：单副本（会话一致性）
+
+### 10.1 纠正：真实拓扑已是单实例
+核对 `remote-remotion-enable-runbook.md` 与 `MCP_SERVER.md` 后，线上**并非多副本 LB**：
+- 上游 MCP = `python3 mcp_server.py`，由 **systemd 单元 `openmontage-mcp`** 托管，**单进程**（runbook 记录 pid 3886820），监听 `0.0.0.0:8900`，transport `streamable-http`。
+- 前端仅有 **一个 Go 反向代理 `OpenMontage-mcp-proxy`**（单二进制，监听 8080，转发到单个 `UPSTREAM_MCP_URL`），未把流量分到多个后端。
+- 全部服务（video-gateway 3010 / remotion-server 4000 / video-studio 8200 / OpenMontage MCP 8900）同主机、各自单进程（runbook §端口归属）。
+
+=> **"单副本" 已是当前部署事实**，没有需要缩容的副本数。用户拍板的"按单副本处理"等价于：**约束这套部署永远保持单进程，不要以后容器化/扩副本而不挂共享存储**。
+
+### 10.2 运维需确认/执行（保证始终单实例）
+在 `dw.aixifs.com` 主机上：
+```bash
+# 1) 确认 MCP 只跑一个进程、只监听一份 8900
+systemctl status openmontage-mcp --no-pager
+ss -lntp | grep ':8900'          # 应只有 1 行（python3 pid）
+
+# 2) 确认没有并行第二份（手动 nohup / 容器副本 / k8s HPA）
+ps -ef | grep -E 'mcp_server|openmontage-mcp' | grep -v grep
+
+# 3) 若日后改为容器/编排部署，强制 replicas=1（或改用 §10.3 共享卷）
+```
+
+### 10.3 若以后必须水平扩容（部署层二选一）
+- **粘性会话**：nginx 按 `Mcp-Session-Id` 一致性哈希（`hash $http_mcp_session_id consistent;`），同一会话恒落同一副本。
+- **共享存储卷**：把 `projects/.mcp_sessions` 挂成多副本可读写的共享卷（NFS/EFS/CephFS，k8s `accessModes: ReadWriteMany`）。无需改代码。
+- （彻底解、需改源码：把 `lib/workbuddy_session.py` 换成 Redis——这是唯一"改仓库即可根治"的路径。）
+
+### 10.4 重要提醒：单实例 ≠ 已根治 session 报错
+既然本就是单进程，"session required" 若仍复现，**根因不在跨实例共享存储**，而回到单进程内：
+- (a) 客户端是否每次请求都回带了服务端**轮换后的 `Mcp-Session-Id`**（代理透明转发、不改写头；中间件 `mcp_server.py:1040/1073` 每次请求从请求头取 session 注入 `ContextVar`）。
+- (b) `ContextVar` 是否跨线程传播：同步工具函数经 `anyio.to_thread` 执行，正常会随任务复制上下文；若仍丢值，需把 session 改为随请求显式下传，而非依赖 `ContextVar`。
+复测：`python om_mcp_probe.py upload`（传图）→ `create_remotion_video_share`，并查 `OpenMontage-mcp-proxy/proxy.log` 每条 `[mcp] >>` 的 `session_hash` 是否非空且稳定。
