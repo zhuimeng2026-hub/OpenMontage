@@ -12,7 +12,7 @@
 - 微云分享相关工具**现已暴露**（工具总数 19 → 21）：`weiyun_gen_share_link` 与 `create_remotion_video_share`。
 - **远端已提交修复**：commit `154b427`（谢生，2026-08-11 22:34）`feat(mcp): expose weiyun.gen_share_link as MCP tool`，新增 `@mcp.tool()` 包装的 `weiyun_gen_share_link`，把 `file_list`/`dir_list`/`share_name`/`passwd` 作为 kwargs 正确塞进 `inputs` 再调 `tool.execute(inputs)`。本地仓库已 `git merge --ff-only` 同步到该提交。
 - **但线上调用仍失败**（详见第 3 / 8 节）：`weiyun_gen_share_link` 的 `file_list`/`dir_list` 依旧没传进底层函数（6/6 重试一致报 "file_list or dir_list is required"）。
-- **已实施修复（见第 9 节）**：把 `weiyun_gen_share_link` 签名的 `list[str] | None = None`（含 null 联合分支）改为纯数组 `list[str] = []`，去掉触发部署端 FastMCP 把数组参数丢弃成 `None` 的 null 分支；`file_list: [...]` / `dir_list: [...]` 文档化契约不变。代码已改、待提交推送并重启部署后复测。
+- **已实施修复并已推送（见第 9 节）**：把 `weiyun_gen_share_link` 签名的 `list[str] | None = None`（含 null 联合分支）改为纯数组 `list[str] = []`，去掉触发部署端 FastMCP 把数组参数丢弃成 `None` 的 null 分支；`file_list: [...]` / `dir_list: [...]` 文档化契约不变。commit `830720a` 已 fast-forward 推到 `origin/main`（154b427..830720a）。**线上部署进程需重启/重新拉取后复测**。
 - 另：写操作 `upload_asset` / `create_remotion_video_share` 仍存在 **session 注入断裂**（`get_mcp_session_id()` 拿不到值，报 "session required"），属负载均衡/会话非粘性部署层问题，单独阻碍整条链路（详见第 8.3）。
 - 客户端侧调用坑：服务端**每台响应轮换 `Mcp-Session-Id`**；Windows schannel 偶发 **TLS 抖动（curl 35）**。
 
@@ -222,7 +222,8 @@ def weiyun_gen_share_link(
 
 **验证状态**：
 - ✅ 本地 `py_compile mcp_server.py` 通过；`Any` / `Optional` 均已导入（顶部 `from typing import Any, Optional`）。
-- ⏳ 代码已改、**尚未提交推送**；推送并**重启/重新部署全部实例**后，须用 `python om_mcp_probe.py share -d /opt/OpenMontage/renders` 复测：
+- ✅ 已提交并推送：commit `830720a`（`fix(mcp): 修复 weiyun_gen_share_link 数组参数被丢弃...`）fast-forward 推到 `origin/main`（`154b427..830720a main -> main`）。本次仅推送修复提交，未带入 `.workbuddy/` 本地记忆与无关的 `tools/publishers/weiyun_publish.py`。
+- ⏳ **线上部署进程需重启/重新拉取 `origin/main` 后**，再用 `python om_mcp_probe.py share -d /opt/OpenMontage/renders` 复测：
   - 成功标志：返回 `data.short_url`（微云分享短链）。
   - 退化标志：返回 `WEIYUN_MCP_TOKEN` 缺失类凭据错误 → 那是独立的令牌配置问题，说明数组绑定已修通。
 - ⚠️ 仍未解决：`upload_asset` 等的 session 非粘性（负载均衡）问题，属部署层，需单独处理才能端到端出片。
