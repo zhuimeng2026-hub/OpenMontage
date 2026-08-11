@@ -956,8 +956,8 @@ def weiyun_upload(
 
 @mcp.tool()
 def weiyun_gen_share_link(
-    file_list: list[str] | None = None,
-    dir_list: list[str] | None = None,
+    file_list: list[str] = [],
+    dir_list: list[str] = [],
     share_name: str = "",
     passwd: str = "",
 ) -> dict[str, Any]:
