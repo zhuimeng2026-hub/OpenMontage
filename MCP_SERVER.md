@@ -249,6 +249,11 @@ WorkBuddy 会话。上传文件会保存到该会话对应的隔离目录；分�
 `upload_id` 也只能由创建它的会话继续使用。客户端不需要把会话 ID 作为工具参数
 传入，只需按 MCP 协议在后续 HTTP 请求中原样携带服务端返回的 `Mcp-Session-Id`。
 
+图片上传完成后，响应会额外包含 `status=collecting_assets`、`asset_count`、
+`message`、`next_action=continue_upload_or_generate` 和 `batch_id`。图片会按
+当前 Streamable HTTP 会话隔离；没有 `Mcp-Session-Id` 的请求会明确失败，不会
+进入共享的 legacy 批次。批次成功发布后，同一会话的下一张图片会自动开启新批次。
+
 将客户端的图片、视频或音频以 Base64 上传到远程 OpenMontage 项目的
 `projects/<project_id>/assets/` 目录。返回的 `asset_manifest` 可直接传给
 `execute_tool(tool_name="video_compose", ...)`，或传给图生视频工具。
@@ -799,3 +804,16 @@ Authorization: Bearer <MCP_API_TOKEN>   # 若已开启鉴权则必填，否则 4
 | IPv6 不通 | 确认 `ip -6 addr` 有全局地址，防火墙放行 IPv6 的 8900 端口 |
 | edge_tts 网络错误 | 服务器需能访问 `speech.platform.bing.com`，检查代理设置 |
 | edge_tts 声音不存在 | 用 `edge-tts --list-voices` 查看可用声音列表 |
+
+#### `create_remotion_video_share` — 生成并分享照片视频
+
+先通过 `upload_asset` 或 `upload_asset_chunk` 上传一张或多张图片，再调用此工具。
+工具不接收 `image_paths` 或 `session_id`，会从当前 Streamable HTTP 会话读取打开的
+批次，构造最小 `edit_decisions` 与 `asset_manifest`，并明确锁定 Remotion 渲染。
+可选参数：`project_id`、`duration_per_image`（默认 3 秒）、`aspect_ratio`（默认
+`9:16`）和 `title`。渲染成功后使用已跟踪的 `weiyun_upload`，再调用
+`weiyun.gen_share_link`，返回 `share_url`。渲染、上传、分享失败会分别返回
+`stage=session|render|weiyun_upload|weiyun_share`；发布失败仍保留 `video_path`。
+
+业务日志写入 `logs/session_video.log`，采用轮转 JSON 记录；只记录短 session hash，
+不会记录完整会话 ID、Base64 媒体、token 或 cookie。

@@ -1,10 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"io"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -29,6 +31,23 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func sessionHash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", digest[:])[:16]
+}
+
+func newRequestID() string {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(value)
 }
 
 func loadConfig() proxyConfig {
@@ -82,13 +101,15 @@ func buildProxy(cfg proxyConfig) *httputil.ReverseProxy {
 		Director: func(r *http.Request) {
 			start := time.Now()
 			*r = *r.WithContext(context.WithValue(r.Context(), "mcp_start", start))
+			requestID := newRequestID()
 			r.URL.Scheme, r.URL.Host = cfg.upstreamURL.Scheme, cfg.upstreamURL.Host
 			r.URL.Path, r.URL.RawPath = cfg.upstreamURL.Path, cfg.upstreamURL.RawPath
 			r.Host = cfg.upstreamURL.Host // 保留客户端 RawQuery，仅改写 Host 头
 			r.Header.Set("Authorization", "Bearer "+cfg.upstreamToken)
 			r.Header.Set("Accept", acceptHeader(r.Header.Get("Accept")))
 			r.Header.Set("Cache-Control", "no-cache")
-			log.Printf("[mcp] >> %s %s -> %s (client=%s session=%s)", r.Method, r.URL.Path, cfg.upstreamURL.String(), r.RemoteAddr, r.Header.Get("Mcp-Session-Id"))
+			r.Header.Set("X-Request-Id", requestID)
+			log.Printf("[mcp] >> %s %s -> %s (client=%s session_hash=%s request_id=%s)", r.Method, r.URL.Path, cfg.upstreamURL.String(), r.RemoteAddr, sessionHash(r.Header.Get("Mcp-Session-Id")), requestID)
 		},
 		ModifyResponse: func(r *http.Response) error {
 			startVal := r.Request.Context().Value("mcp_start")
@@ -98,18 +119,18 @@ func buildProxy(cfg proxyConfig) *httputil.ReverseProxy {
 			}
 			method := r.Request.Method
 			path := r.Request.URL.Path
+			requestID := r.Request.Header.Get("X-Request-Id")
+			r.Header.Set("X-Request-Id", requestID)
 			if r.StatusCode >= 500 {
-				// 抓取上游错误体前 512 字节，便于定位是公网代理还是上游 8900 报错
-				body, _ := io.ReadAll(io.LimitReader(r.Body, 512))
-				r.Body = io.NopCloser(bytes.NewReader(body))
-				log.Printf("[mcp] << %s %s upstream=%d (%s) BODY=%q", method, path, r.StatusCode, elapsed, string(body))
+				// 不记录上游响应体，避免令牌、Cookie 或供应商错误详情进入日志。
+				log.Printf("[mcp] << %s %s upstream=%d (%s) request_id=%s len=%d", method, path, r.StatusCode, elapsed, requestID, r.ContentLength)
 			} else {
-				log.Printf("[mcp] << %s %s upstream=%d (%s) len=%d", method, path, r.StatusCode, elapsed, r.ContentLength)
+				log.Printf("[mcp] << %s %s upstream=%d (%s) request_id=%s len=%d", method, path, r.StatusCode, elapsed, requestID, r.ContentLength)
 			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("[mcp] XX %s %s transport error after %v: %v", r.Method, r.URL.Path, time.Since(time.Now()), err)
+			log.Printf("[mcp] XX %s %s request_id=%s transport error: %v", r.Method, r.URL.Path, r.Header.Get("X-Request-Id"), err)
 			http.Error(w, "MCP upstream unavailable", http.StatusBadGateway)
 		},
 	}

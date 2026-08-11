@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.base_tool import BaseTool, ResourceProfile, ToolResult, ToolRuntime, ToolStability, ToolTier
+from lib.workbuddy_session import register_image, require_session, session_hash
 
 
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
@@ -38,8 +39,7 @@ def _max_upload_bytes() -> int:
 
 def _session_key(session_id: Any) -> str:
     """Return a filesystem-safe namespace for one MCP session."""
-    value = str(session_id or "legacy").strip()
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+    return require_session(session_id)
 
 
 class UploadAsset(BaseTool):
@@ -137,7 +137,8 @@ class UploadAsset(BaseTool):
 
             project_dir = self._project_dir(project_id)
             session_id = inputs.get("mcp_session_id")
-            assets_dir = project_dir / "assets" / "_sessions" / _session_key(session_id)
+            session_digest = require_session(session_id)
+            assets_dir = project_dir / "assets" / "_sessions" / session_digest
             assets_dir.mkdir(parents=True, exist_ok=True)
             target = (assets_dir / filename).resolve()
             try:
@@ -176,14 +177,18 @@ class UploadAsset(BaseTool):
                 "bytes": len(content),
                 "sha256": digest,
                 "source": "mcp_upload",
-                "mcp_session_id": session_id,
+                "session_hash": session_hash(session_id),
             }
+            batch = None
+            if asset["type"] == "image":
+                batch = register_image(session_id, project_id, asset)
             return ToolResult(
                 success=True,
                 data={
                     "asset": asset,
                     "asset_manifest": {"assets": [asset]},
                     "deduplicated": deduplicated,
+                    **({"batch": batch} if batch else {}),
                 },
                 artifacts=[str(target)],
                 duration_seconds=__import__("time").monotonic() - started,

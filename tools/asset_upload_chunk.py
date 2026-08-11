@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import tempfile
@@ -17,7 +18,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from tools.asset_upload import UploadAsset, _ALLOWED_EXTENSIONS, _SAFE_FILENAME, _max_upload_bytes, _session_key
+from tools.asset_upload import _ALLOWED_EXTENSIONS, _SAFE_FILENAME, _max_upload_bytes
+from lib.workbuddy_session import register_image, require_session
 from tools.base_tool import BaseTool, ResourceProfile, ToolResult, ToolRuntime, ToolStability, ToolTier
 
 
@@ -85,7 +87,8 @@ class UploadAssetChunk(BaseTool):
                 state_path, part_path = self._state_paths(upload_id)
                 state_path.parent.mkdir(parents=True, exist_ok=True)
                 session_id = inputs.get("mcp_session_id")
-                state_path.write_text(json.dumps({"project_id": project_id, "filename": filename, "total_bytes": total, "mime_type": inputs.get("mime_type"), "sha256": inputs.get("sha256"), "session_id": session_id, "created": time.time()}), encoding="utf-8")
+                session_digest = require_session(session_id)
+                state_path.write_text(json.dumps({"project_id": project_id, "filename": filename, "total_bytes": total, "mime_type": inputs.get("mime_type"), "sha256": inputs.get("sha256"), "session_hash": session_digest, "created": time.time()}), encoding="utf-8")
                 part_path.write_bytes(b"")
                 return ToolResult(True, {"upload_id": upload_id, "next_offset": 0, "chunk_limit_bytes": min(1024 * 1024, _max_upload_bytes())}, duration_seconds=time.monotonic()-started)
 
@@ -95,7 +98,8 @@ class UploadAssetChunk(BaseTool):
                 raise ValueError("upload_id not found or expired")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             current_session = inputs.get("mcp_session_id")
-            if state.get("session_id") != current_session:
+            current_session_hash = require_session(current_session)
+            if state.get("session_hash") != current_session_hash:
                 raise ValueError("upload_id belongs to a different MCP session")
             if operation == "append":
                 chunk = self._decode_chunk(inputs.get("chunk_base64"))
@@ -117,15 +121,19 @@ class UploadAssetChunk(BaseTool):
             digest = hashlib.sha256(part_path.read_bytes()).hexdigest()
             if state.get("sha256") and state["sha256"].lower() != digest:
                 raise ValueError("sha256 does not match uploaded content")
-            assets_dir = (root / state["project_id"] / "assets" / "_sessions" / _session_key(state.get("session_id"))).resolve()
+            assets_dir = (root / state["project_id"] / "assets" / "_sessions" / state["session_hash"]).resolve()
             assets_dir.mkdir(parents=True, exist_ok=True)
             target = (assets_dir / state["filename"]).resolve()
             target.relative_to(assets_dir)
             if target.exists():
                 raise ValueError("asset already exists; use a different filename")
             os.replace(part_path, target)
-            asset = {"id": f"{state['project_id']}-{digest[:12]}", "filename": state["filename"], "path": str(target), "relative_path": target.relative_to(root.parent).as_posix(), "type": "image" if str(state.get("mime_type", "")).startswith("image/") else "video" if str(state.get("mime_type", "")).startswith("video/") else "media", "mime_type": state.get("mime_type") or "application/octet-stream", "bytes": content_size, "sha256": digest, "source": "mcp_chunked_upload", "mcp_session_id": state.get("session_id")}
+            mime_type = state.get("mime_type") or mimetypes.guess_type(state["filename"])[0] or "application/octet-stream"
+            asset = {"id": f"{state['project_id']}-{digest[:12]}", "filename": state["filename"], "path": str(target), "relative_path": target.relative_to(root.parent).as_posix(), "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media", "mime_type": mime_type, "bytes": content_size, "sha256": digest, "source": "mcp_chunked_upload", "session_hash": state["session_hash"]}
+            batch = None
+            if asset["type"] == "image":
+                batch = register_image(current_session, state["project_id"], asset)
             state_path.unlink(missing_ok=True)
-            return ToolResult(True, {"asset": asset, "asset_manifest": {"assets": [asset]}, "upload_id": upload_id}, [str(target)], duration_seconds=time.monotonic()-started)
+            return ToolResult(True, {"asset": asset, "asset_manifest": {"assets": [asset]}, "upload_id": upload_id, **({"batch": batch} if batch else {})}, [str(target)], duration_seconds=time.monotonic()-started)
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
             return ToolResult(False, error=str(exc), duration_seconds=time.monotonic()-started)
