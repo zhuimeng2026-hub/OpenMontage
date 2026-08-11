@@ -954,6 +954,34 @@ def weiyun_upload(
     return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
 
 
+@mcp.tool()
+def weiyun_gen_share_link(
+    file_list: list[str] | None = None,
+    dir_list: list[str] | None = None,
+    share_name: str = "",
+    passwd: str = "",
+) -> dict[str, Any]:
+    """Generate a shareable link for files in Tencent Weiyun (腾讯微云).
+
+    Accepts a list of file paths or directories and returns a short URL
+    that can be shared. Configure WEIYUN_MCP_TOKEN in .env before calling.
+    """
+    tool = registry.get("weiyun.gen_share_link")
+    if tool is None:
+        return {"success": False, "error": "weiyun.gen_share_link tool is not registered"}
+    inputs: dict[str, Any] = {"mcp_session_id": get_mcp_session_id()}
+    if file_list:
+        inputs["file_list"] = file_list
+    if dir_list:
+        inputs["dir_list"] = dir_list
+    if share_name:
+        inputs["share_name"] = share_name
+    if passwd:
+        inputs["passwd"] = passwd
+    result = tool.execute(inputs)
+    return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
+
+
 # ---------------------------------------------------------------------------
 # Bearer token auth
 # ---------------------------------------------------------------------------
