@@ -805,15 +805,59 @@ Authorization: Bearer <MCP_API_TOKEN>   # 若已开启鉴权则必填，否则 4
 | edge_tts 网络错误 | 服务器需能访问 `speech.platform.bing.com`，检查代理设置 |
 | edge_tts 声音不存在 | 用 `edge-tts --list-voices` 查看可用声音列表 |
 
-#### `create_remotion_video_share` — 生成并分享照片视频
+#### `create_remotion_video_share` — 生成并分享照片视频（异步 / 非阻塞）
 
 先通过 `upload_asset` 或 `upload_asset_chunk` 上传一张或多张图片，再调用此工具。
 工具不接收 `image_paths` 或 `session_id`，会从当前 Streamable HTTP 会话读取打开的
 批次，构造最小 `edit_decisions` 与 `asset_manifest`，并明确锁定 Remotion 渲染。
 可选参数：`project_id`、`duration_per_image`（默认 3 秒）、`aspect_ratio`（默认
-`9:16`）和 `title`。渲染成功后使用已跟踪的 `weiyun_upload`，再调用
-`weiyun.gen_share_link`，返回 `share_url`。渲染、上传、分享失败会分别返回
-`stage=session|render|weiyun_upload|weiyun_share`；发布失败仍保留 `video_path`。
+`9:16`）和 `title`。
+
+**此工具是非阻塞的。** 它仅做输入校验、领取渲染任务（`render_job_id`），并把
+`render → weiyun_upload → weiyun_share_link` 整条流水线派发到后台线程，**立即返回**
+`status=queued` 与 `render_job_id`，不会等到视频发布完成。客户端随后用
+`get_render_status(render_job_id)` 轮询，直到 `status` 变为终态（`published` 或
+`failed`）：成功时取 `share_url`，失败时取 `error` 与 `stage`（失败阶段）。
+
+后台流水线使用已跟踪的 `weiyun_upload` 上传 MP4（返回 `file_id`），再调用
+token 化的 `weiyun_share_link` 生成面向客户的 `share_url`。渲染、上传、分享失败会在
+`get_render_status` 中体现为 `stage=validation|render|weiyun_upload|weiyun_share|
+background_crash`；`weiyun_upload` / `weiyun_share` 阶段失败时仍保留 `video_path`，
+客户端可取回半成品视频。
 
 业务日志写入 `logs/session_video.log`，采用轮转 JSON 记录；只记录短 session hash，
 不会记录完整会话 ID、Base64 媒体、token 或 cookie。
+
+#### `get_render_status` — 轮询渲染进度（配合上面的异步工具）
+
+按 `render_job_id` 轮询 `create_remotion_video_share` 派发的渲染任务进度与结果。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| render_job_id | string | 是 | 由 `create_remotion_video_share` 返回的渲染任务 ID |
+
+**返回：**
+
+```json
+{
+  "success": true,
+  "render_job_id": "<hex>",
+  "status": "rendering",
+  "stage": "render",
+  "error": "...",
+  "batch_id": "...",
+  "project_id": "...",
+  "video_path": "projects/.../renders/...mp4",
+  "share_url": "https://share.weiyun.com/...",
+  "updated_at": "2026-..."
+}
+```
+
+`status` 取值：`queued`、`rendering`、`rendered`、`uploading`、`published`（成功终态）、
+`failed`（失败终态）。成功时 `share_url` 为微云分享链接；失败（或对应阶段）时 `stage`
+给出失败阶段、`error` 给出人类可读原因，`video_path` 在上传/分享阶段失败时仍保留。
+
+若传入的 `render_job_id` 找不到对应任务，返回
+`{"success": false, "error": "No render job found for render_job_id '...'"}`。

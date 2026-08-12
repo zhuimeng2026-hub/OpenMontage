@@ -80,7 +80,13 @@ from lib.mcp_session import (
     set_mcp_request_id,
     set_mcp_session_id,
 )
-from lib.workbuddy_session import begin_render, session_hash, update as update_session
+from lib.workbuddy_session import (
+    begin_render,
+    session_hash,
+    update as update_session,
+    find_session_by_job_id,
+    recover_orphans_and_rebuild_index,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +623,7 @@ async def create_remotion_video_share(
         output = root / "renders" / f"{batch_id}-{job_id}.mp4"
         profile = {"9:16": "tiktok", "16:9": "generic_hd", "1:1": "instagram_feed"}[aspect_ratio]
     except Exception as exc:
-        update_session(sid, status="failed", failure_stage="validation", video_path=None)
+        update_session(sid, status="failed", failure_stage="validation", video_path=None, error=str(exc))
         _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=session_hash(sid), project_id=project, batch_id=batch_id, asset_count=len(assets), render_job_id=job_id, status="failed", stage="validation", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
         return {"success": False, "status": "failed", "stage": "validation", "batch_id": batch_id, "render_job_id": job_id, "message": f"参数校验失败：{exc}", "error": str(exc)}
 
@@ -670,26 +676,26 @@ def _run_render_job(
             update_session(sid, status="rendered", video_path=video_path)
             _event("render_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="rendered", duration_ms=round((time.monotonic() - started) * 1000))
         except Exception as exc:
-            update_session(sid, status="failed", video_path=locals().get("video_path"), failure_stage="render")
+            update_session(sid, status="failed", video_path=locals().get("video_path"), failure_stage="render", error=str(exc))
             _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="failed", stage="render", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
             return
 
         upload_tool = registry.get("weiyun_upload")
         if upload_tool is None:
             error = "weiyun_upload tool is not registered"
-            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
+            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path, error=error)
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         _event("weiyun_publish_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="uploading")
         try:
             uploaded = await _run_tool_sync(upload_tool, {"video_path": video_path, "target_dir": "", "overwrite": False})
         except Exception as exc:
-            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
+            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path, error=str(exc))
             _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
             return
         if not uploaded.success:
             error = uploaded.error or "Weiyun upload failed"
-            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
+            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path, error=error)
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
 
@@ -701,49 +707,39 @@ def _run_render_job(
         share_tool = registry.get("weiyun_share_link")
         if share_tool is None or not file_id:
             error = "weiyun_share_link tool is unavailable or upload returned no file_id"
-            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
+            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path, error=error)
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         try:
             shared = await _run_tool_sync(share_tool, {"file_list": [file_id], "share_name": title or f"{project}-{batch_id}"})
         except Exception as exc:
-            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
+            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path, error=str(exc))
             _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
             return
         if not shared.success:
             error = shared.error or "Weiyun share link failed"
-            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
+            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path, error=error)
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         share_url = (shared.data or {}).get("short_url") or (shared.data or {}).get("share_url")
         if not share_url:
             error = "Weiyun share tool returned no share URL"
-            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
+            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path, error=error)
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
-        update_session(sid, status="published", share_url=share_url, video_path=video_path)
+        update_session(sid, status="published", share_url=share_url, video_path=video_path, error=None)
         _event("weiyun_publish_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, asset_count=asset_count, status="published", duration_ms=round((time.monotonic() - started) * 1000))
 
     try:
         asyncio.run(_worker())
-    except Exception:
-        update_session(sid, status="failed", failure_stage="background_crash")
+    except Exception as exc:
+        update_session(sid, status="failed", failure_stage="background_crash", error=f"background render job crashed: {exc}")
         _log.exception("background render job crashed for job %s", job_id)
 
 
 def _find_session_by_job(render_job_id: str) -> dict[str, Any] | None:
-    """Locate the MCP session state file whose ``render_job_id`` matches."""
-    sessions_dir = _PROJECT_ROOT / "projects" / ".mcp_sessions"
-    if not sessions_dir.is_dir():
-        return None
-    for path in sessions_dir.glob("*.json"):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if data.get("render_job_id") == render_job_id:
-            return data
-    return None
+    """Back-compat alias for ``find_session_by_job_id`` (O(1) index lookup)."""
+    return find_session_by_job_id(render_job_id)
 
 
 @mcp.tool()
@@ -756,7 +752,7 @@ def get_render_status(render_job_id: str) -> dict[str, Any]:
     the Weiyun share link; when ``failed`` the ``stage`` field names the
     failing pipeline stage.
     """
-    state = _find_session_by_job(render_job_id)
+    state = find_session_by_job_id(render_job_id)
     if not state:
         return {"success": False, "error": f"No render job found for render_job_id '{render_job_id}'"}
     return {
@@ -764,6 +760,7 @@ def get_render_status(render_job_id: str) -> dict[str, Any]:
         "render_job_id": render_job_id,
         "status": state.get("status"),
         "stage": state.get("failure_stage"),
+        "error": state.get("error"),
         "batch_id": state.get("batch_id"),
         "project_id": state.get("project_id"),
         "video_path": state.get("video_path"),
@@ -1278,6 +1275,17 @@ if __name__ == "__main__":
         _log.warning("MCP_API_TOKEN is not set — server is running WITHOUT authentication.")
         _log.warning("Do NOT expose port 8900 to the public internet until you set a token.")
         _log.warning("Generate one with:  python mcp_server.py gen-token")
+
+    # Recover orphaned renders left mid-flight by a previous crash/restart and
+    # rebuild the job→session index from disk (also self-heals a corrupted or
+    # missing index). Must run before the server starts accepting traffic so
+    # get_render_status stays correct and O(1).
+    try:
+        stats = recover_orphans_and_rebuild_index()
+        _log.info("Orphan recovery: %d session(s) marked failed, %d job(s) indexed",
+                  stats["orphaned"], stats["indexed"])
+    except Exception as exc:  # pragma: no cover - defensive
+        _log.warning("Orphan recovery failed (continuing startup): %s", exc)
 
     if transport == "streamable-http":
         import uvicorn

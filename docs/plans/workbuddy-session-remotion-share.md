@@ -30,10 +30,14 @@ separates concurrent customer sessions; it is not a durable user identity.
 3. When the customer asks to generate, WorkBuddy calls
    `create_remotion_video_share` based on its MCP tool description.
 4. The tool loads the open batch for the current `Mcp-Session-Id`, validates
-   every image path, renders a Remotion MP4, uploads it to Weiyun, creates a
-   share link, and returns the link with a customer-facing message.
-5. A successful batch becomes `published`. The next image upload in the same
-   MCP session starts a new batch.
+   every image path, claims a render job (`render_job_id`), and dispatches the
+   render→upload→share pipeline to a **background thread**. It returns
+   **immediately** with `status=queued` and the `render_job_id` — it does NOT
+   block until the video is published. The client then polls
+   `get_render_status(render_job_id)` to track progress and fetch the final
+   `share_url` once `status=published`.
+5. A successful batch reaches `status=published`. The next image upload in the
+   same MCP session starts a new batch.
 
 ## MCP contracts
 
@@ -66,23 +70,71 @@ Defaults:
 - motion cycle: `zoom-in`, `pan-left`, `ken-burns`, `pan-right`
 - renderer: explicitly locked to `remotion`; no silent FFmpeg fallback
 
-Success response:
+This tool is **non-blocking**. It returns immediately after kicking off the
+background pipeline; the `share_url` is NOT present in this response.
+
+Immediate (queued) response:
 
 ```json
 {
   "success": true,
-  "status": "published",
+  "status": "queued",
+  "render_job_id": "<hex>",
+  "batch_id": "...",
+  "project_id": "...",
   "asset_count": 3,
-  "message": "视频已生成，点击下面的微云链接查看。",
-  "share_url": "https://share.weiyun.com/...",
-  "video_path": "projects/.../renders/...mp4",
   "duration_seconds": 9,
-  "batch_id": "..."
+  "message": "视频渲染已在后台启动，请使用 get_render_status(render_job_id) 轮询进度与最终结果。"
 }
 ```
 
-Failures identify the failing stage (`session`, `render`, `weiyun_upload`, or
-`weiyun_share`) and retain `video_path` after a publish failure.
+To get the actual result, poll `get_render_status(render_job_id)` until
+`status` reaches a terminal value (`published` or `failed`). On `published` the
+response carries `share_url`; on `failed` it carries `error` and a `stage`
+(failure stage) value.
+
+`status` state machine: `queued` → `rendering` → (`rendered` → `uploading` →)
+`published` (success) or `failed`. The `rendered` and `uploading` states are
+transient intermediate progress markers.
+
+Failures set `failure_stage` to one of `validation`, `render`,
+`weiyun_upload`, `weiyun_share`, or `background_crash`, plus a human-readable
+`error` string. When the failure happens at `weiyun_upload` or `weiyun_share`
+the `video_path` is still retained, so the client can recover the partial
+video. `validation` failures are written to session state and are reported by
+`get_render_status` with `stage=validation`.
+
+## Async client call sequence
+
+The contract is request→poll, not request→result. A correct client flow:
+
+1. **Upload images** via `upload_asset` / `upload_asset_chunk` until the batch
+   is ready; each upload echoes `status=collecting_assets` and `batch_id`.
+2. **Call `create_remotion_video_share`** (no paths/session args). It returns
+   immediately:
+   ```json
+   {"success": true, "status": "queued", "render_job_id": "<hex>", "batch_id": "...", "message": "..."}
+   ```
+   Capture `render_job_id`. Do not expect `share_url` here.
+3. **Poll `get_render_status(render_job_id)`** on an interval (e.g. every few
+   seconds) until `status` is terminal:
+   - `queued` → `rendering` → `rendered` → `uploading` → `published`: read
+     `share_url` and hand it to the customer.
+   - any state → `failed`: read `stage` (`failure_stage`) and `error`. If
+     `video_path` is present, the partial video can still be retrieved.
+4. **Retry / new batch**: `begin_render` clears the previous `error` and
+   `failure_stage`, so re-calling `create_remotion_video_share` on the same
+   session reports a clean state and does not carry stale failure markers.
+
+```text
+upload_asset ×N  →  create_remotion_video_share
+                     ← {status:"queued", render_job_id:"..."}
+loop:
+  get_render_status(render_job_id)
+  ← {status:"rendering"|"rendered"|"uploading", ...}   # keep polling
+  ← {status:"published", share_url:"..."}              # done (success)
+  ← {status:"failed", stage:"...", error:"..."}        # done (failure)
+```
 
 ## Session state
 
@@ -115,10 +167,16 @@ Build one Remotion cut per image and an asset manifest that resolves each cut
 to its session-owned local path. Write output under
 `projects/<project_id>/renders/` with batch and job identifiers.
 
+> The whole render→upload→share pipeline runs in a **background daemon
+> thread** started by `create_remotion_video_share`. The MCP call returns
+> before any of this executes; progress is observable only via
+> `get_render_status(render_job_id)`.
+
 Publishing uses tracked code only:
 
 1. `weiyun_upload` uploads the MP4 and returns `file_id`.
-2. `weiyun.gen_share_link` creates the customer-facing `short_url`.
+2. `weiyun_share_link` (the token-based Weiyun share tool) creates the
+   customer-facing `short_url` / `share_url`.
 
 The implementation must not depend on untracked local files.
 
