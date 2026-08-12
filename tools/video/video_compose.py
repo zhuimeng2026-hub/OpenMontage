@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -60,6 +61,40 @@ def _get_remotion_concurrency():
 
     cores = os.cpu_count() or 4
     return str(min(cores, 8))
+
+
+_REMOTION_RENDER_SLOTS = None  # 惰性创建的进程级 BoundedSemaphore
+
+
+def _get_remotion_max_parallel() -> int:
+    """并发 Remotion render 进程上限。
+
+    每个 `npx remotion render` 都会在 --concurrency 线程池之上再起一个独立
+    bundler + headless Chrome（约 0.5~1GB+ 内存）。N 个用户同时渲染 → N 个
+    Chrome，无界扇出会 OOM 宿主。默认 2，可用 REMOTION_MAX_PARALLEL 覆盖。
+    """
+    env_val = os.environ.get("REMOTION_MAX_PARALLEL")
+    if env_val:
+        try:
+            val = int(env_val)
+            if val >= 1:
+                return val
+        except ValueError:
+            pass
+    return 2
+
+
+def _get_remotion_render_semaphore() -> threading.BoundedSemaphore:
+    """返回进程级 Remotion 渲染闸门。
+
+    video_compose.execute() 是同步方法，经 asyncio.to_thread 在 worker 线程
+    执行，因此必须用 threading 信号量而非 asyncio.Semaphore。Bounded 额外能
+    抓「释放次数 > 获取次数」的实现 bug。
+    """
+    global _REMOTION_RENDER_SLOTS
+    if _REMOTION_RENDER_SLOTS is None:
+        _REMOTION_RENDER_SLOTS = threading.BoundedSemaphore(_get_remotion_max_parallel())
+    return _REMOTION_RENDER_SLOTS
 
 
 class VideoCompose(BaseTool):
@@ -1433,7 +1468,14 @@ class VideoCompose(BaseTool):
                 success=False,
                 error=f"Remotion composer project not found at {composer_dir}",
             )
-        staged_dir = composer_dir / "public" / "_staged"
+        import uuid
+
+        # 每次 render 一个独立 staging 子目录，杜绝跨用户素材互相可见/碰撞。
+        # 调用方可传 staging_id（如 MCP 的 job_id）便于日志关联；缺省自给自足。
+        # 注意：staging_id 会被拼进 public 相对路径，调用方传值时必须不含路径
+        # 分隔符（/、..），避免目录穿越。
+        staging_id = inputs.get("staging_id") or uuid.uuid4().hex[:12]
+        staged_dir = composer_dir / "public" / "_staged" / staging_id
 
         for idx, cut in enumerate(props.get("cuts", [])):
             # cuts[].source (Ken Burns / still) + background image/video layers
@@ -1469,8 +1511,9 @@ class VideoCompose(BaseTool):
             if theme_config:
                 props["themeConfig"] = theme_config
 
-        # Write props to temp file for Remotion CLI
-        props_path = output_path.parent / ".remotion_props.json"
+        # Write props to temp file for Remotion CLI. 文件名带 staging_id，避免
+        # 同一 project 内并发/retry 的 render 抢同一个 .remotion_props.json。
+        props_path = output_path.parent / f".remotion_props.{staging_id}.json"
         with open(props_path, "w", encoding="utf-8") as f:
             json.dump(props, f)
 
@@ -1526,46 +1569,67 @@ class VideoCompose(BaseTool):
             except (TypeError, ValueError):
                 pass
 
-        try:
-            # Invoke from inside the composer dir so npx can resolve the
-            # local remotion binary via node_modules/.bin. Without this,
-            # Windows npx cannot locate the CLI and returns "could not
-            # determine executable to run".
-            on_output = None
-            if progress_callback:
-                on_output = lambda line: self._emit_remotion_progress(line, progress_callback)
-            self.run_command(cmd, timeout=subprocess_timeout, cwd=composer_dir, on_output=on_output)
-        except subprocess.CalledProcessError as e:
-            # run_command uses check=True + capture_output, so the useful
-            # Remotion diagnostics live in stderr/stdout — surface the tail
-            # instead of the bare "returned non-zero exit status 1".
-            detail = (e.stderr or e.stdout or "").strip()
-            tail = "\n".join(detail.splitlines()[-25:]) if detail else "(no output captured)"
-            return ToolResult(
-                success=False,
-                error=f"Remotion render failed (exit {e.returncode}):\n{tail}",
-            )
-        except subprocess.TimeoutExpired as e:
-            return ToolResult(
-                success=False,
-                error=(
-                    f"Remotion render timed out after {e.timeout}s. If the headless "
-                    "browser is slow to start, raise remotion_timeout_ms (ms)."
-                ),
-            )
-        except Exception as e:
-            return ToolResult(success=False, error=f"Remotion render failed: {e}")
-        finally:
-            # Best-effort cleanup of the temp props file. A failed deletion
-            # (e.g. host file-protection hooks intercepting unlink) must NEVER
-            # abort an otherwise successful render, so swallow any error here.
+        # 闸门：限制并发 Remotion 进程数，防止多用户无界扇出打爆宿主。
+        # 排队/拿到槽位的状态经 progress_callback 上行，SSE 借此显示「排队→渲染」。
+        sem = _get_remotion_render_semaphore()
+        if progress_callback:
             try:
-                if props_path.exists():
-                    props_path.unlink()
-            except OSError as e:
-                logging.getLogger("video_compose").warning(
-                    "Could not remove temp props file %s: %s", props_path, e
+                progress_callback({"phase": "render", "status": "queued",
+                                   "message": "等待可用的 Remotion 渲染槽位"})
+            except Exception:  # noqa: BLE001
+                pass
+        with sem:
+            if progress_callback:
+                try:
+                    progress_callback({"phase": "render", "status": "rendering",
+                                       "message": "已获取 Remotion 渲染槽位"})
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                # Invoke from inside the composer dir so npx can resolve the
+                # local remotion binary via node_modules/.bin. Without this,
+                # Windows npx cannot locate the CLI and returns "could not
+                # determine executable to run".
+                on_output = None
+                if progress_callback:
+                    on_output = lambda line: self._emit_remotion_progress(line, progress_callback)
+                self.run_command(cmd, timeout=subprocess_timeout, cwd=composer_dir, on_output=on_output)
+            except subprocess.CalledProcessError as e:
+                # run_command uses check=True + capture_output, so the useful
+                # Remotion diagnostics live in stderr/stdout — surface the tail
+                # instead of the bare "returned non-zero exit status 1".
+                detail = (e.stderr or e.stdout or "").strip()
+                tail = "\n".join(detail.splitlines()[-25:]) if detail else "(no output captured)"
+                return ToolResult(
+                    success=False,
+                    error=f"Remotion render failed (exit {e.returncode}):\n{tail}",
                 )
+            except subprocess.TimeoutExpired as e:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"Remotion render timed out after {e.timeout}s. If the headless "
+                        "browser is slow to start, raise remotion_timeout_ms (ms)."
+                    ),
+                )
+            except Exception as e:
+                return ToolResult(success=False, error=f"Remotion render failed: {e}")
+            finally:
+                # Best-effort cleanup of the temp props file. A failed deletion
+                # (e.g. host file-protection hooks intercepting unlink) must NEVER
+                # abort an otherwise successful render, so swallow any error here.
+                try:
+                    if props_path.exists():
+                        props_path.unlink()
+                except OSError as e:
+                    logging.getLogger("video_compose").warning(
+                        "Could not remove temp props file %s: %s", props_path, e
+                    )
+                # 清理 per-job staging 目录——渲染完成后素材即无用，留着会跨用户累积。
+                try:
+                    shutil.rmtree(staged_dir, ignore_errors=True)
+                except OSError:
+                    pass
 
         if not output_path.exists():
             return ToolResult(
@@ -1623,14 +1687,14 @@ class VideoCompose(BaseTool):
             pass
 
     def _stage_remotion_asset(self, source: str, idx: int, staged_dir: Path) -> str:
-        """Stage one local media file into remotion-composer/public/_staged/
-        and return the public-relative path (loadable via staticFile()).
+        """把一个本地素材拷进 per-job staging 目录，返回 public 相对路径。
 
-        http/https/data: URIs pass through unchanged; missing files pass
-        through unchanged (Remotion will surface the load error). The index
-        only disambiguates colliding basenames — the content-hash is the real
-        namespace, so reuse of one file across narration/music/backgrounds is
-        safe.
+        http/https/data: 直通；文件缺失直通。目标名内嵌**内容** hash（流式
+        md5，单遍边拷边算，大视频不读两遍），所以不同文件即使同名也不撞；
+        staged_dir 本身按 job 隔离，跨用户/跨 render 互不可见。
+
+        返回值形如 ``_staged/<job_id>/<name>``（staged_dir 的父目录名 + 目录名
+        + 文件名），Remotion 端经 staticFile() 直接加载。
         """
         if not source or source.startswith(("http://", "https://", "data:")):
             return source
@@ -1638,14 +1702,32 @@ class VideoCompose(BaseTool):
         if not resolved.exists():
             return source
         import hashlib
-        import shutil
+        import os as _os
+        import tempfile
 
         staged_dir.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.md5(resolved.as_posix().encode()).hexdigest()[:8]
-        target = staged_dir / f"{idx}_{digest}_{resolved.name}"
-        if not target.exists():
-            shutil.copy2(resolved, target)
-        return f"_staged/{target.name}"
+        digest = hashlib.md5()
+        # 用 mkstemp 拿唯一临时名，避免多字段共用 idx（如 narration/music 都是
+        # idx=-1）时临时文件撞名；os.replace 保证同目录内原子落名。
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{idx}.", suffix=".tmp", dir=staged_dir)
+        try:
+            with resolved.open("rb") as src, _os.fdopen(fd, "wb") as dst:
+                for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    dst.write(chunk)
+        except OSError:
+            try:
+                _os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+        target = staged_dir / f"{idx}_{digest.hexdigest()[:12]}_{resolved.name}"
+        if target.exists():
+            _os.unlink(tmp_name)  # 同 job 内重复引用 → 去重
+        else:
+            _os.replace(tmp_name, target)
+        # 返回 public 相对路径：<父目录名>/<job_id>/<name>，staticFile() 可加载。
+        return (Path(staged_dir.parent.name) / staged_dir.name / target.name).as_posix()
 
     # ------------------------------------------------------------------
     # Final self-review — mandatory post-render inspection

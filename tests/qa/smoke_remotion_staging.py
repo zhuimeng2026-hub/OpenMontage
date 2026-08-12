@@ -78,14 +78,25 @@ if result.success:
         print("FAIL: expected video + audio streams")
         sys.exit(1)
 
-# Verify staged files landed
+# Verify per-job staging cleanup: render must leave no leftover job dirs.
+# (Staging itself is implicitly proven by the render succeeding — missing
+# staged files would fail Remotion's file:// load. New contract: each job
+# stages into public/_staged/<job_id>/ and rmtree's it afterwards.)
 composer_dir = Path(__file__).resolve().parent.parent.parent / "remotion-composer"
-staged_dir = composer_dir / "public" / "_staged"
-if staged_dir.exists():
-    staged_files = sorted(p.name for p in staged_dir.iterdir() if p.is_file())
-    print(f"staged files ({len(staged_files)}):", staged_files[:10])
+staged_root = composer_dir / "public" / "_staged"
+if staged_root.exists():
+    entries = list(staged_root.iterdir())
+    leftover_dirs = sorted(e.name for e in entries if e.is_dir())
+    legacy_flat = sorted(e.name for e in entries if e.is_file())
+    if legacy_flat:
+        print(f"WARN: {len(legacy_flat)} legacy flat files under _staged/ (pre-existing "
+              f"global-staging leftovers, not created by this run):", legacy_flat[:5])
+    if leftover_dirs:
+        print(f"FAIL: leftover per-job staging dirs ({len(leftover_dirs)}):", leftover_dirs[:10])
+        sys.exit(1)
+    print("cleanup OK — no leftover per-job staging dirs")
 else:
-    print("WARN: no _staged dir — nothing was staged?")
+    print("cleanup OK — no _staged root remains (nothing staged / all cleaned)")
 
-print("\nSMOKE OK — render succeeded, staged assets present")
+print("\nSMOKE OK — render succeeded, staging cleaned up")
 print(f"output: {out_mp4}")
