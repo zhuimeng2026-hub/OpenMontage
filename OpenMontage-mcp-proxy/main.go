@@ -136,6 +136,46 @@ func buildProxy(cfg proxyConfig) *httputil.ReverseProxy {
 	}
 }
 
+// buildProxyPreservePath 与 buildProxy 行为一致，但保留客户端原始请求路径
+// （如 /render-progress/{job_id}），用于转发 SSE 实时进度流等非 /mcp 上游路由。
+// 注意：buildProxy 的 Director 会把路径改写为上游 URL 的 Path（通常 /mcp），
+// 因此 /render-progress/ 不能用 buildProxy，否则会被改写成 /mcp 而 404。
+func buildProxyPreservePath(cfg proxyConfig) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Transport: newTransport(), FlushInterval: -1,
+		Director: func(r *http.Request) {
+			start := time.Now()
+			*r = *r.WithContext(context.WithValue(r.Context(), "mcp_start", start))
+			requestID := newRequestID()
+			r.URL.Scheme, r.URL.Host = cfg.upstreamURL.Scheme, cfg.upstreamURL.Host
+			// 保留原始请求路径，仅改写 scheme/host（区别于 /mcp 的路径重写）
+			r.Host = cfg.upstreamURL.Host
+			r.Header.Set("Authorization", "Bearer "+cfg.upstreamToken)
+			r.Header.Set("Accept", acceptHeader(r.Header.Get("Accept")))
+			r.Header.Set("Cache-Control", "no-cache")
+			r.Header.Set("X-Request-Id", requestID)
+			log.Printf("[render-progress] >> %s %s -> %s (client=%s request_id=%s)", r.Method, r.URL.Path, cfg.upstreamURL.String(), r.RemoteAddr, requestID)
+		},
+		ModifyResponse: func(r *http.Response) error {
+			startVal := r.Request.Context().Value("mcp_start")
+			elapsed := "?"
+			if t, ok := startVal.(time.Time); ok {
+				elapsed = time.Since(t).Round(time.Millisecond).String()
+			}
+			method := r.Request.Method
+			path := r.Request.URL.Path
+			requestID := r.Request.Header.Get("X-Request-Id")
+			r.Header.Set("X-Request-Id", requestID)
+			log.Printf("[render-progress] << %s %s upstream=%d (%s) request_id=%s len=%d", method, path, r.StatusCode, elapsed, requestID, r.ContentLength)
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("[render-progress] XX %s %s request_id=%s transport error: %v", r.Method, r.URL.Path, r.Header.Get("X-Request-Id"), err)
+			http.Error(w, "MCP upstream unavailable", http.StatusBadGateway)
+		},
+	}
+}
+
 func auth(next http.Handler, expected string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+expected {
@@ -165,9 +205,13 @@ func main() {
 	setupLogging()
 	cfg := loadConfig()
 	proxy := buildProxy(cfg)
+	renderProxy := buildProxyPreservePath(cfg)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", auth(proxy, cfg.clientToken))
 	mux.Handle("/mcp/", auth(proxy, cfg.clientToken))
+	// SSE 实时渲染进度流：保留原始路径转发给上游 Python MCP 服务。
+	mux.Handle("/render-progress", auth(renderProxy, cfg.clientToken))
+	mux.Handle("/render-progress/", auth(renderProxy, cfg.clientToken))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[health] %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
