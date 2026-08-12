@@ -82,6 +82,39 @@ from lib.mcp_session import (
 from lib.workbuddy_session import begin_render, session_hash, update as update_session
 
 
+# ---------------------------------------------------------------------------
+# Session-id propagation fix (streamable-http, stateful transport)
+# ---------------------------------------------------------------------------
+# FastMCP's stateful StreamableHTTP runs *every* tool call for a session inside a
+# per-session background task (StreamableHTTPSessionManager.run_server) — NOT
+# inside the per-request ASGI task. A ContextVar set by BearerTokenAuthMiddleware
+# (per-request task) therefore never reaches the tools, which is exactly why the
+# old "Streamable HTTP Mcp-Session-Id is required" error survived every ContextVar
+# fix. The transport's connect() is entered *inside* that background task and
+# wraps the whole self.app.run(...) message loop, so setting the session
+# ContextVar there makes it visible to every tool call processed for the session.
+try:
+    from contextlib import asynccontextmanager
+    from mcp.server.streamable_http import StreamableHTTPServerTransport as _SHT
+
+    _orig_connect = _SHT.connect
+
+    @asynccontextmanager
+    async def _patched_connect(self):
+        sid = getattr(self, "mcp_session_id", None)
+        token = set_mcp_session_id(sid) if sid else None
+        try:
+            async with _orig_connect(self) as streams:
+                yield streams
+        finally:
+            if token is not None:
+                reset_mcp_session_id(token)
+
+    _SHT.connect = _patched_connect
+except Exception as _patch_err:  # pragma: no cover - defensive
+    _log.warning("Session-id connect() patch failed: %s", _patch_err)
+
+
 _business_log = logging.getLogger("session_video")
 _business_log.setLevel(logging.INFO)
 _business_log.propagate = False
@@ -990,9 +1023,9 @@ async def weiyun_gen_share_link(
     Accepts a list of file paths or directories and returns a short URL
     that can be shared. Configure WEIYUN_MCP_TOKEN in .env before calling.
     """
-    tool = registry.get("weiyun.gen_share_link")
+    tool = registry.get("weiyun_share_link")
     if tool is None:
-        return {"success": False, "error": "weiyun.gen_share_link tool is not registered"}
+        return {"success": False, "error": "weiyun_share_link tool is not registered"}
     inputs: dict[str, Any] = {"mcp_session_id": get_mcp_session_id()}
     if file_list:
         inputs["file_list"] = file_list
@@ -1137,20 +1170,24 @@ if __name__ == "__main__":
         _log.warning("Generate one with:  python mcp_server.py gen-token")
 
     if transport == "streamable-http":
-        import socket
         import uvicorn
-        # Dual-stack socket: IPv6 + IPv4 via IPV6_V6ONLY=0
-        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("::", 8900))
-        sock.listen(2048)
         app = mcp.streamable_http_app()
         if _api_token:
             app = BearerTokenAuthMiddleware(app, _api_token)
-        config = uvicorn.Config(app, fd=sock.fileno())
+        if sys.platform == "win32":
+            # Windows lacks AF_UNIX; uvicorn's socket.fromfd(fd, AF_UNIX)
+            # crashes there. Let uvicorn bind directly via host/port.
+            config = uvicorn.Config(app, host="0.0.0.0", port=8900)
+        else:
+            import socket
+            # Dual-stack socket: IPv6 + IPv4 via IPV6_V6ONLY=0
+            sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("::", 8900))
+            sock.listen(2048)
+            config = uvicorn.Config(app, fd=sock.fileno())
         server = uvicorn.Server(config)
-        import asyncio
         asyncio.run(server.serve())
     else:
         mcp.run(transport=transport)

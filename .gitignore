@@ -61,6 +61,7 @@ internal/
 # Local agent config (user-specific)
 .claude/memory/
 .claude/settings.local.json
+.workbuddy/
 
 # Agent skills lock (local install tracking)
 skills-lock.json
@@ -102,4 +103,4 @@ venv/
 OpenMontage-mcp-proxy/openmontage-mcp-proxy*
 OpenMontage-mcp-proxy/proxy.log
 OpenMontage-mcp-proxy/*.log
-logs/mcp_server.log
+logs/
