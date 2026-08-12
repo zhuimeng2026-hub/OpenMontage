@@ -639,13 +639,19 @@ async def create_remotion_video_share(
         return {"success": False, "status": "failed", "stage": "weiyun_upload", "batch_id": batch_id, "video_path": video_path, "message": "视频已渲染，但微云上传失败。", "error": error}
 
     file_id = (uploaded.data or {}).get("file_id")
-    share_tool = registry.get("weiyun.gen_share_link")
+    # Use the token-based Weiyun share-link tool (weiyun_share_link). The legacy
+    # "weiyun.gen_share_link" name resolved to the mcporter-based wrapper, which
+    # is no longer installed; this is the same token tool the standalone
+    # weiyun_gen_share_link MCP tool uses.
+    share_tool = registry.get("weiyun_share_link")
     if share_tool is None or not file_id:
-        error = "weiyun.gen_share_link is unavailable or upload returned no file_id"
+        error = "weiyun_share_link tool is unavailable or upload returned no file_id"
         update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
         _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
         return {"success": False, "status": "failed", "stage": "weiyun_share", "batch_id": batch_id, "video_path": video_path, "message": "视频已上传，但微云分享链接生成失败。", "error": error}
-    shared = await _run_tool_sync(share_tool, {"file_list": [{"file_id": file_id}], "share_name": title or f"{project}-{batch_id}"})
+    # The token tool expects file_list as a list of *strings* (it wraps each
+    # into {"file_id": ...} itself); passing objects here would double-nest.
+    shared = await _run_tool_sync(share_tool, {"file_list": [file_id], "share_name": title or f"{project}-{batch_id}"})
     if not shared.success:
         error = shared.error or "Weiyun share link failed"
         update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
