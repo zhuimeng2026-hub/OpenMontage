@@ -66,6 +66,9 @@ internal/
 # Agent skills lock (local install tracking)
 skills-lock.json
 
+# Local e2e validation scripts / logs / scratch assets (dev-only, regenerable)
+local_run/
+
 # Generated images (logo drafts — final logo lives in assets/)
 logo_*.png
 generated_image.png

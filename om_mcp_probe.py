@@ -73,8 +73,7 @@ class MCPClient:
         hf.close()
         bf.close()
         cmd = [
-            "curl", "-sS", "--max-time", "40",
-            "--retry", "4", "--retry-delay", "1", "--retry-all-errors",
+            "curl", "-sS", "--max-time", "600",
             "-D", hf.name, "-o", bf.name,
         ]
         for h in hdrs:
@@ -84,7 +83,7 @@ class MCPClient:
         last_err = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=70)
+                subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=620)
                 # 1) 从响应头轮换/更新 SID
                 with open(hf.name, encoding="utf-8", errors="replace") as f:
                     htext = f.read()
@@ -96,6 +95,12 @@ class MCPClient:
                     raw = f.read()
                 return self._parse(raw)
             except subprocess.CalledProcessError as e:
+                # 超时（curl exit 28）不要重试：服务端长任务（如 Remotion 渲染）
+                # 可能仍在跑，重发会导致重复提交（例如二次 begin_render）。
+                if e.returncode == 28:
+                    raise RuntimeError(
+                        "MCP 请求超时（curl --max-time 已达上限）。服务端长任务可能仍在运行，请勿重发。"
+                    )
                 last_err = f"curl exit {e.returncode}"
             except Exception as e:  # noqa: BLE001
                 last_err = str(e)

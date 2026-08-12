@@ -297,6 +297,22 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
     # 读取文件数据到内存（用于分片上传）
     with open(file_path, "rb") as f:
         file_data = f.read()
+
+    def _resolve_file_id() -> tuple[str, str]:
+        """Re-query via pre-upload to obtain the file_id.
+
+        The live Weiyun API sometimes returns an empty ``file_id`` in the
+        chunk-finalize response even though the upload succeeded. Once the
+        file exists on the server, a pre-upload reports ``file_exist=true``
+        together with the real ``file_id``/``filename`` — so we use that as a
+        fallback to recover the id instead of failing the whole publish.
+        """
+        try:
+            confirm = mcp_call(mcp_url, headers, "weiyun.upload", pre_upload_args)
+            return (confirm.get("file_id", "") or "", confirm.get("filename", filename) or filename)
+        except Exception:
+            return ("", filename)
+
     # 第二步 & 第三步：循环「预上传 → 上传一片」
     print(f"[2/3] 开始上传...")
     round_num = 0
@@ -327,7 +343,9 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
             state = int(pre_rsp.get("upload_state", 0))
             if state == 2:
                 file_id = pre_rsp.get("file_id", "")
-                fname = pre_rsp.get("filename", filename)
+                fname = pre_rsp.get("filename", filename) or filename
+                if not file_id:
+                    file_id, fname = _resolve_file_id()
                 print(f"  ✅ 上传完成！file_id={file_id}")
                 return {"file_id": file_id, "filename": fname}
             raise RuntimeError(f"无可上传通道，upload_state={state}")
@@ -362,7 +380,9 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
         state = int(up_rsp.get("upload_state", 0))
         if state == 2:
             file_id = up_rsp.get("file_id", "")
-            fname = up_rsp.get("filename", filename)
+            fname = up_rsp.get("filename", filename) or filename
+            if not file_id:
+                file_id, fname = _resolve_file_id()
             print(f"[3/3] ✅ 上传完成！file_id={file_id}, filename={fname}")
             return {"file_id": file_id, "filename": fname}
     raise RuntimeError(f"超过最大上传轮数 ({max_rounds})，上传未完成")

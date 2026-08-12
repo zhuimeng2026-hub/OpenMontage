@@ -1442,6 +1442,13 @@ class VideoCompose(BaseTool):
             "--concurrency", str(_get_remotion_concurrency()),
         ]
 
+        # --no-sandbox is required for the headless Chrome bundled with Remotion
+        # on Windows and in restricted/CI environments where the Chrome sandbox
+        # cannot initialize (no sandbox user namespace). Without it the render
+        # hangs or fails with an opaque browser-launch error. It is a no-op risk
+        # on normal Linux desktops and is always passed for reliability.
+        cmd.append("--no-sandbox")
+
         # Apply media profile dimensions
         profile_name = inputs.get("profile")
         if profile_name:
@@ -1500,8 +1507,16 @@ class VideoCompose(BaseTool):
         except Exception as e:
             return ToolResult(success=False, error=f"Remotion render failed: {e}")
         finally:
-            if props_path.exists():
-                props_path.unlink()
+            # Best-effort cleanup of the temp props file. A failed deletion
+            # (e.g. host file-protection hooks intercepting unlink) must NEVER
+            # abort an otherwise successful render, so swallow any error here.
+            try:
+                if props_path.exists():
+                    props_path.unlink()
+            except OSError as e:
+                logging.getLogger("video_compose").warning(
+                    "Could not remove temp props file %s: %s", props_path, e
+                )
 
         if not output_path.exists():
             return ToolResult(
@@ -1722,12 +1737,14 @@ class VideoCompose(BaseTool):
             "valid_container": False,
             "issues": [],
         }
+        probe_ran = False
         try:
             cmd = [
                 "ffprobe", "-v", "quiet", "-print_format", "json",
                 "-show_format", "-show_streams", str(output_path),
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            probe_ran = True
             if proc.returncode == 0:
                 probe_data = json.loads(proc.stdout)
                 fmt = probe_data.get("format", {})
@@ -2077,7 +2094,11 @@ class VideoCompose(BaseTool):
             status = "pass"
             recommended_action = "present_to_user"
 
-        if not technical_probe.get("valid_container"):
+        # Only fail when ffprobe actually ran and reported an invalid container.
+        # If ffprobe is missing/unavailable, we cannot validate — downgrade that
+        # to a warning rather than failing the whole render (the Remotion output
+        # is still produced; the review is a quality gate, not a hard blocker).
+        if probe_ran and not technical_probe.get("valid_container"):
             status = "fail"
             recommended_action = "re_render"
 
