@@ -88,7 +88,7 @@ from lib.workbuddy_session import (
     find_session_by_job_id,
     recover_orphans_and_rebuild_index,
 )
-from lib.render_progress import publish, progress_event
+from lib.render_progress import publish, progress_event, subscribe, unsubscribe
 
 
 # ---------------------------------------------------------------------------
