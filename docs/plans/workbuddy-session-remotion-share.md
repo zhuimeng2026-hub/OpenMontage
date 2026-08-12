@@ -199,6 +199,45 @@ Correlation fields include `request_id`, `session_hash`, `project_id`,
 Transport logs use only a short session hash. Logs must never contain Base64
 media, API keys, cookies, tokens, or a full `Mcp-Session-Id`.
 
+## Real-time progress (SSE)
+
+Polling `get_render_status` only reflects coarse stages (`rendering` →
+`rendered` → `uploading` → `published`). For live, frame-level progress, the
+server exposes a Server-Sent Events stream:
+
+```
+GET /render-progress/{render_job_id}
+Authorization: Bearer <MCP_API_TOKEN>
+Accept: text/event-stream
+```
+
+Each `data:` frame is a JSON progress event:
+
+```json
+{
+  "event": "render_progress",
+  "render_job_id": "<hex>",
+  "phase": "render|upload|share|snapshot|done",
+  "status": "rendering|rendered|uploading|uploaded|sharing|published|failed",
+  "percent": 42.0,
+  "message": "Remotion rendering frame 126/300",
+  "share_url": "https://share.weiyun.com/...",
+  "error": "...",
+  "ts": 1690000000.0
+}
+```
+
+- The stream opens with a `snapshot` event carrying the current session state,
+  so a client that connects mid-render immediately sees where things stand.
+- During rendering, `phase=render` events carry Remotion's parsed frame
+  percentage (`percent`); upload and share phases emit coarse `status` events.
+- The stream sends `: keep-alive` heartbeats every ~1s while idle and closes
+  when `status` reaches `published` or `failed`.
+- The endpoint is mounted on the inner Starlette app, so it inherits the same
+  Bearer-token auth as the MCP endpoint. Disable proxy buffering for it
+  (`X-Accel-Buffering: no` is already set by the server; nginx needs
+  `proxy_buffering off` for SSE).
+
 ## Verification
 
 Tests mock Remotion and Weiyun network operations and cover:

@@ -1117,6 +1117,10 @@ class VideoCompose(BaseTool):
             # would only take effect on a direct _remotion_render() call.
             if inputs.get("remotion_timeout_ms") is not None:
                 remotion_inputs["remotion_timeout_ms"] = inputs["remotion_timeout_ms"]
+            # Forward the live-progress callback so frame-level Remotion output
+            # can stream to the SSE endpoint instead of being swallowed.
+            if inputs.get("_progress_callback") is not None:
+                remotion_inputs["_progress_callback"] = inputs["_progress_callback"]
             render_result = self._remotion_render(remotion_inputs)
 
             # Governance: NEVER silently fall back to FFmpeg when Remotion fails.
@@ -1375,8 +1379,21 @@ class VideoCompose(BaseTool):
         Handles compositions with still images, animated scenes, component
         types, and transitions using React-based frame-accurate rendering.
         Accepts edit_decisions (with resolved file paths) or raw composition_data.
+
+        ``inputs['_progress_callback']`` (optional) is a callable invoked with a
+        partial progress dict (``phase``/``percent``/``status``/``message``) so
+        callers can stream coarse + frame-level progress (e.g. via SSE) instead
+        of waiting for the whole render to finish.
         """
         import shutil
+
+        progress_callback = inputs.get("_progress_callback")
+        if progress_callback:
+            try:
+                progress_callback({"phase": "render", "status": "rendering",
+                                   "message": "Remotion rendering started"})
+            except Exception:  # noqa: BLE001
+                pass
 
         if not shutil.which("npx"):
             return ToolResult(
@@ -1514,7 +1531,10 @@ class VideoCompose(BaseTool):
             # local remotion binary via node_modules/.bin. Without this,
             # Windows npx cannot locate the CLI and returns "could not
             # determine executable to run".
-            self.run_command(cmd, timeout=subprocess_timeout, cwd=composer_dir)
+            on_output = None
+            if progress_callback:
+                on_output = lambda line: self._emit_remotion_progress(line, progress_callback)
+            self.run_command(cmd, timeout=subprocess_timeout, cwd=composer_dir, on_output=on_output)
         except subprocess.CalledProcessError as e:
             # run_command uses check=True + capture_output, so the useful
             # Remotion diagnostics live in stderr/stdout — surface the tail
@@ -1562,6 +1582,45 @@ class VideoCompose(BaseTool):
             },
             artifacts=[str(output_path)],
         )
+
+    @staticmethod
+    def _parse_remotion_progress(line: str) -> Optional[float]:
+        """Extract a 0-100 render-percentage from a Remotion CLI output line.
+
+        Remotion prints progress to stderr as ``Rendering frame X/Y`` /
+        ``Rendered frame X/Y`` (with carriage-return overwrites) and occasionally
+        bare percentage lines. Returns the percentage or ``None`` if the line
+        carries no progress information.
+        """
+        if not line:
+            return None
+        import re
+
+        m = re.search(r"frame\s+(\d+)\s*/\s*(\d+)", line)
+        if m:
+            cur, total = int(m.group(1)), int(m.group(2))
+            if total > 0:
+                return min(100.0, cur / total * 100.0)
+        m = re.search(r"(\d{1,3})\s*%", line)
+        if m:
+            pct = int(m.group(1))
+            if 0 <= pct <= 100:
+                return float(pct)
+        return None
+
+    @staticmethod
+    def _emit_remotion_progress(line: str, progress_callback: Callable[[dict], None]) -> None:
+        """Parse one Remotion output line and forward frame-level progress."""
+        pct = VideoCompose._parse_remotion_progress(line)
+        try:
+            progress_callback({
+                "phase": "render",
+                "status": "rendering",
+                "percent": pct,
+                "message": line,
+            })
+        except Exception:  # noqa: BLE001
+            pass
 
     def _stage_remotion_asset(self, source: str, idx: int, staged_dir: Path) -> str:
         """Stage one local media file into remotion-composer/public/_staged/

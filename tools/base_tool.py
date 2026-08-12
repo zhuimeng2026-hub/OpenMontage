@@ -414,43 +414,102 @@ class BaseTool(ABC):
         *,
         timeout: Optional[int] = None,
         cwd: Optional[Path] = None,
+        on_output: Optional["Callable[[str], None]"] = None,
     ) -> subprocess.CompletedProcess:
         """Run a subprocess command with standard error handling.
 
         On Windows, resolves .cmd/.bat wrappers (e.g. npx, npm) via
         shutil.which() so subprocess.run() can find them without shell=True.
+
+        When ``on_output`` is provided, the subprocess is run in streaming mode:
+        each decoded stdout+stderr line is delivered to the callback (merged via
+        ``stderr=STDOUT``) and captured for error reporting. This is how long
+        renders (Remotion) surface frame-by-frame progress to callers without
+        blocking on the whole process finishing. When ``on_output`` is omitted
+        the legacy ``capture_output=True`` behavior is preserved verbatim.
         """
         resolved_cmd = list(cmd)
         if platform.system() == "Windows" and resolved_cmd:
             exe = shutil.which(resolved_cmd[0])
             if exe:
                 resolved_cmd[0] = exe
+
+        if on_output is None:
+            try:
+                return subprocess.run(
+                    resolved_cmd,
+                    capture_output=True,
+                    text=True,
+                    # Force UTF-8 decoding. The default uses the OS locale (cp1252 on
+                    # Windows), which raises UnicodeDecodeError on a subprocess that
+                    # emits Unicode/emoji (e.g. Remotion's progress output), killing the
+                    # reader thread and potentially swallowing the real error text.
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout,
+                    cwd=cwd,
+                    check=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                stderr = (exc.stderr or "").strip()
+                stdout = (exc.stdout or "").strip()
+                detail = stderr or stdout or str(exc)
+                raise ToolCommandError(
+                    exc.returncode,
+                    exc.cmd,
+                    output=exc.output,
+                    stderr=exc.stderr,
+                    detail=detail,
+                ) from exc
+
+        # --- Streaming mode (progress callback) ---
+        import io
+
+        proc = subprocess.Popen(
+            resolved_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
+        )
+        captured: list[str] = []
+        assert proc.stdout is not None
         try:
-            return subprocess.run(
-                resolved_cmd,
-                capture_output=True,
-                text=True,
-                # Force UTF-8 decoding. The default uses the OS locale (cp1252 on
-                # Windows), which raises UnicodeDecodeError on a subprocess that
-                # emits Unicode/emoji (e.g. Remotion's progress output), killing the
-                # reader thread and potentially swallowing the real error text.
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                cwd=cwd,
-                check=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or "").strip()
-            stdout = (exc.stdout or "").strip()
-            detail = stderr or stdout or str(exc)
+            # Remotion emits progress with carriage-return overwrites, so we read
+            # character-by-character would be overkill; readline handles "\n",
+            # and stray "\r" are stripped before callback delivery.
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip("\r\n")
+                captured.append(line)
+                try:
+                    on_output(line)
+                except Exception:  # noqa: BLE001 - callback must never kill render
+                    pass
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise subprocess.TimeoutExpired(resolved_cmd, timeout or 0, output="".join(captured)) from None
+        except Exception:
+            proc.kill()
+            proc.wait()
+            raise
+
+        if proc.returncode != 0:
+            tail = "\n".join(captured[-25:]) if captured else "(no output captured)"
             raise ToolCommandError(
-                exc.returncode,
-                exc.cmd,
-                output=exc.output,
-                stderr=exc.stderr,
-                detail=detail,
-            ) from exc
+                proc.returncode,
+                resolved_cmd,
+                output="".join(captured),
+                stderr="".join(captured),
+                detail=tail,
+            )
+        _ = io  # keep import local & explicit for readability
+        return subprocess.CompletedProcess(
+            resolved_cmd, proc.returncode, stdout="".join(captured), stderr=""
+        )
 
 
 class ToolCommandError(subprocess.CalledProcessError):

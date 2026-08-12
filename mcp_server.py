@@ -15,6 +15,7 @@ import hmac
 import json
 import logging
 import os
+import queue
 import re
 import secrets
 import sys
@@ -87,6 +88,7 @@ from lib.workbuddy_session import (
     find_session_by_job_id,
     recover_orphans_and_rebuild_index,
 )
+from lib.render_progress import publish, progress_event
 
 
 # ---------------------------------------------------------------------------
@@ -663,20 +665,27 @@ def _run_render_job(
         set_mcp_session_id(sid)
         started = time.monotonic()
         digest = session_hash(sid)
+
+        def _publish_progress(partial: dict) -> None:
+            """Bridge a partial progress dict onto the SSE bus for this job."""
+            publish(job_id, progress_event(job_id, **partial))
+
         try:
             _event("render_requested", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="rendering")
             _event("render_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="rendering")
             render_tool = registry.get("video_compose")
             if render_tool is None:
                 raise RuntimeError("video_compose tool is not registered")
-            render_result = await _run_tool_sync(render_tool, {"operation": "render", "edit_decisions": edit_decisions, "asset_manifest": asset_manifest, "scene_plan": scene_plan, "profile": profile, "output_path": output, "remotion_timeout_ms": 600000})
+            render_result = await _run_tool_sync(render_tool, {"operation": "render", "edit_decisions": edit_decisions, "asset_manifest": asset_manifest, "scene_plan": scene_plan, "profile": profile, "output_path": output, "remotion_timeout_ms": 600000, "_progress_callback": _publish_progress})
             if not render_result.success:
                 raise RuntimeError(render_result.error or "Remotion render failed")
             video_path = output
             update_session(sid, status="rendered", video_path=video_path)
+            _publish_progress({"phase": "render", "status": "rendered", "message": "Render finished"})
             _event("render_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="rendered", duration_ms=round((time.monotonic() - started) * 1000))
         except Exception as exc:
             update_session(sid, status="failed", video_path=locals().get("video_path"), failure_stage="render", error=str(exc))
+            _publish_progress({"phase": "render", "status": "failed", "error": str(exc)})
             _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="failed", stage="render", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
             return
 
@@ -687,6 +696,7 @@ def _run_render_job(
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         _event("weiyun_publish_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="uploading")
+        _publish_progress({"phase": "upload", "status": "uploading", "message": "Uploading rendered video to Weiyun"})
         try:
             uploaded = await _run_tool_sync(upload_tool, {"video_path": video_path, "target_dir": "", "overwrite": False})
         except Exception as exc:
@@ -696,10 +706,12 @@ def _run_render_job(
         if not uploaded.success:
             error = uploaded.error or "Weiyun upload failed"
             update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path, error=error)
+            _publish_progress({"phase": "upload", "status": "failed", "error": error})
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
 
         file_id = (uploaded.data or {}).get("file_id")
+        _publish_progress({"phase": "upload", "status": "uploaded", "message": "Upload complete"})
         # Use the token-based Weiyun share-link tool (weiyun_share_link). The legacy
         # "weiyun.gen_share_link" name resolved to the mcporter-based wrapper, which
         # is no longer installed; this is the same token tool the standalone
@@ -711,14 +723,17 @@ def _run_render_job(
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         try:
+            _publish_progress({"phase": "share", "status": "sharing", "message": "Generating Weiyun share link"})
             shared = await _run_tool_sync(share_tool, {"file_list": [file_id], "share_name": title or f"{project}-{batch_id}"})
         except Exception as exc:
             update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path, error=str(exc))
+            _publish_progress({"phase": "share", "status": "failed", "error": str(exc)})
             _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
             return
         if not shared.success:
             error = shared.error or "Weiyun share link failed"
             update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path, error=error)
+            _publish_progress({"phase": "share", "status": "failed", "error": error})
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         share_url = (shared.data or {}).get("short_url") or (shared.data or {}).get("share_url")
@@ -728,6 +743,7 @@ def _run_render_job(
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         update_session(sid, status="published", share_url=share_url, video_path=video_path, error=None)
+        _publish_progress({"phase": "share", "status": "published", "share_url": share_url, "message": "Share link ready"})
         _event("weiyun_publish_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, asset_count=asset_count, status="published", duration_ms=round((time.monotonic() - started) * 1000))
 
     try:
@@ -1256,6 +1272,70 @@ class BearerTokenAuthMiddleware:
 
 
 # ---------------------------------------------------------------------------
+# SSE progress endpoint
+# ---------------------------------------------------------------------------
+# Clients subscribe to live render progress for a job over Server-Sent Events.
+# The render worker publishes coarse (render/upload/share) and frame-level
+# (Remotion percentage) events onto the bus in lib.render_progress; this
+# handler drains them and forwards each as an SSE ``data:`` frame. A snapshot
+# of the current session state is sent first so a late subscriber (or one that
+# joined after the job started) sees where things stand immediately. The route
+# is mounted on the inner Starlette app, so it inherits the Bearer auth layer.
+
+async def render_progress_sse(request: "Request"):
+    """Stream live render progress for ``render_job_id`` as Server-Sent Events."""
+    from starlette.responses import StreamingResponse
+
+    job_id = request.path_params.get("job_id", "")
+    q = subscribe(job_id)
+    state = find_session_by_job_id(job_id)
+
+    async def event_generator():
+        # Initial snapshot so clients joining mid-flight get current state.
+        if state:
+            snap = progress_event(
+                job_id,
+                phase="snapshot",
+                status=state.get("status"),
+                stage=state.get("failure_stage"),
+                error=state.get("error"),
+                share_url=state.get("share_url"),
+                video_path=state.get("video_path"),
+            )
+        else:
+            snap = progress_event(
+                job_id, phase="snapshot", status="unknown",
+                message=f"No render job found for '{job_id}'",
+            )
+        yield f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
+
+        try:
+            while True:
+                try:
+                    ev = await asyncio.to_thread(q.get, 1.0)
+                except queue.Empty:
+                    # heartbeat keeps nginx/proxy from closing an idle stream
+                    yield ": keep-alive\n\n"
+                    continue
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                if ev.get("status") in ("published", "failed"):
+                    yield f"data: {json.dumps(progress_event(job_id, phase='done', status=ev.get('status')), ensure_ascii=False)}\n\n"
+                    break
+        finally:
+            unsubscribe(job_id, q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx proxy buffering for SSE
+            "Connection": "keep-alive",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1290,6 +1370,11 @@ if __name__ == "__main__":
     if transport == "streamable-http":
         import uvicorn
         app = mcp.streamable_http_app()
+        # Live render-progress stream (SSE). Mounted on the inner app so it
+        # inherits the Bearer auth middleware applied just below.
+        app.router.add_route(
+            "/render-progress/{job_id}", render_progress_sse, methods=["GET"]
+        )
         if _api_token:
             app = BearerTokenAuthMiddleware(app, _api_token)
         if sys.platform == "win32":
