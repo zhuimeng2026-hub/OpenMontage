@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -82,7 +83,7 @@ def test_create_share_builds_remotion_plan_and_keeps_video_on_share_failure(monk
     tools = {"video_compose": FakeCompose(), "weiyun_upload": FakeUpload(), "weiyun.gen_share_link": FakeShare()}
     monkeypatch.setattr(mcp_server.registry, "get", lambda name: tools.get(name))
     try:
-        result = mcp_server.create_remotion_video_share()
+        result = asyncio.run(mcp_server.create_remotion_video_share())
     finally:
         reset_mcp_session_id(token)
     assert result["success"] is False

@@ -116,6 +116,24 @@ def _safe_inputs(value: Any) -> Any:
         )
     return value
 
+
+async def _run_tool_sync(tool, inputs: dict[str, Any]) -> Any:
+    """Execute a blocking ``BaseTool`` in a worker thread while preserving the
+    MCP session/request ContextVars.
+
+    FastMCP dispatches synchronous ``@mcp.tool()`` functions to a worker thread
+    (via ``asyncio.to_thread`` / ``anyio.to_thread``), and those helpers do not
+    copy ContextVars. A session id set in the ASGI middleware would therefore be
+    invisible to code running inside the thread, making ``get_mcp_session_id()``
+    return ``None`` (the "Mcp-Session-Id is required" failure).
+
+    Capturing the context explicitly here keeps the session/request ids alive
+    across the hop — mirroring the fix already applied inside ``execute_tool``.
+    """
+    ctx = contextvars.copy_context()
+    return await asyncio.to_thread(ctx.run, tool.execute, inputs)
+
+
 # ---------------------------------------------------------------------------
 # Discover tools at import time
 # ---------------------------------------------------------------------------
@@ -380,7 +398,7 @@ async def execute_tool(
 
 
 @mcp.tool()
-def upload_asset(
+async def upload_asset(
     project_id: str,
     filename: str,
     content_base64: str,
@@ -398,7 +416,7 @@ def upload_asset(
     tool = registry.get("upload_asset")
     if tool is None:
         return UploadAssetResult(success=False, error="upload_asset tool is not registered")
-    result = tool.execute({
+    result = await _run_tool_sync(tool, {
         "project_id": project_id,
         "filename": filename,
         "content_base64": content_base64,
@@ -431,7 +449,7 @@ def upload_asset(
 
 
 @mcp.tool()
-def upload_asset_chunk(
+async def upload_asset_chunk(
     operation: str,
     project_id: Optional[str] = None,
     filename: Optional[str] = None,
@@ -450,7 +468,7 @@ def upload_asset_chunk(
     tool = registry.get("upload_asset_chunk")
     if tool is None:
         return {"success": False, "error": "upload_asset_chunk is not registered"}
-    result = tool.execute({
+    result = await _run_tool_sync(tool, {
         "operation": operation,
         "project_id": project_id,
         "filename": filename,
@@ -479,7 +497,7 @@ def upload_asset_chunk(
 
 
 @mcp.tool()
-def create_remotion_video_share(
+async def create_remotion_video_share(
     project_id: Optional[str] = None,
     duration_per_image: float = 3.0,
     aspect_ratio: str = "9:16",
@@ -562,7 +580,7 @@ def create_remotion_video_share(
         render_tool = registry.get("video_compose")
         if render_tool is None:
             raise RuntimeError("video_compose tool is not registered")
-        render_result = render_tool.execute({"operation": "render", "edit_decisions": edit_decisions, "asset_manifest": asset_manifest, "scene_plan": scene_plan, "profile": profile, "output_path": str(output), "remotion_timeout_ms": 600000})
+        render_result = await _run_tool_sync(render_tool, {"operation": "render", "edit_decisions": edit_decisions, "asset_manifest": asset_manifest, "scene_plan": scene_plan, "profile": profile, "output_path": str(output), "remotion_timeout_ms": 600000})
         if not render_result.success:
             raise RuntimeError(render_result.error or "Remotion render failed")
         video_path = str(output)
@@ -580,7 +598,7 @@ def create_remotion_video_share(
         _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
         return {"success": False, "status": "failed", "stage": "weiyun_upload", "batch_id": batch_id, "video_path": video_path, "message": "视频已渲染，但微云上传失败。", "error": error}
     _event("weiyun_publish_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="uploading")
-    uploaded = upload_tool.execute({"video_path": video_path, "target_dir": "", "overwrite": False})
+    uploaded = await _run_tool_sync(upload_tool, {"video_path": video_path, "target_dir": "", "overwrite": False})
     if not uploaded.success:
         error = uploaded.error or "Weiyun upload failed"
         update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
@@ -594,7 +612,7 @@ def create_remotion_video_share(
         update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
         _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
         return {"success": False, "status": "failed", "stage": "weiyun_share", "batch_id": batch_id, "video_path": video_path, "message": "视频已上传，但微云分享链接生成失败。", "error": error}
-    shared = share_tool.execute({"file_list": [{"file_id": file_id}], "share_name": title or f"{project}-{batch_id}"})
+    shared = await _run_tool_sync(share_tool, {"file_list": [{"file_id": file_id}], "share_name": title or f"{project}-{batch_id}"})
     if not shared.success:
         error = shared.error or "Weiyun share link failed"
         update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
@@ -935,7 +953,7 @@ def export_bundle(
 
 
 @mcp.tool()
-def weiyun_upload(
+async def weiyun_upload(
     video_path: str,
     target_dir: str = "",
     overwrite: bool = False,
@@ -951,7 +969,7 @@ def weiyun_upload(
     tool = registry.get("weiyun_upload")
     if tool is None:
         return {"success": False, "error": "weiyun_upload tool is not registered"}
-    result = tool.execute({
+    result = await _run_tool_sync(tool, {
         "video_path": video_path,
         "target_dir": target_dir,
         "overwrite": overwrite,
@@ -961,7 +979,7 @@ def weiyun_upload(
 
 
 @mcp.tool()
-def weiyun_gen_share_link(
+async def weiyun_gen_share_link(
     file_list: list[str] = [],
     dir_list: list[str] = [],
     share_name: str = "",
@@ -984,7 +1002,7 @@ def weiyun_gen_share_link(
         inputs["share_name"] = share_name
     if passwd:
         inputs["passwd"] = passwd
-    result = tool.execute(inputs)
+    result = await _run_tool_sync(tool, inputs)
     return {"success": result.success, "data": result.data, "artifacts": result.artifacts, "error": result.error}
 
 
