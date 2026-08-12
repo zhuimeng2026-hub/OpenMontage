@@ -68,6 +68,7 @@ skills-lock.json
 
 # Local e2e validation scripts / logs / scratch assets (dev-only, regenerable)
 local_run/
+om_mcp_probe.log
 
 # Generated images (logo drafts — final logo lives in assets/)
 logo_*.png
