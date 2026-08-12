@@ -238,10 +238,39 @@ class VideoCompose(BaseTool):
         "Play the composed output and verify cuts, subtitles, and overlays",
     ]
 
+    def _ensure_node_on_path(self) -> None:
+        """探测常见 nvm 安装并注入当前进程 PATH。
+
+        服务进程（如 systemd / 守护脚本拉起）常常不带 node 环境，
+        导致 `shutil.which("npx")` 因 PATH 缺失而判定 Remotion 不可用——
+        这会静默降级到 FFmpeg，并错误地拒绝图片合成。即使启动环境
+        忘了配 PATH，也在此兜底定位 node/npx，避免误导性的失败。"""
+        import glob as _glob
+        import os as _os
+        import shutil as _shutil
+
+        if _shutil.which("npx"):
+            return
+        candidates: list[str] = []
+        for home in (_os.path.expanduser("~"), "/root"):
+            candidates.extend(
+                _glob.glob(_os.path.join(home, ".nvm", "versions", "node", "*", "bin"))
+            )
+        nvm_dir = _os.environ.get("NVM_DIR")
+        if nvm_dir:
+            candidates.extend(
+                _glob.glob(_os.path.join(nvm_dir, "versions", "node", "*", "bin"))
+            )
+        for bin_dir in sorted(candidates, reverse=True):  # 取版本号最大的
+            if _os.path.exists(_os.path.join(bin_dir, "npx")):
+                _os.environ["PATH"] = bin_dir + _os.pathsep + _os.environ.get("PATH", "")
+                return
+
     def _remotion_available(self) -> bool:
         """Check if Remotion rendering is available (requires npx + composer project + node_modules)."""
         import shutil as _shutil
 
+        self._ensure_node_on_path()
         if not _shutil.which("npx"):
             return False
         composer_dir = Path(__file__).resolve().parent.parent.parent / "remotion-composer"
