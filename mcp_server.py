@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -541,6 +542,13 @@ async def create_remotion_video_share(
     Images and the session are intentionally implicit: upload them first with
     upload_asset or upload_asset_chunk, then call this tool with no paths.
     Call this when the user says "生成视频", "开始生成", or "就这些，生成吧".
+
+    This tool is *non-blocking*: it validates inputs, claims a render job
+    (``render_job_id``), and dispatches the actual render→upload→share pipeline
+    to a background thread. It returns immediately with the job id. Poll
+    ``get_render_status`` with that id to track progress and fetch the final
+    share URL. This avoids the long HTTP request that previously timed out on
+    the client side for multi-minute Remotion renders.
     """
     started = time.monotonic()
     sid = get_mcp_session_id()
@@ -608,64 +616,160 @@ async def create_remotion_video_share(
         asset_manifest = {"version": "1.0", "assets": safe_assets, "metadata": {"project_id": project, "batch_id": batch_id}}
         output = root / "renders" / f"{batch_id}-{job_id}.mp4"
         profile = {"9:16": "tiktok", "16:9": "generic_hd", "1:1": "instagram_feed"}[aspect_ratio]
-        _event("render_requested", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=len(safe_assets), render_job_id=job_id, status="rendering")
-        _event("render_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=len(safe_assets), render_job_id=job_id, status="rendering")
-        render_tool = registry.get("video_compose")
-        if render_tool is None:
-            raise RuntimeError("video_compose tool is not registered")
-        render_result = await _run_tool_sync(render_tool, {"operation": "render", "edit_decisions": edit_decisions, "asset_manifest": asset_manifest, "scene_plan": scene_plan, "profile": profile, "output_path": str(output), "remotion_timeout_ms": 600000})
-        if not render_result.success:
-            raise RuntimeError(render_result.error or "Remotion render failed")
-        video_path = str(output)
-        update_session(sid, status="rendered", video_path=video_path)
-        _event("render_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=len(safe_assets), render_job_id=job_id, status="rendered", duration_ms=round((time.monotonic() - started) * 1000))
     except Exception as exc:
-        update_session(sid, status="failed", video_path=locals().get("video_path"), failure_stage="render")
-        _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=len(assets), render_job_id=job_id, status="failed", stage="render", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
-        return {"success": False, "status": "failed", "stage": "render", "batch_id": batch_id, "message": "视频渲染失败。", "error": str(exc)}
+        update_session(sid, status="failed", failure_stage="validation", video_path=None)
+        _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=session_hash(sid), project_id=project, batch_id=batch_id, asset_count=len(assets), render_job_id=job_id, status="failed", stage="validation", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
+        return {"success": False, "status": "failed", "stage": "validation", "batch_id": batch_id, "render_job_id": job_id, "message": f"参数校验失败：{exc}", "error": str(exc)}
 
-    upload_tool = registry.get("weiyun_upload")
-    if upload_tool is None:
-        error = "weiyun_upload tool is not registered"
-        update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
-        _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
-        return {"success": False, "status": "failed", "stage": "weiyun_upload", "batch_id": batch_id, "video_path": video_path, "message": "视频已渲染，但微云上传失败。", "error": error}
-    _event("weiyun_publish_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="uploading")
-    uploaded = await _run_tool_sync(upload_tool, {"video_path": video_path, "target_dir": "", "overwrite": False})
-    if not uploaded.success:
-        error = uploaded.error or "Weiyun upload failed"
-        update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
-        _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
-        return {"success": False, "status": "failed", "stage": "weiyun_upload", "batch_id": batch_id, "video_path": video_path, "message": "视频已渲染，但微云上传失败。", "error": error}
+    # Dispatch the long-running render→upload→share pipeline to a background
+    # thread so this MCP call returns immediately (no client-side timeout).
+    threading.Thread(
+        target=_run_render_job,
+        kwargs=dict(
+            sid=sid, request_id=request_id, project=project, batch_id=batch_id,
+            job_id=job_id, safe_assets=safe_assets, edit_decisions=edit_decisions,
+            asset_manifest=asset_manifest, scene_plan=scene_plan, profile=profile,
+            output=str(output), title=title, asset_count=len(safe_assets),
+        ),
+        daemon=True,
+    ).start()
+    _event("render_queued", request_id=request_id, session_hash=session_hash(sid), project_id=project, batch_id=batch_id, asset_count=len(safe_assets), render_job_id=job_id, status="queued", duration_ms=round((time.monotonic() - started) * 1000))
+    return {
+        "success": True, "status": "queued",
+        "render_job_id": job_id, "batch_id": batch_id, "project_id": project,
+        "asset_count": len(safe_assets), "duration_seconds": duration * len(safe_assets),
+        "message": "视频渲染已在后台启动，请使用 get_render_status(render_job_id) 轮询进度与最终结果。",
+    }
 
-    file_id = (uploaded.data or {}).get("file_id")
-    # Use the token-based Weiyun share-link tool (weiyun_share_link). The legacy
-    # "weiyun.gen_share_link" name resolved to the mcporter-based wrapper, which
-    # is no longer installed; this is the same token tool the standalone
-    # weiyun_gen_share_link MCP tool uses.
-    share_tool = registry.get("weiyun_share_link")
-    if share_tool is None or not file_id:
-        error = "weiyun_share_link tool is unavailable or upload returned no file_id"
-        update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
-        _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
-        return {"success": False, "status": "failed", "stage": "weiyun_share", "batch_id": batch_id, "video_path": video_path, "message": "视频已上传，但微云分享链接生成失败。", "error": error}
-    # The token tool expects file_list as a list of *strings* (it wraps each
-    # into {"file_id": ...} itself); passing objects here would double-nest.
-    shared = await _run_tool_sync(share_tool, {"file_list": [file_id], "share_name": title or f"{project}-{batch_id}"})
-    if not shared.success:
-        error = shared.error or "Weiyun share link failed"
-        update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
-        _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
-        return {"success": False, "status": "failed", "stage": "weiyun_share", "batch_id": batch_id, "video_path": video_path, "message": "视频已上传，但微云分享链接生成失败。", "error": error}
-    share_url = (shared.data or {}).get("short_url") or (shared.data or {}).get("share_url")
-    if not share_url:
-        error = "Weiyun share tool returned no share URL"
-        update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
-        _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
-        return {"success": False, "status": "failed", "stage": "weiyun_share", "batch_id": batch_id, "video_path": video_path, "message": "视频已上传，但微云分享链接生成失败。", "error": error}
-    update_session(sid, status="published", share_url=share_url, video_path=video_path)
-    _event("weiyun_publish_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, asset_count=len(safe_assets), status="published", duration_ms=round((time.monotonic() - started) * 1000))
-    return {"success": True, "status": "published", "asset_count": len(safe_assets), "message": "视频已生成，点击下面的微云链接查看。", "share_url": share_url, "video_path": video_path, "duration_seconds": duration * len(safe_assets), "batch_id": batch_id}
+
+def _run_render_job(
+    *, sid, request_id, project, batch_id, job_id, safe_assets,
+    edit_decisions, asset_manifest, scene_plan, profile, output, title, asset_count,
+) -> None:
+    """Background worker: render → upload to Weiyun → generate share link.
+
+    Runs in a daemon thread with its own asyncio event loop. Updates the MCP
+    session state (status / video_path / share_url) so ``get_render_status`` can
+    report progress. Mirrors the synchronous pipeline that previously blocked
+    the MCP call.
+    """
+    async def _worker() -> None:
+        set_mcp_session_id(sid)
+        started = time.monotonic()
+        digest = session_hash(sid)
+        try:
+            _event("render_requested", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="rendering")
+            _event("render_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="rendering")
+            render_tool = registry.get("video_compose")
+            if render_tool is None:
+                raise RuntimeError("video_compose tool is not registered")
+            render_result = await _run_tool_sync(render_tool, {"operation": "render", "edit_decisions": edit_decisions, "asset_manifest": asset_manifest, "scene_plan": scene_plan, "profile": profile, "output_path": output, "remotion_timeout_ms": 600000})
+            if not render_result.success:
+                raise RuntimeError(render_result.error or "Remotion render failed")
+            video_path = output
+            update_session(sid, status="rendered", video_path=video_path)
+            _event("render_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="rendered", duration_ms=round((time.monotonic() - started) * 1000))
+        except Exception as exc:
+            update_session(sid, status="failed", video_path=locals().get("video_path"), failure_stage="render")
+            _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="failed", stage="render", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
+            return
+
+        upload_tool = registry.get("weiyun_upload")
+        if upload_tool is None:
+            error = "weiyun_upload tool is not registered"
+            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
+            _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
+            return
+        _event("weiyun_publish_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="uploading")
+        try:
+            uploaded = await _run_tool_sync(upload_tool, {"video_path": video_path, "target_dir": "", "overwrite": False})
+        except Exception as exc:
+            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
+            _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
+            return
+        if not uploaded.success:
+            error = uploaded.error or "Weiyun upload failed"
+            update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path)
+            _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
+            return
+
+        file_id = (uploaded.data or {}).get("file_id")
+        # Use the token-based Weiyun share-link tool (weiyun_share_link). The legacy
+        # "weiyun.gen_share_link" name resolved to the mcporter-based wrapper, which
+        # is no longer installed; this is the same token tool the standalone
+        # weiyun_gen_share_link MCP tool uses.
+        share_tool = registry.get("weiyun_share_link")
+        if share_tool is None or not file_id:
+            error = "weiyun_share_link tool is unavailable or upload returned no file_id"
+            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
+            _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
+            return
+        try:
+            shared = await _run_tool_sync(share_tool, {"file_list": [file_id], "share_name": title or f"{project}-{batch_id}"})
+        except Exception as exc:
+            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
+            _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
+            return
+        if not shared.success:
+            error = shared.error or "Weiyun share link failed"
+            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
+            _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
+            return
+        share_url = (shared.data or {}).get("short_url") or (shared.data or {}).get("share_url")
+        if not share_url:
+            error = "Weiyun share tool returned no share URL"
+            update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path)
+            _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
+            return
+        update_session(sid, status="published", share_url=share_url, video_path=video_path)
+        _event("weiyun_publish_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, asset_count=asset_count, status="published", duration_ms=round((time.monotonic() - started) * 1000))
+
+    try:
+        asyncio.run(_worker())
+    except Exception:
+        update_session(sid, status="failed", failure_stage="background_crash")
+        _log.exception("background render job crashed for job %s", job_id)
+
+
+def _find_session_by_job(render_job_id: str) -> dict[str, Any] | None:
+    """Locate the MCP session state file whose ``render_job_id`` matches."""
+    sessions_dir = _PROJECT_ROOT / "projects" / ".mcp_sessions"
+    if not sessions_dir.is_dir():
+        return None
+    for path in sessions_dir.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("render_job_id") == render_job_id:
+            return data
+    return None
+
+
+@mcp.tool()
+def get_render_status(render_job_id: str) -> dict[str, Any]:
+    """Poll the progress of a video render dispatched by create_remotion_video_share.
+
+    Returns the render job's current status and result. ``status`` is one of:
+    ``queued``, ``rendering``, ``rendered``, ``uploading``, ``published``,
+    ``failed``. When ``status`` is ``published`` the ``share_url`` field holds
+    the Weiyun share link; when ``failed`` the ``stage`` field names the
+    failing pipeline stage.
+    """
+    state = _find_session_by_job(render_job_id)
+    if not state:
+        return {"success": False, "error": f"No render job found for render_job_id '{render_job_id}'"}
+    return {
+        "success": True,
+        "render_job_id": render_job_id,
+        "status": state.get("status"),
+        "stage": state.get("failure_stage"),
+        "batch_id": state.get("batch_id"),
+        "project_id": state.get("project_id"),
+        "video_path": state.get("video_path"),
+        "share_url": state.get("share_url"),
+        "updated_at": state.get("updated_at"),
+    }
 
 
 @mcp.tool()
