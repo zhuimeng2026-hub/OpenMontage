@@ -61,6 +61,9 @@ export interface CollageBurstProps {
   curtainStartSeconds: number;
   curtainEndSeconds: number;
   clips: CollageClip[];
+  // Index signature so the composition satisfies Remotion's
+  // `Record<string, unknown>` props constraint.
+  [key: string]: unknown;
 }
 
 // ----------------------------------------------------------------------------

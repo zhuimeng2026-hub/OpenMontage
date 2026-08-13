@@ -9,6 +9,9 @@ import {
 interface HeroTitleProps {
   title: string;
   subtitle?: string;
+  // Index signature so the composition satisfies Remotion's
+  // `Record<string, unknown>` props constraint.
+  [key: string]: unknown;
 }
 
 export const HeroTitle: React.FC<HeroTitleProps> = ({ title, subtitle }) => {

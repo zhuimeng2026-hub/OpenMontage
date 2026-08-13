@@ -32,6 +32,9 @@ export interface TitledVideoProps {
   fontSize?: number;
   // Accent color used for the underline and the glow halo.
   accentColor?: string;
+  // Index signature so the composition satisfies Remotion's
+  // `Record<string, unknown>` props constraint.
+  [key: string]: unknown;
 }
 
 // Resolve asset path — handle URLs, absolute paths, and public/ relative paths.

@@ -16,6 +16,9 @@ export interface ProductRevealProps {
   tagline: string;
   closer: string;
   accentColor?: string;
+  // Index signature so the composition satisfies Remotion's
+  // `Record<string, unknown>` props constraint.
+  [key: string]: unknown;
 }
 
 export const ProductReveal: React.FC<ProductRevealProps> = ({

@@ -23,6 +23,9 @@ interface CaptionOverlayProps {
   highlightColor?: string;
   backgroundColor?: string;
   fontFamily?: string;
+  // Index signature so the composition satisfies Remotion's
+  // `Record<string, unknown>` props constraint.
+  [key: string]: unknown;
 }
 
 interface CaptionPage {

@@ -19,6 +19,9 @@ export interface EndTagProps {
   // AbsoluteFill drops its background fill — caller is responsible for
   // rendering with an alpha-capable codec (VP9/WebM or ProRes 4444).
   overlay?: boolean;
+  // Index signature so the composition satisfies Remotion's
+  // `Record<string, unknown>` props constraint.
+  [key: string]: unknown;
 }
 
 const PALETTES = {
