@@ -10,9 +10,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"frameflow-bff/handlers"
+	"frameflow-bff/internal/business"
 	"frameflow-bff/internal/composition"
 	"frameflow-bff/internal/config"
+	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
+	"frameflow-bff/internal/template"
 )
 
 func main() {
@@ -21,6 +24,28 @@ func main() {
 	h := handlers.New(cfg, store)
 	comps := composition.NewStore()
 	ch := handlers.NewCompositionHandler(cfg, comps, store)
+
+	tpls := template.NewStore()
+	var fetcher business.Fetcher
+	if cfg.WeiyunAPIToken != "" {
+		wyClient := mcp.NewClientAuth(cfg.WeiyunMCPURL, cfg.WeiyunAPIToken, "WyHeader", "mcp_token=")
+		wyFetcher := business.NewWeiyunFetcher(wyClient)
+		if err := wyFetcher.Initialize(); err != nil {
+			// Key may be invalid / network may be down. Keep the fetcher wired so
+			// a later request surfaces the real Weiyun error instead of silently
+			// falling back to stub data.
+			log.Printf("[WARN] Weiyun MCP handshake failed — WeiyunFetcher active but calls will error until the key/network is valid: %v", err)
+		} else {
+			log.Printf("[business] using WeiyunFetcher (official MCP %s)", cfg.WeiyunMCPURL)
+		}
+		fetcher = wyFetcher
+	} else {
+		fetcher = business.NewStubFetcher(cfg.BusinessStubJSON)
+		log.Println("[business] WEIYUN_API_KEY not set — using StubFetcher (set BUSINESS_STUB_IMAGES or WEIYUN_API_KEY to source real images).")
+	}
+	tierLimits := limits.NewResolver(cfg.DefaultTier, cfg.TierOverrides)
+	usage := limits.NewUsage()
+	th := handlers.NewTemplateHandler(cfg, tpls, store, fetcher, tierLimits, usage)
 
 	r := gin.Default()
 	r.Use(corsMiddleware(cfg))
@@ -42,6 +67,16 @@ func main() {
 		api.POST("/compositions", ch.Create)
 		api.GET("/compositions/:id", ch.Get)
 		api.POST("/compositions/:id/render", h.RequireAuth(), ch.Render)
+		// Batch-render surface: a reusable Template (fixed script) + Scenarios
+		// (per-scenario image sets from the business system) -> N videos.
+		api.GET("/templates", th.ListTemplates)
+		api.POST("/templates", th.CreateTemplate)
+		api.GET("/templates/:id", th.GetTemplate)
+		api.POST("/templates/:id/scenarios", th.AddScenario)
+		api.GET("/templates/:id/scenarios", th.ListScenarios)
+		api.POST("/templates/:id/batch-render", h.RequireAuth(), th.BatchRender)
+		api.GET("/templates/:id/batch-render/:jobId", th.GetBatchJob)
+		api.GET("/quota", th.GetQuota)
 	}
 
 	// Serve the SPA from STATIC_DIR. Put index.html / config.js / mcp-client.js
@@ -59,6 +94,7 @@ func main() {
 	if !cfg.CustomCompositionEnabled {
 		log.Println("[WARN] CUSTOM_COMPOSITION_ENABLED is false — the editor's 渲染此合成 will save the composition but return 501 (upstream MCP does not yet accept custom composition code). Set it true once upstream supports it.")
 	}
+	log.Printf("[quota] tier resolver ready — default tier=%q (free: 10 files/submission, 10 tasks/day, 10 concurrent). Override per user via TIER_OVERRIDES.", cfg.DefaultTier)
 
 	log.Printf("FrameFlow BFF listening on :%s (static dir: %s)", cfg.Port, cfg.StaticDir)
 	if err := r.Run(":" + cfg.Port); err != nil {

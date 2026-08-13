@@ -29,12 +29,25 @@ type Client struct {
 	sid        string
 	httpClient *http.Client
 	nextID     int
+	// authHeader/authPrefix control how the token is sent. Defaults are the
+	// standard MCP Bearer scheme; Weiyun's official MCP overrides them with
+	// `WyHeader: mcp_token=<key>`.
+	authHeader string
+	authPrefix string
 }
 
 func NewClient(baseURL, token string) *Client {
+	return NewClientAuth(baseURL, token, "Authorization", "Bearer ")
+}
+
+// NewClientAuth builds a Client with a custom auth header. Weiyun's official
+// MCP server requires `WyHeader: mcp_token=<key>` instead of the Bearer scheme.
+func NewClientAuth(baseURL, token, authHeader, authPrefix string) *Client {
 	return &Client{
-		baseURL: baseURL,
-		token:   token,
+		baseURL:    baseURL,
+		token:      token,
+		authHeader: authHeader,
+		authPrefix: authPrefix,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
@@ -72,7 +85,9 @@ func (c *Client) do(req jsonRPCRequest) (map[string]interface{}, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
-	httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	if c.authHeader != "" {
+		httpReq.Header.Set(c.authHeader, c.authPrefix+c.token)
+	}
 	if c.sid != "" {
 		httpReq.Header.Set("Mcp-Session-Id", c.sid)
 	}
@@ -147,6 +162,17 @@ func (c *Client) Initialize() error {
 		Method:  "notifications/initialized",
 	})
 	return err
+}
+
+// ListTools returns the upstream MCP tool catalog (names + input schemas). Used
+// both for the discoverability endpoint (GET /api/templates) and for the
+// one-off schema probe.
+func (c *Client) ListTools() (map[string]interface{}, error) {
+	return c.do(jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      c.id(),
+		Method:  "tools/list",
+	})
 }
 
 func (c *Client) CallTool(name string, args map[string]interface{}) (map[string]interface{}, error) {
