@@ -273,7 +273,32 @@
     .video-grid{grid-template-columns:repeat(2,1fr);}
     .panel{position:static;width:100%;margin-top:20px;}
     .create-row{flex-direction:column;}
+    .script-row{flex-direction:column;}
   }
+
+  /* ============ CREATE: MODE TABS ============ */
+  .create-tabs{display:flex;gap:8px;margin-bottom:22px;}
+  .ctab{height:36px;padding:0 18px;border-radius:18px;background:rgba(255,255,255,0.06);color:var(--text-secondary);font-size:13px;font-weight:500;display:flex;align-items:center;cursor:pointer;transition:background .15s ease,color .15s ease;border:1px solid transparent;}
+  .ctab:hover{background:rgba(255,255,255,0.1);}
+  .ctab.active{background:rgba(124,92,255,0.2);color:var(--text-primary);border-color:rgba(124,92,255,0.4);font-weight:600;}
+
+  /* ============ CREATE: SCRIPT MODE ============ */
+  .script-row{display:flex;gap:24px;align-items:flex-start;}
+  .editor-col{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .script-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+  .comp-name{height:34px;flex:0 0 220px;background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:8px;color:var(--text-primary);font-size:13px;padding:0 12px;outline:none;}
+  .comp-name:focus{border-color:var(--primary);}
+  .btn-ghost{height:34px;padding:0 14px;border-radius:8px;background:rgba(255,255,255,0.06);border:1px solid var(--border-soft);color:var(--text-primary);font-size:13px;cursor:pointer;transition:background .15s ease;}
+  .btn-ghost:hover{background:rgba(255,255,255,0.12);}
+  .comp-msg{font-size:12px;margin-left:6px;}
+  .comp-msg.ok{color:var(--success);}
+  .comp-msg.err{color:var(--error);}
+  .monaco-host{height:460px;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border-soft);background:#1e1e1e;}
+  .monaco-host .loading{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:13px;}
+  #script-progress{display:none;margin-top:14px;}
+  #script-progress .track{height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden;}
+  #script-progress .fill{height:100%;width:0%;background:var(--grad-primary);}
+  #script-progress .st{font-size:12px;color:var(--text-secondary);margin-top:8px;}
 </style>
 </head>
 <body>
@@ -393,36 +418,79 @@
 
       <!-- CREATE -->
       <section class="view" id="view-create">
-        <div class="create-row">
-          <div style="flex:1;min-width:0">
-            <div class="step-label">1 · 上传图片</div>
-            <div class="drop" id="upload-drop">
-              <div class="up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V6M5 12l7-7 7 7"/></svg></div>
-              <div class="d1">拖拽图片到此处，或 点击上传</div>
-              <div class="d2">支持 JPG / PNG / WEBP · 单次最多 50 张</div>
-              <input type="file" id="upload-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
+        <div class="create-tabs">
+          <div class="ctab active" data-mode="template">模板模式</div>
+          <div class="ctab" data-mode="script">脚本模式</div>
+        </div>
+
+        <!-- 模板模式：图生视频（黑盒预设） -->
+        <div class="create-mode" id="mode-template">
+          <div class="create-row">
+            <div style="flex:1;min-width:0">
+              <div class="step-label">1 · 上传图片</div>
+              <div class="drop" id="upload-drop">
+                <div class="up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V6M5 12l7-7 7 7"/></svg></div>
+                <div class="d1">拖拽图片到此处，或 点击上传</div>
+                <div class="d2">支持 JPG / PNG / WEBP · 单次最多 50 张</div>
+                <input type="file" id="upload-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
+              </div>
+              <div class="step-label">2 · 选择模板</div>
+              <div class="tmpl-grid">
+                <div class="tmpl sel" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><span class="tn">旅行混剪</span></div>
+                <div class="tmpl" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><span class="tn">产品宣传</span></div>
+                <div class="tmpl" style="background:linear-gradient(135deg,#7C5CFF,#F87171)"><span class="tn">节日祝福</span></div>
+              </div>
             </div>
-            <div class="step-label">2 · 选择模板</div>
-            <div class="tmpl-grid">
-              <div class="tmpl sel" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><span class="tn">旅行混剪</span></div>
-              <div class="tmpl" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><span class="tn">产品宣传</span></div>
-              <div class="tmpl" style="background:linear-gradient(135deg,#7C5CFF,#F87171)"><span class="tn">节日祝福</span></div>
+            <div class="panel">
+              <h4>渲染设置</h4>
+              <div class="pl">分辨率</div>
+              <div class="opt">1080p</div>
+              <div class="pl">时长</div>
+              <div class="opt">0:30</div>
+              <button class="btn-primary" id="render-btn" style="margin-top:18px">开始渲染</button>
+              <div id="create-progress" style="display:none;margin-top:14px">
+                <div class="track" style="height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden">
+                  <div id="create-fill" class="fill" style="width:0%;height:100%;background:var(--grad-primary)"></div>
+                </div>
+                <div id="create-status" style="font-size:12px;color:var(--text-secondary);margin-top:8px">准备中…</div>
+              </div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-top:14px">本视频预计消耗 12 分钟渲染额度</div>
             </div>
           </div>
-          <div class="panel">
-            <h4>渲染设置</h4>
-            <div class="pl">分辨率</div>
-            <div class="opt">1080p</div>
-            <div class="pl">时长</div>
-            <div class="opt">0:30</div>
-            <button class="btn-primary" id="render-btn" style="margin-top:18px">开始渲染</button>
-            <div id="create-progress" style="display:none;margin-top:14px">
-              <div class="track" style="height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden">
-                <div id="create-fill" class="fill" style="width:0%;height:100%;background:var(--grad-primary)"></div>
+        </div>
+
+        <!-- 脚本模式：自定义 Remotion 合成 -->
+        <div class="create-mode" id="mode-script" style="display:none">
+          <div class="script-row">
+            <div class="editor-col">
+              <div class="script-bar">
+                <input id="comp-name" class="comp-name" placeholder="合成名称" value="我的合成">
+                <button class="btn-ghost" id="comp-save">保存</button>
+                <button class="btn-ghost" id="comp-reset">重置为模板</button>
+                <span id="comp-msg" class="comp-msg"></span>
               </div>
-              <div id="create-status" style="font-size:12px;color:var(--text-secondary);margin-top:8px">准备中…</div>
+              <div id="monaco" class="monaco-host"><div class="loading">编辑器加载中…</div></div>
             </div>
-            <div style="font-size:12px;color:var(--text-secondary);margin-top:14px">本视频预计消耗 12 分钟渲染额度</div>
+            <div class="panel">
+              <h4>素材与渲染</h4>
+              <div class="step-label">上传图片（合成内通过 props.images 引用）</div>
+              <div class="drop" id="upload-drop-script" style="height:120px">
+                <div class="up" style="transform:scale(.8)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V6M5 12l7-7 7 7"/></svg></div>
+                <div class="d1">拖拽 / 点击上传素材</div>
+                <div class="d2">JPG / PNG / WEBP</div>
+                <input type="file" id="upload-input-script" accept="image/jpeg,image/png,image/webp" multiple hidden>
+              </div>
+              <div class="pl">分辨率</div>
+              <div class="opt">1080p</div>
+              <div class="pl">时长 / 张</div>
+              <div class="opt">1s</div>
+              <button class="btn-primary" id="render-btn-script" style="margin-top:18px">渲染此合成</button>
+              <div id="script-progress" style="margin-top:14px">
+                <div class="track"><div id="script-fill" class="fill"></div></div>
+                <div id="script-status" class="st">准备中…</div>
+              </div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-top:14px">自定义代码渲染需上游 MCP 支持（BFF 开关 CUSTOM_COMPOSITION_ENABLED）。未开启时提交会返回明确提示，不会伪造成功。</div>
+            </div>
           </div>
         </div>
       </section>
@@ -515,6 +583,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
 <script src="config.js"></script>
 <script src="mcp-client.js"></script>
 <script>
@@ -696,6 +765,159 @@
       }
     });
   }
+
+  // ===== 创建页：脚本模式（Monaco 编辑器 + 自定义 Remotion 合成）=====
+  var ffMonaco = null;
+  var scriptUploaded = 0;
+  var DEFAULT_COMP =
+'import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing} from "remotion";\n' +
+'\n' +
+'export const MyComposition: React.FC<{images: string[]; durationPerImage?: number}> = (\n' +
+'  {images, durationPerImage = 30}\n' +
+') => {\n' +
+'  const frame = useCurrentFrame();\n' +
+'  const n = Math.max(images.length, 1);\n' +
+'  const idx = Math.min(Math.floor(frame / durationPerImage), n - 1);\n' +
+'  const progress = (frame % durationPerImage) / durationPerImage;\n' +
+'  const scale = interpolate(progress, [0, 1], [1.05, 1], {\n' +
+'    easing: Easing.inOut(Easing.cubic),\n' +
+'  });\n' +
+'  return (\n' +
+'    <AbsoluteFill style={{backgroundColor: "#05010F"}}>\n' +
+'      {images.map((src, i) => (\n' +
+'        <Sequence key={i} from={i * durationPerImage} durationInFrames={durationPerImage}>\n' +
+'          <AbsoluteFill>\n' +
+'            <img\n' +
+'              src={src}\n' +
+'              style={{width: "100%", height: "100%", objectFit: "cover", transform: `scale(${i === idx ? scale : 1})`}}\n' +
+'            />\n' +
+'          </AbsoluteFill>\n' +
+'        </Sequence>\n' +
+'      ))}\n' +
+'    </AbsoluteFill>\n' +
+'  );\n' +
+'};\n';
+
+  function initMonaco(){
+    if (ffMonaco || !window.require){ return; }
+    window.require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+    window.require(['vs/editor/editor.main'], function(){
+      var host = document.getElementById('monaco');
+      if (!host) return;
+      host.innerHTML = '';
+      ffMonaco = window.monaco.editor.create(host, {
+        value: DEFAULT_COMP,
+        language: 'typescript',
+        theme: 'vs-dark',
+        fontSize: 13,
+        minimap: { enabled: true },
+        automaticLayout: true,
+        scrollBeyondLastLine: false,
+        tabSize: 2
+      });
+    });
+  }
+
+  // 模式切换
+  var compMsg = document.getElementById('comp-msg');
+  function setCompMsg(text, kind){ compMsg.textContent = text; compMsg.className = 'comp-msg ' + (kind || ''); }
+  document.querySelectorAll('.ctab').forEach(function(tab){
+    tab.addEventListener('click', function(){
+      document.querySelectorAll('.ctab').forEach(function(t){ t.classList.remove('active'); });
+      tab.classList.add('active');
+      var mode = tab.getAttribute('data-mode');
+      document.getElementById('mode-template').style.display = mode === 'template' ? 'block' : 'none';
+      document.getElementById('mode-script').style.display = mode === 'script' ? 'block' : 'none';
+      if (mode === 'script') initMonaco();
+    });
+  });
+
+  // 保存合成
+  document.getElementById('comp-save').addEventListener('click', async function(){
+    if (!ffMonaco){ setCompMsg('编辑器未就绪', 'err'); return; }
+    var name = (document.getElementById('comp-name').value || '未命名').trim();
+    var code = ffMonaco.getValue();
+    try {
+      var r = await fetch('/api/compositions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, code: code })
+      });
+      var j = await r.json();
+      if (!r.ok){ setCompMsg('保存失败：' + (j.error || r.status), 'err'); return; }
+      window.__ffCompId = j.id;
+      setCompMsg('已保存：' + name + ' (#' + j.id + ')', 'ok');
+      showToast('合成已保存');
+    } catch (e){ setCompMsg('保存失败：' + e.message, 'err'); }
+  });
+
+  // 重置为模板
+  document.getElementById('comp-reset').addEventListener('click', function(){
+    if (ffMonaco) ffMonaco.setValue(DEFAULT_COMP);
+  });
+
+  // 脚本模式素材上传（复用同一会话 /api/mcp upload_asset_chunk）
+  (function bindScriptUpload(){
+    var drop = document.getElementById('upload-drop-script');
+    var input = document.getElementById('upload-input-script');
+    if (!drop || !input) return;
+    drop.addEventListener('click', function(){ input.click(); });
+    drop.addEventListener('dragover', function(e){ e.preventDefault(); drop.style.borderColor = 'var(--accent)'; });
+    drop.addEventListener('dragleave', function(){ drop.style.borderColor = ''; });
+    drop.addEventListener('drop', function(e){
+      e.preventDefault(); drop.style.borderColor = '';
+      if (e.dataTransfer && e.dataTransfer.files) scriptHandleFiles(e.dataTransfer.files);
+    });
+    input.addEventListener('change', function(){ if (input.files) scriptHandleFiles(input.files); });
+  })();
+  async function scriptHandleFiles(files){
+    var prog = document.getElementById('script-progress');
+    var st = document.getElementById('script-status');
+    prog.style.display = 'block';
+    for (var i = 0; i < files.length; i++){
+      try {
+        await window.FFMCP.chunkUpload(files[i], {});
+        scriptUploaded++;
+        st.textContent = '已上传 ' + scriptUploaded + ' 张素材';
+      } catch (e){ st.textContent = '上传失败：' + e.message; showToast('上传失败：' + e.message); return; }
+    }
+  }
+
+  // 脚本模式渲染（先保存再提交；上游未支持自定义代码时返回明确提示）
+  document.getElementById('render-btn-script').addEventListener('click', async function(){
+    if (!ffMonaco){ showToast('编辑器未就绪'); return; }
+    if (scriptUploaded === 0){ showToast('请先上传至少 1 张素材'); return; }
+    var code = ffMonaco.getValue();
+    var name = (document.getElementById('comp-name').value || '帧流作品').trim();
+    var btn = this; btn.disabled = true;
+    var prog = document.getElementById('script-progress');
+    var fill = document.getElementById('script-fill');
+    var st = document.getElementById('script-status');
+    prog.style.display = 'block';
+    try {
+      var saveR = await fetch('/api/compositions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, code: code })
+      });
+      var saveJ = await saveR.json();
+      if (!saveR.ok){ st.textContent = '保存失败：' + (saveJ.error || saveR.status); btn.disabled = false; return; }
+      window.__ffCompId = saveJ.id;
+      st.textContent = '已保存，正在提交渲染…';
+      var rR = await fetch('/api/compositions/' + saveJ.id + '/render', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: name, aspect_ratio: '9:16', duration_per_image: 30 })
+      });
+      var rJ = await rR.json();
+      if (!rR.ok){ st.textContent = '提交未成功：' + (rJ.error || rR.status); showToast('渲染提交：' + (rJ.note || rJ.error || rR.status)); btn.disabled = false; return; }
+      var jobId = rJ.render_job_id || (rJ.data && rJ.data.render_job_id);
+      st.textContent = '已提交，任务号 ' + jobId + ' · 渲染中…';
+      showToast('已提交渲染任务 ' + jobId);
+      window.FFMCP.subscribeProgress(jobId, function(ev){
+        var pct = ev && (ev.percent || ev.progress || 0);
+        if (ev && ev.status === 'published'){ fill.style.width = '100%'; st.textContent = '渲染完成 · 链接：' + (ev.share_url || '(见控制台)'); showToast('渲染完成！'); btn.disabled = false; }
+        else { fill.style.width = pct + '%'; st.textContent = '渲染中 ' + pct + '%'; }
+      }, function(){ st.textContent = '进度订阅异常，将改用轮询'; });
+    } catch (e){ st.textContent = '提交失败：' + e.message; btn.disabled = false; }
+  });
 </script>
 </body>
 </html>

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"frameflow-bff/handlers"
+	"frameflow-bff/internal/composition"
 	"frameflow-bff/internal/config"
 	"frameflow-bff/internal/mcp"
 )
@@ -18,6 +19,8 @@ func main() {
 	cfg := config.Load()
 	store := mcp.NewSessionStore(cfg.MCPBaseURL, cfg.MCPAPIToken)
 	h := handlers.New(cfg, store)
+	comps := composition.NewStore()
+	ch := handlers.NewCompositionHandler(cfg, comps, store)
 
 	r := gin.Default()
 	r.Use(corsMiddleware(cfg))
@@ -33,6 +36,12 @@ func main() {
 		api.GET("/wechat/callback", h.WechatCallback)
 		api.GET("/me", h.Me)
 		api.POST("/logout", h.Logout)
+		// Custom Remotion composition editor surface (save/list/get are local;
+		// render is upstream-facing and auth-gated).
+		api.GET("/compositions", ch.List)
+		api.POST("/compositions", ch.Create)
+		api.GET("/compositions/:id", ch.Get)
+		api.POST("/compositions/:id/render", h.RequireAuth(), ch.Render)
 	}
 
 	// Serve the SPA from STATIC_DIR. Put index.html / config.js / mcp-client.js
@@ -46,6 +55,9 @@ func main() {
 	}
 	if !cfg.AuthRequired {
 		log.Println("[WARN] AUTH_REQUIRED is false — /api/mcp is open to anonymous callers. Set AUTH_REQUIRED=true before launch.")
+	}
+	if !cfg.CustomCompositionEnabled {
+		log.Println("[WARN] CUSTOM_COMPOSITION_ENABLED is false — the editor's 渲染此合成 will save the composition but return 501 (upstream MCP does not yet accept custom composition code). Set it true once upstream supports it.")
 	}
 
 	log.Printf("FrameFlow BFF listening on :%s (static dir: %s)", cfg.Port, cfg.StaticDir)

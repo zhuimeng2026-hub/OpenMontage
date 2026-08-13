@@ -24,6 +24,11 @@ type Config struct {
 	StaticDir         string // directory that holds index.html / config.js / mcp-client.js
 	AuthRequired      bool // require a logged-in WeChat session on /api/mcp + /api/render-progress
 	RateLimitPerMin   int  // token-bucket refill rate per session/IP (0 => 30)
+	// CustomCompositionEnabled gates rendering of user-authored Remotion code.
+	// Upstream dw.aixifs.com/mcp does NOT yet accept composition source, so this
+	// stays false: a render request with custom code returns 501 + a clear note
+	// instead of silently falling back to a template.
+	CustomCompositionEnabled bool
 }
 
 func Load() *Config {
@@ -48,6 +53,7 @@ func Load() *Config {
 		StaticDir:         get("STATIC_DIR", "./web"),
 		AuthRequired:      os.Getenv("AUTH_REQUIRED") == "true",
 		RateLimitPerMin:   getInt("RATE_LIMIT_PER_MIN", 30),
+		CustomCompositionEnabled: os.Getenv("CUSTOM_COMPOSITION_ENABLED") == "true",
 	}
 }
 

@@ -21,8 +21,8 @@ frameflow/
 
 | 层 | 职责 |
 | --- | --- |
-| 前端 `bff/web/` | 单页应用：登录、工作台、创建视频、画廊、渲染队列。通过 `config.js` 指向 BFF。 |
-| BFF `bff/` | 浏览器**不直接**持有 `MCP_API_TOKEN`；由它将 `/api/mcp` 转发到上游 MCP，并维护**每用户 MCP 会话亲和**（保证上传的图片与生成落在同一会话）。同时代理 `/api/render-progress` SSE、处理微信 `snsapi` 网页登录。 |
+| 前端 `bff/web/` | 单页应用：登录、工作台、创建视频、画廊、渲染队列。创建页含**「模板模式 / 脚本模式」**双入口；脚本模式内置 Monaco(TSX) 编辑器，可编写/保存自定义 Remotion 合成。通过 `config.js` 指向 BFF。 |
+| BFF `bff/` | 浏览器**不直接**持有 `MCP_API_TOKEN`；由它将 `/api/mcp` 转发到上游 MCP，并维护**每用户 MCP 会话亲和**（保证上传的图片与生成落在同一会话）。同时代理 `/api/render-progress` SSE、处理微信 `snsapi` 网页登录，并提供 `/api/compositions` 自定义合成保存/管理/渲染接口。 |
 | 渲染服务 `dw.aixifs.com/mcp` | 真实 Remotion 视频合成（OpenMontage 提供）。 |
 
 ## 协议要点（已与上游实测对齐）
@@ -41,8 +41,24 @@ BFF 已内置两道护栏，默认**仅在配置后生效**，避免误伤本地
 | --- | --- | --- |
 | `AUTH_REQUIRED` | `false` | 设为 `true` 后，`/api/mcp` 与 `/api/render-progress` 必须携带已登录的微信会话（`ff_sid` cookie），否则返回 401。**上线前必须设 `true`。** |
 | `RATE_LIMIT_PER_MIN` | `30` | 令牌桶限流，按会话（无会话时按 IP）对每个 `/api/*` 请求限速，超额返回 429（带 `Retry-After`）。 |
+| `CUSTOM_COMPOSITION_ENABLED` | `false` | 自定义合成（脚本模式）渲染开关。上游 `create_remotion_video_share` 目前**不接受**自定义代码，故默认关闭：编辑器可保存/管理合成，「渲染此合成」返回 501 明确提示而非伪造成功。待上游增加 `code` 入参后改为 `true` 即可点亮真实渲染。 |
 
 注意：当 `AUTH_REQUIRED=true` 但 `WECHAT_APP_ID` 仍未配置时，没有可登录的 IdP，BFF 会**自动降级为开放**并打印启动告警——所以「开启鉴权」的前提是先填好微信服务号参数。微信回调换票（`code → access_token → userinfo`）由 BFF 服务端完成，`WECHAT_APP_SECRET` 绝不下发前端。
+
+## 脚本模式（自定义 Remotion 合成）
+
+创建页顶部可切换「模板模式 / 脚本模式」：
+
+- **脚本模式**内置 Monaco 编辑器（TSX 语法高亮），预置一个图片轮播合成模板；用户可编写/保存/重置自定义 Remotion 合成，并上传素材。
+- 编辑器通过 `/api/compositions`（保存 / 列表 / 详情）把合成源码存到 BFF（按 `ff_sid` 会话隔离，内存存储；生产建议换 DB）。
+- 「渲染此合成」会先保存再提交渲染。
+
+**关键约束**：当前上游 `dw.aixifs.com/mcp` 的 `create_remotion_video_share` 只收 `duration_per_image / aspect_ratio / title`，**不接受自定义合成代码**。因此：
+
+- `CUSTOM_COMPOSITION_ENABLED=false`（默认）：保存正常，「渲染此合成」返回 `501` + 明确说明，**绝不伪造成功**。
+- 要真正按自定义代码出片，二选一：① 推动上游增加 `code` 入参后把开关设为 `true`；② 在 FrameFlow 侧**自托管 Remotion 渲染 worker**（装 Remotion + ffmpeg，按用户代码打包渲染）——这是自定义合成最可控的架构路径。
+
+Monaco 编辑器经 CDN（`cdn.jsdelivr.net`）加载，离线/完全自托管部署时请将其 vendor 到 `bff/web/` 并改 `index.html` 的 loader 路径。
 
 ## 运行
 
