@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -21,6 +22,8 @@ type Config struct {
 	Port              string
 	SessionSecure     bool // set true behind HTTPS
 	StaticDir         string // directory that holds index.html / config.js / mcp-client.js
+	AuthRequired      bool // require a logged-in WeChat session on /api/mcp + /api/render-progress
+	RateLimitPerMin   int  // token-bucket refill rate per session/IP (0 => 30)
 }
 
 func Load() *Config {
@@ -43,5 +46,18 @@ func Load() *Config {
 		Port:              get("BFF_PORT", "8080"),
 		SessionSecure:     os.Getenv("SESSION_SECURE") == "true",
 		StaticDir:         get("STATIC_DIR", "./web"),
+		AuthRequired:      os.Getenv("AUTH_REQUIRED") == "true",
+		RateLimitPerMin:   getInt("RATE_LIMIT_PER_MIN", 30),
 	}
+}
+
+// getInt reads an env var as int, falling back to def when unset/invalid.
+func getInt(k string, def int) int {
+	if v := os.Getenv(k); v != "" {
+		var n int
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
+			return n
+		}
+	}
+	return def
 }

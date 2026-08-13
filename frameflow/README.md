@@ -33,6 +33,17 @@ frameflow/
 - **会话亲和**：BFF 每用户一个长驻 MCP 客户端并串行化，轮换 `Mcp-Session-Id` 回带。
 - **SSE**：`GET /api/render-progress/{jobId}` 透传上游，nginx 前置时需 `proxy_buffering off`。
 
+## 安全配置（上线前必读）
+
+BFF 已内置两道护栏，默认**仅在配置后生效**，避免误伤本地联调：
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `AUTH_REQUIRED` | `false` | 设为 `true` 后，`/api/mcp` 与 `/api/render-progress` 必须携带已登录的微信会话（`ff_sid` cookie），否则返回 401。**上线前必须设 `true`。** |
+| `RATE_LIMIT_PER_MIN` | `30` | 令牌桶限流，按会话（无会话时按 IP）对每个 `/api/*` 请求限速，超额返回 429（带 `Retry-After`）。 |
+
+注意：当 `AUTH_REQUIRED=true` 但 `WECHAT_APP_ID` 仍未配置时，没有可登录的 IdP，BFF 会**自动降级为开放**并打印启动告警——所以「开启鉴权」的前提是先填好微信服务号参数。微信回调换票（`code → access_token → userinfo`）由 BFF 服务端完成，`WECHAT_APP_SECRET` 绝不下发前端。
+
 ## 运行
 
 详见 [`bff/README.md`](./bff/README.md)。速记：

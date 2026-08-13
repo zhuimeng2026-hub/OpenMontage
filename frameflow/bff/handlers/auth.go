@@ -16,12 +16,46 @@ const sessionCookieName = "ff_sid"
 
 // Handlers bundles the BFF dependencies.
 type Handlers struct {
-	Cfg   *config.Config
-	Store *mcp.SessionStore
+	Cfg       *config.Config
+	Store     *mcp.SessionStore
+	RateLimit *RateLimiter
 }
 
 func New(cfg *config.Config, store *mcp.SessionStore) *Handlers {
-	return &Handlers{Cfg: cfg, Store: store}
+	return &Handlers{
+		Cfg:       cfg,
+		Store:     store,
+		RateLimit: NewRateLimiter(cfg.RateLimitPerMin),
+	}
+}
+
+// RequireAuth gates the expensive upstream-facing routes. It is a no-op when
+// AUTH_REQUIRED is false. When enabled, it requires a logged-in WeChat session
+// (stored against the ff_sid cookie). If the IdP (WechatAppID) is not
+// configured there is no way to authenticate, so we degrade to open with a
+// startup warning — set AUTH_REQUIRED=true AND configure WeChat before launch.
+func (h *Handlers) RequireAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.Cfg.AuthRequired {
+			c.Next()
+			return
+		}
+		if h.Cfg.WechatAppID == "" {
+			// dev fallback: IdP not configured, nothing to authenticate against
+			c.Next()
+			return
+		}
+		sid, err := c.Cookie(sessionCookieName)
+		if err != nil || sid == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			return
+		}
+		if h.loadUser(sid) == nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			return
+		}
+		c.Next()
+	}
 }
 
 // ensureSession returns the BFF session id, creating + setting a cookie on first

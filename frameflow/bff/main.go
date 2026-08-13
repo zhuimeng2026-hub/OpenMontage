@@ -23,9 +23,12 @@ func main() {
 	r.Use(corsMiddleware(cfg))
 
 	api := r.Group("/api")
+	api.Use(h.RateLimit.Middleware())
 	{
-		api.POST("/mcp", h.MCPProxy)
-		api.GET("/render-progress/:jobId", h.RenderProgress)
+		// Expensive, upstream-facing routes: rate-limited (group) + auth-gated.
+		api.POST("/mcp", h.RequireAuth(), h.MCPProxy)
+		api.GET("/render-progress/:jobId", h.RequireAuth(), h.RenderProgress)
+		// Public: WeChat OAuth entry, session probe, logout.
 		api.GET("/wechat/login", h.WechatLogin)
 		api.GET("/wechat/callback", h.WechatCallback)
 		api.GET("/me", h.Me)
@@ -37,6 +40,13 @@ func main() {
 	// works with zero CORS friction. Unknown paths fall back to index.html
 	// (SPA client routing).
 	r.NoRoute(spaFallback(cfg.StaticDir))
+
+	if cfg.AuthRequired && cfg.WechatAppID == "" {
+		log.Println("[WARN] AUTH_REQUIRED=true but WechatAppID is not configured — /api/mcp is open. Configure the WeChat service account before launch.")
+	}
+	if !cfg.AuthRequired {
+		log.Println("[WARN] AUTH_REQUIRED is false — /api/mcp is open to anonymous callers. Set AUTH_REQUIRED=true before launch.")
+	}
 
 	log.Printf("FrameFlow BFF listening on :%s (static dir: %s)", cfg.Port, cfg.StaticDir)
 	if err := r.Run(":" + cfg.Port); err != nil {
