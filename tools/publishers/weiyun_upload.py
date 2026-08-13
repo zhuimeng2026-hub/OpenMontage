@@ -5,10 +5,8 @@ the MCP token (``WEIYUN_MCP_TOKEN``). This is the token-based path that does
 NOT require QR-code login or cookies — it reuses the proven FTN two-phase upload
 logic vendored into ``weiyun_upload_lib.py`` (from the WorkBuddy weiyun skill).
 
-This complements the cookie-based ``weiyun_publish`` tool: ``weiyun_publish``
-relies on the third-party ``weiyun_skills`` package + a cookies.json file, while
-this tool only needs the MCP token, which is the same credential the Tencent
-Weiyun MCP skill uses.
+This is the supported Weiyun upload path for OpenMontage. It only needs the
+MCP token, which is the same credential the Tencent Weiyun MCP skill uses.
 """
 
 from __future__ import annotations

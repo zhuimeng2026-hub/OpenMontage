@@ -14,3 +14,4 @@ openai>=2.44.0         # Videos API support for Sora 2
 fastapi>=0.110
 uvicorn>=0.29
 watchfiles>=0.21
+mcp>=1.29,<2.0        # FastMCP server API used by mcp_server.py

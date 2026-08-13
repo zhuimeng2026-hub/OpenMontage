@@ -89,6 +89,8 @@ from lib.workbuddy_session import (
     recover_orphans_and_rebuild_index,
 )
 from lib.render_progress import publish, progress_event, subscribe, unsubscribe
+from lib.user_auth import default_user_store
+from lib.web_auth_app import build_web_mount
 
 
 # ---------------------------------------------------------------------------
@@ -180,8 +182,15 @@ async def _run_tool_sync(tool, inputs: dict[str, Any]) -> Any:
 # Discover tools at import time
 # ---------------------------------------------------------------------------
 _discovered = registry.discover()
-_AVAILABLE = sum(1 for _ in registry.get_available())
-print(f"[mcp_server] Discovered {len(_discovered)} tools ({_AVAILABLE} available)", file=sys.stderr)
+# Do not probe every provider during import. Several status checks intentionally
+# inspect local/network services (ComfyUI, npm/HyperFrames, GPU backends); doing
+# that eagerly makes importing the MCP module block before tests or the server
+# can start. Availability is queried lazily by the provider menu/preflight.
+_AVAILABLE = None
+print(
+    f"[mcp_server] Discovered {len(_discovered)} tools (availability deferred)",
+    file=sys.stderr,
+)
 
 # ---------------------------------------------------------------------------
 # FastMCP instance
@@ -1120,7 +1129,7 @@ async def weiyun_upload(
     WEIYUN_MCP_TOKEN from the server environment (.env). Returns the Weiyun
     file_id and filename on success. Configure the token in the OpenMontage
     `.env` before calling. This is the token-based counterpart to the
-    cookie-based weiyun_publish tool.
+    token-based Weiyun upload tool.
     """
     tool = registry.get("weiyun_upload")
     if tool is None:
@@ -1214,6 +1223,13 @@ class BearerTokenAuthMiddleware:
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
         path = scope.get("path", "")
         method = scope.get("method", "GET")
+
+        # Browser login/callback and user-scoped web APIs authenticate with the
+        # server-side HttpOnly session cookie, not the shared MCP bearer token.
+        # Keep this exception narrowly scoped to /web; MCP and SSE remain
+        # bearer-protected.
+        if path == "/web" or path.startswith("/web/"):
+            return await self.app(scope, receive, send)
 
         # Log request with method and path
         auth_present = bool(headers.get(b"authorization", b"").startswith(b"Bearer "))
@@ -1346,7 +1362,7 @@ if __name__ == "__main__":
 
     transport = sys.argv[1] if len(sys.argv) > 1 else "streamable-http"
     _log.info("Starting OpenMontage MCP server on port 8900 (transport=%s)", transport)
-    _log.info("%s/%s tools available", _AVAILABLE, len(_discovered))
+    _log.info("%s tools discovered; provider availability is checked lazily", len(_discovered))
 
     _api_token = _load_mcp_token()
     if _api_token:
@@ -1370,6 +1386,10 @@ if __name__ == "__main__":
     if transport == "streamable-http":
         import uvicorn
         app = mcp.streamable_http_app()
+        # Web login is mounted on the same origin as MCP so a reverse proxy
+        # only needs one upstream. Its routes enforce the browser session
+        # cookie and never expose raw provider credentials.
+        app.router.routes.append(build_web_mount(default_user_store(_PROJECT_ROOT)))
         # Live render-progress stream (SSE). Mounted on the inner app so it
         # inherits the Bearer auth middleware applied just below.
         app.router.add_route(
