@@ -11,10 +11,12 @@
 ## 需求
 
 - **Node.js 22+**（`node -v` 确认）
-- **FFmpeg**（在 PATH 中；未安装则 `render` 会失败）
-  - macOS: `brew install ffmpeg`
-  - Windows: `winget install Gyan.FFmpeg` 或 scoop/巧克力
-  - Ubuntu: `sudo apt install ffmpeg`
+- **FFmpeg**（渲染必需，HyperFrames 用它编码 MP4）
+  - 本仓库已自带一份（Windows x64），无需单独安装：
+    `remotion-composer/node_modules/@remotion/compositor-win32-x64-msvc/ffmpeg.exe`
+  - 临时加入 PATH 再渲染（Windows PowerShell）：
+    `$env:PATH = "C:\Users\huawei\OpenMontage\remotion-composer\node_modules\@remotion\compositor-win32-x64-msvc;" + $env:PATH`
+  - 或系统安装：macOS `brew install ffmpeg` / Windows `winget install Gyan.FFmpeg` / Ubuntu `sudo apt install ffmpeg`
 
 ## 运行
 
