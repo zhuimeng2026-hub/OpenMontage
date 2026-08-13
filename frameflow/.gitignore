@@ -1,0 +1,12 @@
+# 编译产物：部署时由 CI / Docker 重新编译，不入库
+bff/bff
+bff/bff.exe
+
+# 本地环境变量（含 MCP_API_TOKEN / 微信 secret，绝不入库）
+.env
+*.env
+.env.local
+
+# 根 .gitignore 全局忽略了 internal/，但本项目的 internal/ 是 Go 源码，必须入库
+!bff/internal/
+!bff/internal/**
