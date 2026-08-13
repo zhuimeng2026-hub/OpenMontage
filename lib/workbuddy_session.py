@@ -145,25 +145,41 @@ def find_session_by_job_id(job_id: str) -> dict[str, Any] | None:
 # Statuses that mean a render was in-flight when the process died.
 _ORPHAN_STATUSES = frozenset({"rendering", "queued"})
 
+# render_phase value meaning "claimed a slot but still waiting for a Remotion
+# render slot (blocked on the semaphore)". Such jobs have NOT started
+# ``remotion render`` yet, so they are safe to re-enqueue after a restart
+# instead of being marked failed.
+_REQUEUE_PHASE = "queued_for_slot"
+
+# The durable job-record file written by lib.render_queue; recovery must skip
+# it when scanning STATE_DIR so it is neither treated as a session nor indexed.
+_JOBS_FILENAME = ".render_jobs.json"
+
 
 def recover_orphans_and_rebuild_index() -> dict[str, int]:
-    """Startup maintenance: mark in-flight sessions as failed and rebuild index.
+    """Startup maintenance: re-enqueue waiting jobs, fail active ones, rebuild index.
 
-    Any session left in ``rendering``/``queued`` was interrupted by a server
-    crash/restart — the daemon thread that would finish it is gone — so it is
-    flagged ``status='failed'`` with ``failure_stage='orphaned'`` and a
-    human-readable error. The job→session index is then rebuilt from disk so it
-    reflects reality (and self-heals a corrupted/missing index).
+    A session left ``rendering``/``queued`` was interrupted by a server
+    crash/restart — the daemon thread that would finish it is gone. Two cases:
 
-    Renders are NOT auto-restarted: that would double-render and waste
-    resources. Callers should ask the user to retry the render.
+    * ``render_phase == 'queued_for_slot'`` — the job was *waiting for a render
+      slot*, not actually rendering. Its durable job record (lib.render_queue)
+      is still on disk, so it is re-enqueued: the caller (mcp_server startup)
+      re-dispatches it. It is NOT marked failed.
+    * otherwise (actively rendering, or no phase) — marked ``status='failed'``
+      with ``failure_stage='orphaned'``. Renders are NOT auto-restarted because
+      that would double-render and waste resources.
+
+    The job→session index is rebuilt from disk so it reflects reality (and
+    self-heals a corrupted/missing index).
     """
     orphaned = 0
+    requeued: list[str] = []
     index: dict[str, str] = {}
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     index_path = _index_path()
     for path in STATE_DIR.glob("*.json"):
-        if path == index_path:
+        if path == index_path or path.name == _JOBS_FILENAME:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -171,19 +187,24 @@ def recover_orphans_and_rebuild_index() -> dict[str, int]:
             continue
         digest = path.stem
         if data.get("status") in _ORPHAN_STATUSES:
-            data["status"] = "failed"
-            data["failure_stage"] = "orphaned"
-            data["error"] = "interrupted by server restart; please retry the render"
-            try:
-                _write(path, data)
-            except OSError:
-                pass
-            orphaned += 1
+            if data.get("render_phase") == _REQUEUE_PHASE:
+                # Waiting for a slot, not rendering: keep for re-dispatch.
+                requeued.append(data.get("render_job_id"))
+            else:
+                data["status"] = "failed"
+                data["failure_stage"] = "orphaned"
+                data["error"] = "interrupted by server restart; please retry the render"
+                try:
+                    _write(path, data)
+                except OSError:
+                    pass
+                orphaned += 1
         render_job_id = data.get("render_job_id")
         if render_job_id:
             index[render_job_id] = digest
     _write_index(index)
-    return {"orphaned": orphaned, "indexed": len(index)}
+    return {"orphaned": orphaned, "indexed": len(index), "requeued": len(requeued),
+            "_requeued_ids": requeued}
 
 
 @contextmanager
@@ -266,6 +287,31 @@ def update(session_id: str | None, **changes: Any) -> dict[str, Any]:
         state.update(changes)
         _write(_state_path(digest), state)
         return state
+
+
+def fail_job_by_id(job_id: str, *, stage: str = "orphaned", error: str) -> bool:
+    """Mark the session owning ``job_id`` as failed, resolved via the index.
+
+    Used by startup re-dispatch when a requeued job's durable record is missing
+    (cannot be re-run), so the stuck session does not sit in ``queued_for_slot``
+    forever. Returns True if a session was updated.
+    """
+    if not job_id:
+        return False
+    with _index_lock:
+        digest = _read_index().get(job_id)
+    if not digest:
+        return False
+    with _lock_for(digest):
+        state = _read(digest)
+        if not state:
+            return False
+        state["status"] = "failed"
+        state["failure_stage"] = stage
+        state["error"] = error
+        state["render_phase"] = None
+        _write(_state_path(digest), state)
+    return True
 
 
 def public_state(state: dict[str, Any]) -> dict[str, Any]:

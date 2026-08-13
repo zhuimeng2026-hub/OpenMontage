@@ -1156,6 +1156,10 @@ class VideoCompose(BaseTool):
             # can stream to the SSE endpoint instead of being swallowed.
             if inputs.get("_progress_callback") is not None:
                 remotion_inputs["_progress_callback"] = inputs["_progress_callback"]
+            # Forward the render job id so the slot gate can book the waiting
+            # set and report queue position/depth (see _remotion_render gate).
+            if inputs.get("_job_id") is not None:
+                remotion_inputs["_job_id"] = inputs["_job_id"]
             render_result = self._remotion_render(remotion_inputs)
 
             # Governance: NEVER silently fall back to FFmpeg when Remotion fails.
@@ -1570,18 +1574,39 @@ class VideoCompose(BaseTool):
                 pass
 
         # 闸门：限制并发 Remotion 进程数，防止多用户无界扇出打爆宿主。
-        # 排队/拿到槽位的状态经 progress_callback 上行，SSE 借此显示「排队→渲染」。
+        # 排队/拿到槽位的状态经 progress_callback 上行，SSE 借此显示「排队→渲染」，
+        # 并由 mcp_server._run_render_job 写入 session 的 render_phase + 排队位。
+        # 这里用 RenderQueue 记账等待集并返回排队位（position/depth）。
         sem = _get_remotion_render_semaphore()
+        job_id = inputs.get("_job_id")
+        try:
+            from lib.render_queue import get_render_queue
+            _rq = get_render_queue()
+        except Exception:  # noqa: BLE001 - 队列模块不可用时退化为无记账
+            _rq = None
+        if _rq is not None and job_id:
+            pos, depth = _rq.enter(job_id)
+            _queued_msg = f"排队中，第 {pos}/{depth} 位，等待可用渲染槽位"
+        else:
+            pos = depth = None
+            _queued_msg = "等待可用的 Remotion 渲染槽位"
         if progress_callback:
             try:
-                progress_callback({"phase": "render", "status": "queued",
-                                   "message": "等待可用的 Remotion 渲染槽位"})
+                _ev = {"phase": "render", "status": "queued", "slot_waiting": True,
+                       "message": _queued_msg}
+                if pos is not None:
+                    _ev["position"] = pos
+                    _ev["queue_depth"] = depth
+                progress_callback(_ev)
             except Exception:  # noqa: BLE001
                 pass
         with sem:
+            if _rq is not None and job_id:
+                _rq.leave(job_id)
             if progress_callback:
                 try:
                     progress_callback({"phase": "render", "status": "rendering",
+                                       "slot_acquired": True,
                                        "message": "已获取 Remotion 渲染槽位"})
                 except Exception:  # noqa: BLE001
                     pass

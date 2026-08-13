@@ -87,8 +87,15 @@ from lib.workbuddy_session import (
     update as update_session,
     find_session_by_job_id,
     recover_orphans_and_rebuild_index,
+    fail_job_by_id,
 )
 from lib.render_progress import publish, progress_event, subscribe, unsubscribe
+from lib.render_queue import (
+    get_render_queue,
+    save_job_record,
+    delete_job_record,
+    load_job_record,
+)
 from lib.user_auth import default_user_store
 from lib.web_auth_app import build_web_mount
 
@@ -640,14 +647,21 @@ async def create_remotion_video_share(
 
     # Dispatch the long-running render→upload→share pipeline to a background
     # thread so this MCP call returns immediately (no client-side timeout).
+    job_kwargs = dict(
+        sid=sid, request_id=request_id, project=project, batch_id=batch_id,
+        job_id=job_id, safe_assets=safe_assets, edit_decisions=edit_decisions,
+        asset_manifest=asset_manifest, scene_plan=scene_plan, profile=profile,
+        output=str(output), title=title, asset_count=len(safe_assets),
+    )
+    # Persist the dispatch kwargs so a job still waiting for a render slot at
+    # restart time can be re-dispatched (see recover_orphans + _drain_queued_jobs).
+    try:
+        save_job_record(job_id, job_kwargs)
+    except Exception as exc:  # noqa: BLE001 - 持久化失败不应阻断派发
+        _log.warning("Failed to persist render job record for %s: %s", job_id, exc)
     threading.Thread(
         target=_run_render_job,
-        kwargs=dict(
-            sid=sid, request_id=request_id, project=project, batch_id=batch_id,
-            job_id=job_id, safe_assets=safe_assets, edit_decisions=edit_decisions,
-            asset_manifest=asset_manifest, scene_plan=scene_plan, profile=profile,
-            output=str(output), title=title, asset_count=len(safe_assets),
-        ),
+        kwargs=job_kwargs,
         daemon=True,
     ).start()
     _event("render_queued", request_id=request_id, session_hash=session_hash(sid), project_id=project, batch_id=batch_id, asset_count=len(safe_assets), render_job_id=job_id, status="queued", duration_ms=round((time.monotonic() - started) * 1000))
@@ -676,7 +690,33 @@ def _run_render_job(
         digest = session_hash(sid)
 
         def _publish_progress(partial: dict) -> None:
-            """Bridge a partial progress dict onto the SSE bus for this job."""
+            """Bridge a partial progress dict onto the SSE bus for this job.
+
+            Also books the render queue and mirrors queue state into the session
+            so ``get_render_status`` (polling) and the SSE snapshot both expose
+            ``render_phase`` / ``queue_position`` / ``queue_depth``. The precise
+            slot gate (enter/leave) lives in tools/video/video_compose.py; here
+            we react to its ``slot_waiting`` / ``slot_acquired`` markers.
+            """
+            status = partial.get("status")
+            if partial.get("slot_waiting"):
+                # Was just placed into the waiting set; surface its rank.
+                partial = {**partial,
+                           "render_phase": "queued_for_slot"}
+                update_session(sid, render_phase="queued_for_slot",
+                               queue_position=partial.get("position"),
+                               queue_depth=partial.get("queue_depth"))
+            elif partial.get("slot_acquired"):
+                update_session(sid, render_phase="rendering",
+                               queue_position=None, queue_depth=None)
+            elif status in ("published", "failed"):
+                # Terminal: drop any residual queue bookkeeping.
+                try:
+                    get_render_queue().leave(job_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                update_session(sid, render_phase=None,
+                               queue_position=None, queue_depth=None)
             publish(job_id, progress_event(job_id, **partial))
 
         try:
@@ -685,7 +725,7 @@ def _run_render_job(
             render_tool = registry.get("video_compose")
             if render_tool is None:
                 raise RuntimeError("video_compose tool is not registered")
-            render_result = await _run_tool_sync(render_tool, {"operation": "render", "edit_decisions": edit_decisions, "asset_manifest": asset_manifest, "scene_plan": scene_plan, "profile": profile, "output_path": output, "remotion_timeout_ms": 600000, "_progress_callback": _publish_progress})
+            render_result = await _run_tool_sync(render_tool, {"operation": "render", "edit_decisions": edit_decisions, "asset_manifest": asset_manifest, "scene_plan": scene_plan, "profile": profile, "output_path": output, "remotion_timeout_ms": 600000, "_progress_callback": _publish_progress, "_job_id": job_id})
             if not render_result.success:
                 raise RuntimeError(render_result.error or "Remotion render failed")
             video_path = output
@@ -760,6 +800,14 @@ def _run_render_job(
     except Exception as exc:
         update_session(sid, status="failed", failure_stage="background_crash", error=f"background render job crashed: {exc}")
         _log.exception("background render job crashed for job %s", job_id)
+    finally:
+        # Drop the durable job record once this run is terminal (success or
+        # failure). Re-dispatched jobs from a restart reuse the same record and
+        # only delete it when *their* run finishes.
+        try:
+            delete_job_record(job_id)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _find_session_by_job(render_job_id: str) -> dict[str, Any] | None:
@@ -786,6 +834,9 @@ def get_render_status(render_job_id: str) -> dict[str, Any]:
         "status": state.get("status"),
         "stage": state.get("failure_stage"),
         "error": state.get("error"),
+        "render_phase": state.get("render_phase"),
+        "queue_position": state.get("queue_position"),
+        "queue_depth": state.get("queue_depth"),
         "batch_id": state.get("batch_id"),
         "project_id": state.get("project_id"),
         "video_path": state.get("video_path"),
@@ -1315,6 +1366,9 @@ async def render_progress_sse(request: "Request"):
                 status=state.get("status"),
                 stage=state.get("failure_stage"),
                 error=state.get("error"),
+                render_phase=state.get("render_phase"),
+                queue_position=state.get("queue_position"),
+                queue_depth=state.get("queue_depth"),
                 share_url=state.get("share_url"),
                 video_path=state.get("video_path"),
             )
@@ -1352,6 +1406,41 @@ async def render_progress_sse(request: "Request"):
 
 
 # ---------------------------------------------------------------------------
+# Startup queue drain (restart recovery for waiting jobs)
+# ---------------------------------------------------------------------------
+def _drain_queued_jobs(requeued_ids: list[str]) -> int:
+    """Re-dispatch render jobs that were waiting for a slot at restart time.
+
+    ``recover_orphans_and_rebuild_index`` leaves ``queued_for_slot`` sessions
+    intact and returns their job ids here. Each job's durable record (written
+    by ``save_job_record`` at dispatch) carries the exact kwargs needed to
+    re-run the pipeline, so we simply spawn a fresh background thread per job.
+    Jobs whose record is missing are marked failed (cannot be re-run).
+    """
+    if not requeued_ids:
+        return 0
+    drained = 0
+    for job_id in requeued_ids:
+        if not job_id:
+            continue
+        record = load_job_record(job_id)
+        if not record:
+            _log.warning("Cannot re-dispatch job %s: no durable record; marking failed", job_id)
+            try:
+                fail_job_by_id(job_id, stage="orphaned",
+                               error="render job record lost on restart; please retry")
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("fail_job_by_id(%s) failed: %s", job_id, exc)
+            continue
+        # The re-dispatched thread re-enters the queue and re-sets render_phase
+        # via its slot_waiting/slot_acquired events, so no pre-clearing needed.
+        threading.Thread(target=_run_render_job, kwargs=record, daemon=True).start()
+        drained += 1
+        _log.info("Re-dispatched waiting render job %s after restart", job_id)
+    return drained
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1378,10 +1467,21 @@ if __name__ == "__main__":
     # get_render_status stays correct and O(1).
     try:
         stats = recover_orphans_and_rebuild_index()
-        _log.info("Orphan recovery: %d session(s) marked failed, %d job(s) indexed",
-                  stats["orphaned"], stats["indexed"])
+        _log.info("Orphan recovery: %d session(s) marked failed, %d job(s) indexed, %d waiting job(s) to re-dispatch",
+                  stats["orphaned"], stats["indexed"], stats.get("requeued", 0))
     except Exception as exc:  # pragma: no cover - defensive
         _log.warning("Orphan recovery failed (continuing startup): %s", exc)
+        stats = {}
+
+    # Re-dispatch render jobs that were merely *waiting for a slot* (not actively
+    # rendering) when the process last died. Their durable job records let us
+    # rebuild the exact pipeline without double-rendering in-flight work.
+    try:
+        drained = _drain_queued_jobs(stats.get("_requeued_ids", []))
+        if drained:
+            _log.info("Re-dispatched %d waiting render job(s) after restart", drained)
+    except Exception as exc:  # pragma: no cover - defensive
+        _log.warning("Queue drain failed (continuing startup): %s", exc)
 
     if transport == "streamable-http":
         import uvicorn
