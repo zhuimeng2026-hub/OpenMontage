@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenMontage × HyperFrames</title>
+
+  <!--
+    HyperFrames 示例：一张 index.html -> 一段 MP4
+    - 时间轴用 data-start / data-duration / data-track-index 声明
+    - 动画用 GSAP，注册成 paused 时间线挂到 window.__timelines[compositionId]
+      渲染器在无头 Chrome 里逐帧 seek 这个 paused 时间线，保证确定性
+    - 字幕是普通 HTML 文本（覆盖层），会被一起截进 MP4 = 烧录字幕
+  -->
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%; height: 100%;
+      font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      overflow: hidden;
+      background: #05060a;
+    }
+
+    /* 根舞台：用 data-* 定义合成的尺寸与时间轴起点 */
+    #stage {
+      position: relative;
+      width: 100vw; height: 100vh;
+      /* 渐变背景：即使没有 assets/bg.mp4 也能直接出片 */
+      background: radial-gradient(120% 120% at 20% 10%, #1b2a4a 0%, #0a0f1f 45%, #05060a 100%);
+      color: #fff;
+      overflow: hidden;
+    }
+
+    /* 背景视频铺满舞台（可选，缺文件时渐变透出） */
+    #bg {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      opacity: 0.55;
+    }
+
+    /* 顶部品牌 chip */
+    #brand {
+      position: absolute; top: 6%; left: 6%;
+      display: flex; align-items: center; gap: 12px;
+      font-size: 26px; font-weight: 700; letter-spacing: 0.5px;
+      text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+    }
+    #brand .dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: linear-gradient(135deg, #4f8cff, #9b5cff);
+      box-shadow: 0 0 18px #4f8cff;
+    }
+
+    /* 主标题与副标题居中 */
+    #center {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; padding: 0 8vw;
+    }
+    #title {
+      font-size: 92px; font-weight: 800; line-height: 1.05;
+      background: linear-gradient(135deg, #ffffff 0%, #bcd2ff 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      text-shadow: 0 8px 40px rgba(79,140,255,0.35);
+    }
+    #tagline {
+      margin-top: 22px; font-size: 34px; font-weight: 500;
+      color: #c7d4f0; letter-spacing: 1px;
+    }
+
+    /* 烧录字幕：每条是一个 clip，落在底部居中，时间窗内显示 */
+    .caption {
+      position: absolute; left: 50%; bottom: 9%;
+      transform: translateX(-50%);
+      max-width: 80vw;
+      padding: 14px 28px;
+      font-size: 38px; font-weight: 600; text-align: center;
+      color: #fff;
+      background: rgba(8, 12, 24, 0.62);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 16px;
+      backdrop-filter: blur(6px);
+      text-shadow: 0 2px 10px rgba(0,0,0,0.7);
+    }
+
+    /* 底部页脚 */
+    #footer {
+      position: absolute; bottom: 4%; right: 6%;
+      font-size: 22px; color: #8ea2c8; letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+  <!-- data-composition-id 必须唯一；data-width/height 决定输出分辨率 -->
+  <div id="stage" data-composition-id="demo" data-start="0" data-width="1920" data-height="1080">
+
+    <!-- 轨道 0：背景视频（可选，缺文件时渐变背景透出） -->
+    <video id="bg" class="clip"
+           data-start="0" data-duration="8" data-track-index="0"
+           src="assets/bg.mp4" muted playsinline></video>
+
+    <!-- 轨道 0 也可放一张背景图兜底，取消注释即可 -->
+    <!-- <img id="bg" class="clip" data-start="0" data-duration="8" data-track-index="0" src="assets/bg.jpg" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.5" /> -->
+
+    <!-- 品牌 chip：轨道 1 -->
+    <div id="brand" class="clip" data-start="0" data-duration="8" data-track-index="1">
+      <span class="dot"></span> OpenMontage
+    </div>
+
+    <!-- 主标题区：轨道 2 / 3，GSAP 负责入场 -->
+    <div id="center">
+      <h1 id="title" class="clip" data-start="0" data-duration="8" data-track-index="2">
+        HTML 即影片
+      </h1>
+      <p id="tagline" class="clip" data-start="0" data-duration="8" data-track-index="3">
+        浏览器就是你的渲染引擎
+      </p>
+    </div>
+
+    <!-- 烧录字幕：每条 clip 落在各自时间窗，文本会被截进 MP4 -->
+    <div class="caption clip" data-start="2.0" data-duration="1.5" data-track-index="4">
+      用 HTML 写视频，浏览器就是渲染引擎
+    </div>
+    <div class="caption clip" data-start="3.6" data-duration="1.5" data-track-index="4">
+      GSAP / CSS / Three.js 驱动确定性动画
+    </div>
+    <div class="caption clip" data-start="5.2" data-duration="1.5" data-track-index="4">
+      一张 index.html → 一段可发布的 MP4
+    </div>
+    <div class="caption clip" data-start="6.8" data-duration="1.2" data-track-index="4">
+      OpenMontage · HyperFrames 工作流演示
+    </div>
+
+    <!-- 页脚：轨道 5 -->
+    <div id="footer" class="clip" data-start="0" data-duration="8" data-track-index="5">
+      demo · 8s · 1920×1080
+    </div>
+  </div>
+
+  <!-- GSAP：用 CDN 即可，无需构建 -->
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+  <script>
+    // 关键：paused 时间线，渲染器逐帧 seek 它，保证同一输入同一输出
+    const tl = gsap.timeline({ paused: true });
+    tl.from("#title",   { opacity: 0, y: 60, scale: 0.92, duration: 0.9, ease: "power3.out" }, 0.4);
+    tl.from("#tagline", { opacity: 0, y: 24, duration: 0.6, ease: "power2.out" }, 1.2);
+    tl.from("#brand",   { opacity: 0, x: -30, duration: 0.6, ease: "power2.out" }, 0.2);
+
+    // 注册到 HyperFrames 约定的全局对象，键名 = data-composition-id
+    window.__timelines = window.__timelines || {};
+    window.__timelines.demo = tl;
+
+    /*
+      进阶：需要“随时间切换”的动态字幕（而非分段 clip），
+      可监听 HyperFrames 的 hf-seek 事件，按 e.detail.time 切换文本：
+        window.addEventListener('hf-seek', (e) => {
+          const t = e.detail.time;
+          captionEl.textContent = pickLine(t);
+        });
+      本例用分段 clip 写法，确定性强、无需自定义 seek 逻辑。
+    */
+  </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "openmontage-hyperframes-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HyperFrames 示例（独立于 Remotion 管线）：index.html -> MP4，含背景视频、GSAP 入场、烧录字幕",
+  "scripts": {
+    "preview": "hyperframes preview",
+    "render": "hyperframes render"
+  },
+  "devDependencies": {
+    "hyperframes": "latest"
+  }
+}
