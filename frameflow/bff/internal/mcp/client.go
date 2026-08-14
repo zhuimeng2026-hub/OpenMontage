@@ -16,9 +16,9 @@ import (
 //
 // CRITICAL: the upstream rotates Mcp-Session-Id on EVERY response, and the
 // server binds uploaded assets to the session behind that id. So one logical
-// user must reuse the SAME Client instance across all calls — otherwise the
-// images uploaded by upload_asset_chunk and the later create_remotion_video_share
-// land in different sessions and the素材 disappears.
+// upload workflow must reuse the SAME Client instance across all calls —
+// otherwise the images uploaded by upload_asset_chunk and the later
+// create_remotion_video_share land in different sessions and the素材 disappears.
 //
 // A mutex serializes requests on a client so the evolving SID stays consistent
 // even if the browser fires several chunk uploads concurrently.
@@ -34,6 +34,15 @@ type Client struct {
 	// `WyHeader: mcp_token=<key>`.
 	authHeader string
 	authPrefix string
+}
+
+// SessionID returns the latest upstream MCP session identifier observed by
+// this client. It is persistent metadata only; callers must not assume an MCP
+// session can be resumed after a BFF or upstream restart.
+func (c *Client) SessionID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sid
 }
 
 func NewClient(baseURL, token string) *Client {
@@ -65,6 +74,8 @@ type jsonRPCRequest struct {
 }
 
 func (c *Client) id() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.nextID++
 	return c.nextID
 }

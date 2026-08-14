@@ -22,11 +22,15 @@ type Config struct {
 	Port              string
 	SessionSecure     bool   // set true behind HTTPS
 	StaticDir         string // directory that holds index.html / config.js / mcp-client.js
+	StateDBPath       string // SQLite path for durable batches and quotas
 	AuthRequired      bool   // require a logged-in WeChat session on /api/mcp + /api/render-progress
 	// DevLoginAllowed enables the DEV-ONLY /api/_dev_login session bootstrap
 	// (see Handlers.DevLogin). It must stay false in production.
-	DevLoginAllowed bool
-	RateLimitPerMin   int    // token-bucket refill rate per session/IP (0 => 30)
+	DevLoginAllowed       bool
+	RateLimitPerMin       int // token-bucket refill rate per session/IP (0 => 30)
+	ImageBatchMaxParallel int // local process-wide image batch render limit (0 => 2)
+	ImageBatchMaxPerUser  int // local per-session image batch render limit (0 => 2)
+	ImageBatchLeaseTTLMin int // SQLite render lease TTL in minutes (0 => 30)
 	// CustomCompositionEnabled gates rendering of user-authored Remotion code.
 	// Upstream dw.aixifs.com/mcp does NOT yet accept composition source, so this
 	// stays false: a render request with custom code returns 501 + a clear note
@@ -69,9 +73,13 @@ func Load() *Config {
 		Port:                     get("BFF_PORT", "8080"),
 		SessionSecure:            os.Getenv("SESSION_SECURE") == "true",
 		StaticDir:                get("STATIC_DIR", "./web"),
+		StateDBPath:              get("STATE_DB_PATH", "./data/frameflow.db"),
 		AuthRequired:             os.Getenv("AUTH_REQUIRED") == "true",
 		DevLoginAllowed:          os.Getenv("DEV_LOGIN_ALLOWED") == "true",
 		RateLimitPerMin:          getInt("RATE_LIMIT_PER_MIN", 30),
+		ImageBatchMaxParallel:    getInt("IMAGE_BATCH_MAX_PARALLEL", 2),
+		ImageBatchMaxPerUser:     getInt("IMAGE_BATCH_MAX_PER_USER", 2),
+		ImageBatchLeaseTTLMin:    getInt("IMAGE_BATCH_LEASE_TTL_MIN", 30),
 		CustomCompositionEnabled: os.Getenv("CUSTOM_COMPOSITION_ENABLED") == "true",
 		BusinessStubJSON:         os.Getenv("BUSINESS_STUB_IMAGES"),
 		WeiyunMCPURL:             get("WEIYUN_MCP_URL", "https://www.weiyun.com/api/v3/mcpserver"),

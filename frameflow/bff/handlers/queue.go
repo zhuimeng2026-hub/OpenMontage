@@ -38,7 +38,14 @@ func (h *Handlers) refreshJobStatuses(sid string, jobs []*mcp.RenderJob) {
 			continue
 		}
 		refreshed++
-		res, err := h.Store.Call(sid, "get_render_status", map[string]interface{}{"render_job_id": j.JobID})
+		args := map[string]interface{}{"render_job_id": j.JobID}
+		var res map[string]interface{}
+		var err error
+		if j.BatchID != "" || j.ProjectID != "" {
+			res, err = h.Store.CallBatch(sid, j.BatchID, j.ProjectID, "get_render_status", args)
+		} else {
+			res, err = h.Store.Call(sid, "get_render_status", args)
+		}
 		if err != nil {
 			continue
 		}

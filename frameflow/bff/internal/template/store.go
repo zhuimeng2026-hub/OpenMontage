@@ -129,13 +129,19 @@ func (s *Store) SaveTemplate(sid, name, projectBase, aspect, titleTpl string, du
 func (s *Store) GetTemplate(sid, id string) *Template {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data(sid).templates[id]
+	if d := s.bySess[sid]; d != nil {
+		return d.templates[id]
+	}
+	return nil
 }
 
 func (s *Store) ListTemplates(sid string) []*Template {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	d := s.data(sid)
+	d := s.bySess[sid]
+	if d == nil {
+		return []*Template{}
+	}
 	out := make([]*Template, 0, len(d.templates))
 	for _, t := range d.templates {
 		out = append(out, t)
@@ -164,13 +170,19 @@ func (s *Store) AddScenario(sid, templateID, businessKey string) *Scenario {
 func (s *Store) GetScenario(sid, id string) *Scenario {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data(sid).scenarios[id]
+	if d := s.bySess[sid]; d != nil {
+		return d.scenarios[id]
+	}
+	return nil
 }
 
 func (s *Store) ListScenarios(sid, templateID string) []*Scenario {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	d := s.data(sid)
+	d := s.bySess[sid]
+	if d == nil {
+		return []*Scenario{}
+	}
 	out := make([]*Scenario, 0)
 	for _, sc := range d.scenarios {
 		if sc.TemplateID == templateID {
@@ -222,7 +234,10 @@ func (s *Store) CreateBatchJob(sid, templateID string, scenarioIDs []string) *Ba
 func (s *Store) GetBatchJob(sid, id string) *BatchJob {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data(sid).jobs[id]
+	if d := s.bySess[sid]; d != nil {
+		return d.jobs[id]
+	}
+	return nil
 }
 
 func (s *Store) SetJobOutput(sid, jobID, scenarioID, url string) {

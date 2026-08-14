@@ -25,6 +25,7 @@
   var cfg = (window.FF_CONFIG && window.FF_CONFIG.remotion) || {};
   var BFF = (cfg.bffBaseUrl || '').replace(/\/+$/, '');
   var DEMO = !BFF;
+  var demoMode = DEMO; // 运行时可切换：点「体验演示模式」后置 true，使全流程走本地模拟
   var CHUNK = 400 * 1000; // 单片二进制字节数，与 om_mcp_probe.py 的 chunk=400_000 对齐
 
   // ---- base64 / hex 工具 ----
@@ -50,7 +51,7 @@
 
   // ---- BFF 调用封装 ----
   async function mcpCall(tool, args) {
-    if (DEMO) return { __demo: true, tool: tool, args: args || {} };
+    if (demoMode) return { __demo: true, tool: tool, args: args || {} };
     var ctrl = new AbortController();
     var timer = setTimeout(function () { ctrl.abort(); }, 30000); // 30s 超时，防止请求挂死
     try {
@@ -81,7 +82,7 @@
     var sha = await sha256Hex(buf);
     var safe = file.name.replace(/[^\w.\-]/g, '_');
 
-    if (DEMO) {
+    if (demoMode) {
       var sent = 0;
       while (sent < n) {
         await new Promise(function (r) { setTimeout(r, 60); });
@@ -120,9 +121,13 @@
     }
 
     // 3) complete
-    return await mcpCall('upload_asset_chunk', {
+    var complete = await mcpCall('upload_asset_chunk', {
       operation: 'complete', project_id: projectId, filename: safe, upload_id: uploadId
     });
+    if (!complete || complete.success === false || (complete.data && complete.data.success === false)) {
+      throw new Error('chunk complete 失败：' + JSON.stringify(complete));
+    }
+    return complete;
   }
 
   // ---- 创建视频（非阻塞）：返回 render_job_id + batch_id ----
@@ -134,7 +139,7 @@
       aspect_ratio: opts.aspectRatio || '9:16',
       title: opts.title || '帧流作品'
     };
-    if (DEMO) {
+    if (demoMode) {
       return {
         success: true, demo: true,
         render_job_id: 'JOB-' + Math.random().toString(16).slice(2, 8).toUpperCase(),
@@ -142,18 +147,23 @@
         message: '已提交渲染任务（演示）'
       };
     }
-    return await mcpCall('create_remotion_video_share', args);
+    var result = await mcpCall('create_remotion_video_share', args);
+    var jobId = result && (result.render_job_id || (result.data && result.data.render_job_id));
+    if (!jobId || result.success === false || (result.data && result.data.success === false)) {
+      throw new Error('渲染提交失败：' + JSON.stringify(result));
+    }
+    return result;
   }
 
   // ---- 轮询渲染状态（SSE 不可用时的兜底）----
   async function getRenderStatus(jobId) {
-    if (DEMO) return null;
+    if (demoMode) return null;
     return await mcpCall('get_render_status', { render_job_id: jobId });
   }
 
   // ---- SSE 实时进度（优先）----
   function subscribeProgress(jobId, onEvent, onError) {
-    if (DEMO) {
+    if (demoMode) {
       var pct = 0;
       var timer = setInterval(function () {
         pct += 3 + Math.random() * 5;
@@ -176,7 +186,8 @@
   }
 
   window.FFMCP = {
-    demo: DEMO,
+    get demo() { return demoMode; },
+    setDemo: function (on) { demoMode = (on === undefined) ? true : !!on; },
     bffBaseUrl: BFF,
     chunkSize: CHUNK,
     mcpCall: mcpCall,

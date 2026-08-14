@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,19 +14,39 @@ import (
 	"frameflow-bff/internal/business"
 	"frameflow-bff/internal/composition"
 	"frameflow-bff/internal/config"
+	"frameflow-bff/internal/imagebatch"
 	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
+	"frameflow-bff/internal/state"
 	"frameflow-bff/internal/template"
 )
 
 func main() {
 	cfg := config.Load()
-	store := mcp.NewSessionStore(cfg.MCPBaseURL, cfg.MCPAPIToken)
+	if err := os.MkdirAll(filepath.Dir(cfg.StateDBPath), 0750); err != nil {
+		log.Fatal(err)
+	}
+	db, err := state.Open(cfg.StateDBPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	store := mcp.NewSessionStore(cfg.MCPBaseURL, cfg.MCPAPIToken, db)
 	tierLimits := limits.NewResolver(cfg.DefaultTier, cfg.TierOverrides)
 	usage := limits.NewUsage()
-	h := handlers.New(cfg, store, tierLimits)
+	imageBatches := imagebatch.NewStore(db)
+	batchSemaphore, err := limits.NewSQLiteSemaphore(db, limits.SemaphoreConfig{
+		GlobalCapacity:  cfg.ImageBatchMaxParallel,
+		PerUserCapacity: cfg.ImageBatchMaxPerUser,
+		LeaseTTL:        time.Duration(cfg.ImageBatchLeaseTTLMin) * time.Minute,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	h := handlers.New(cfg, store, tierLimits, imageBatches)
 	comps := composition.NewStore()
 	ch := handlers.NewCompositionHandler(cfg, comps, store)
+	ibh := handlers.NewImageBatchHandler(cfg, imageBatches, store, batchSemaphore)
 
 	tpls := template.NewStore()
 	var fetcher business.Fetcher
@@ -56,6 +77,11 @@ func main() {
 		// Expensive, upstream-facing routes: rate-limited (group) + auth-gated.
 		api.POST("/mcp", h.RequireAuth(), h.MCPProxy)
 		api.GET("/render-progress/:jobId", h.RequireAuth(), h.RenderProgress)
+		api.GET("/image-scripts", ibh.Scripts)
+		api.GET("/image-batches", h.RequireAuth(), ibh.List)
+		api.POST("/image-batches", h.RequireAuth(), ibh.Create)
+		api.GET("/image-batches/:id", h.RequireAuth(), ibh.Get)
+		api.POST("/image-batches/:id/render", h.RequireAuth(), ibh.Render)
 		// Render queue: returns ONLY the caller's own jobs (scoped by ff_sid).
 		api.GET("/render-queue", h.RequireAuth(), h.RenderQueue)
 		// Public: WeChat OAuth entry, session probe, logout.

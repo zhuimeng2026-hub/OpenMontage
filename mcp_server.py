@@ -557,6 +557,7 @@ async def upload_asset_chunk(
 @mcp.tool()
 async def create_remotion_video_share(
     project_id: Optional[str] = None,
+    script_id: str = "photo-ken-burns",
     duration_per_image: float = 3.0,
     aspect_ratio: str = "9:16",
     title: Optional[str] = None,
@@ -574,6 +575,14 @@ async def create_remotion_video_share(
     share URL. This avoids the long HTTP request that previously timed out on
     the client side for multi-minute Remotion renders.
     """
+    script_families = {
+        "photo-ken-burns": "animation-first",
+        "cinematic-montage": "cinematic-trailer",
+    }
+    renderer_family = script_families.get(script_id)
+    if renderer_family is None:
+        return {"success": False, "status": "failed", "stage": "validation", "message": f"Unknown script_id: {script_id}", "error": f"script_id must be one of: {', '.join(sorted(script_families))}"}
+
     started = time.monotonic()
     sid = get_mcp_session_id()
     request_id = get_mcp_request_id() or uuid.uuid4().hex
@@ -634,8 +643,8 @@ async def create_remotion_video_share(
             })
         edit_decisions = {
             "version": "1.0", "cuts": cuts, "render_runtime": "remotion",
-            "renderer_family": "animation-first", "composition_mode": "templated",
-            "metadata": {"title": title or f"{project} photo video", "compose_target": {"width": width, "height": height, "fit": "cover"}},
+            "renderer_family": renderer_family, "composition_mode": "templated",
+            "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "compose_target": {"width": width, "height": height, "fit": "cover"}},
         }
         asset_manifest = {"version": "1.0", "assets": safe_assets, "metadata": {"project_id": project, "batch_id": batch_id}}
         output = root / "renders" / f"{batch_id}-{job_id}.mp4"

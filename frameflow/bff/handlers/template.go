@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -195,15 +196,18 @@ func (h *TemplateHandler) BatchRender(c *gin.Context) {
 		})
 		return
 	}
-	// Always release the concurrent slot when the job finishes.
-	defer h.Usage.Release(sid)
-
 	ids := make([]string, 0, len(scenarios))
 	for _, sc := range scenarios {
 		ids = append(ids, sc.ID)
 	}
 	job := h.Templates.CreateBatchJob(sid, t.ID, ids)
-	go h.runBatch(sid, t, scenarios, job.ID)
+	// The HTTP handler returns immediately, so the slot must be released by the
+	// background worker rather than by a handler defer. Otherwise every request
+	// releases its slot before the batch has rendered anything.
+	go func() {
+		defer h.Usage.Release(sid)
+		h.runBatch(sid, t, scenarios, job.ID)
+	}()
 	c.JSON(http.StatusAccepted, gin.H{
 		"job_id":               job.ID,
 		"status":               "running",
@@ -271,6 +275,8 @@ func (h *TemplateHandler) runBatch(sid string, t *template.Template, scenarios [
 		title := t.TitleTemplate
 		if title == "" {
 			title = sc.BusinessKey
+		} else {
+			title = strings.ReplaceAll(title, "{{business_key}}", sc.BusinessKey)
 		}
 		res, rerr := h.Sessions.Call(sid, "create_remotion_video_share", map[string]interface{}{
 			"project_id":         projectID,
@@ -340,10 +346,10 @@ func (h *TemplateHandler) pollRender(sid, renderJobID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		switch digString(res, "status") {
-		case "published":
+		switch strings.ToLower(strings.TrimSpace(digString(res, "status"))) {
+		case "published", "done", "success", "completed", "finished":
 			return digString(res, "share_url"), nil
-		case "failed":
+		case "failed", "error":
 			return "", fmt.Errorf("render failed at stage %s", digString(res, "stage"))
 		}
 		time.Sleep(5 * time.Second)

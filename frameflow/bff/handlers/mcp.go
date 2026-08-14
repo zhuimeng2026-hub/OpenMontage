@@ -90,6 +90,11 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	if req.Tool == "upload_asset_chunk" {
 		if op, _ := req.Args["operation"].(string); op == "complete" {
 			h.Store.IncAsset(sid)
+			if h.ImageBatches != nil {
+				if projectID, _ := req.Args["project_id"].(string); projectID != "" {
+					h.ImageBatches.IncAsset(sid, projectID)
+				}
+			}
 		}
 	} else if req.Tool == "create_remotion_video_share" {
 		h.Store.ResetAsset(sid)

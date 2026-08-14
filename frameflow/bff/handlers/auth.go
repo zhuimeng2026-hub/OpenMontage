@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"frameflow-bff/internal/config"
+	"frameflow-bff/internal/imagebatch"
 	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
 )
@@ -17,18 +18,20 @@ const sessionCookieName = "ff_sid"
 
 // Handlers bundles the BFF dependencies.
 type Handlers struct {
-	Cfg       *config.Config
-	Store     *mcp.SessionStore
-	Limits    limits.Resolver
-	RateLimit *RateLimiter
+	Cfg          *config.Config
+	Store        *mcp.SessionStore
+	Limits       limits.Resolver
+	RateLimit    *RateLimiter
+	ImageBatches *imagebatch.Store
 }
 
-func New(cfg *config.Config, store *mcp.SessionStore, lim limits.Resolver) *Handlers {
+func New(cfg *config.Config, store *mcp.SessionStore, lim limits.Resolver, batches *imagebatch.Store) *Handlers {
 	return &Handlers{
-		Cfg:       cfg,
-		Store:     store,
-		Limits:    lim,
-		RateLimit: NewRateLimiter(cfg.RateLimitPerMin),
+		Cfg:          cfg,
+		Store:        store,
+		Limits:       lim,
+		RateLimit:    NewRateLimiter(cfg.RateLimitPerMin),
+		ImageBatches: batches,
 	}
 }
 
@@ -127,10 +130,10 @@ func (h *Handlers) DevLogin(c *gin.Context) {
 	}
 	sid := h.ensureSession(c)
 	user := map[string]interface{}{
-		"openid":       "dev-" + sid,
-		"nickname":     name,
+		"openid":        "dev-" + sid,
+		"nickname":      name,
 		"authenticated": true,
-		"dev":          true,
+		"dev":           true,
 	}
 	h.saveUser(sid, user)
 	c.JSON(http.StatusOK, gin.H{

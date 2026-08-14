@@ -220,6 +220,15 @@
   .drop .d1{font-size:15px;font-weight:500;}
   .drop .d2{font-size:12px;color:var(--text-secondary);}
   .tmpl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;width:720px;max-width:100%;margin-bottom:24px;}
+  /* ============ 上传图片预览 + 渲染脚本标注 ============ */
+  .upload-preview{margin-top:14px;}
+  .script-tag{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);}
+  .script-tag b{color:var(--primary);font-weight:600;}
+  .thumb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:10px;margin-top:10px;}
+  .thumb{position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;background:rgba(255,255,255,0.05);border:1px solid var(--border-soft);}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .thumb .idx{position:absolute;left:6px;top:6px;font-size:10px;font-weight:600;color:#fff;background:rgba(0,0,0,.55);border-radius:9px;padding:1px 6px;line-height:1.5;}
+  .thumb .nm{position:absolute;left:0;right:0;bottom:0;font-size:10px;line-height:1.3;padding:3px 5px;background:linear-gradient(transparent,rgba(0,0,0,.72));color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .tmpl{height:150px;border-radius:12px;position:relative;cursor:pointer;border:2px solid transparent;transition:transform .15s ease;}
   .tmpl:hover{transform:translateY(-3px);}
   .tmpl.sel{border-color:var(--primary);box-shadow:0 0 0 2px rgba(124,92,255,0.3);}
@@ -297,6 +306,11 @@
   .modal-file-label{font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}
   .modal-file-label .dl{color:var(--primary);cursor:pointer;font-weight:500;}
   .modal-file{background:#05010F;border:1px solid var(--border-soft);border-radius:12px;padding:14px 16px;font-family:"JetBrains Mono",monospace;font-size:12px;line-height:1.6;color:#9FE7C4;white-space:pre-wrap;word-break:break-word;margin-bottom:20px;max-height:200px;overflow:auto;}
+  .batch-label{display:block;font-size:12px;color:var(--text-secondary);margin:16px 0 7px;}
+  .batch-keys{width:100%;min-height:78px;box-sizing:border-box;resize:vertical;background:#05010F;border:1px solid var(--border-soft);border-radius:8px;color:var(--text-primary);font:13px/1.5 inherit;padding:10px;outline:none;}
+  .batch-keys:focus{border-color:var(--primary);}
+  .batch-help{font-size:11px;color:var(--text-tertiary);margin-top:6px;}
+  .batch-status{font-size:12px;color:var(--text-secondary);margin-top:10px;white-space:pre-wrap;}
   .modal-actions{display:flex;gap:12px;padding:0 24px 24px;}
   .btn-primary{height:42px;padding:0 22px;border-radius:10px;border:none;background:var(--grad-primary);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:filter .15s ease;}
   .btn-primary:hover{filter:brightness(1.08);}
@@ -470,12 +484,21 @@
                 <div class="d2" id="upload-hint">支持 JPG / PNG / WEBP · 单次最多 10 张</div>
                 <input type="file" id="upload-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
               </div>
+              <div class="upload-preview" id="upload-preview" style="display:none">
+                <div class="script-tag">已上传 <b id="preview-count">0</b> 张图片 · 将使用渲染脚本：<b id="preview-script">—</b></div>
+                <div class="thumb-grid" id="thumb-grid"></div>
+              </div>
               <div class="step-label">2 · 选择模板</div>
               <div class="tmpl-grid">
                 <div class="tmpl sel" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><span class="tn">旅行混剪</span></div>
                 <div class="tmpl" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><span class="tn">产品宣传</span></div>
                 <div class="tmpl" style="background:linear-gradient(135deg,#7C5CFF,#F87171)"><span class="tn">节日祝福</span></div>
               </div>
+              <div class="pl" style="margin-top:14px">Remotion 渲染脚本</div>
+              <select id="image-script-select" class="opt" style="width:100%;box-sizing:border-box;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft)">
+                <option value="photo-ken-burns">照片运镜</option>
+                <option value="cinematic-montage">电影混剪</option>
+              </select>
             </div>
             <div class="panel">
               <h4>渲染设置</h4>
@@ -636,9 +659,14 @@
       <div class="modal-desc" id="tmpl-desc"></div>
       <div class="modal-file-label"><span>模板文件 · template.json</span><span class="dl" id="tmpl-download">下载文件</span></div>
       <div class="modal-file" id="tmpl-file"></div>
+      <label class="batch-label" for="tmpl-business-keys">批量业务 Key</label>
+      <textarea class="batch-keys" id="tmpl-business-keys" placeholder="每行一个业务 Key，例如：\nproduct-001\nproduct-002"></textarea>
+      <div class="batch-help">提交后由 BFF 从业务系统取图，每个业务 Key 生成一个独立短视频。</div>
+      <div class="batch-status" id="tmpl-batch-status"></div>
     </div>
     <div class="modal-actions">
       <button class="btn-primary" id="tmpl-use">使用此模板</button>
+      <button class="btn-ghost" id="tmpl-batch-render">批量生成视频</button>
     </div>
   </div>
 </div>
@@ -671,7 +699,8 @@
   }
   document.getElementById('wechat-login-btn').addEventListener('click', startWechatLogin);
   document.getElementById('demo-link').addEventListener('click', function(){
-    showToast('已进入演示模式'); enterApp();
+    if (window.FFMCP && window.FFMCP.setDemo) window.FFMCP.setDemo(true); // 进入本地模拟骨架，全流程纯前端可用
+    showToast('已进入演示模式（本地模拟，无需后端）'); enterApp();
   });
   // 处理微信 OAuth 回调：正式环境 code 由 BFF 换票，BFF 回调跳回 /?login=wechat
   (function(){
@@ -681,7 +710,7 @@
         fetch('/api/me').then(function(r){ return r.json(); }).then(function(u){
           if(u && u.authenticated && u.user){
             window.__ffUser = u.user;
-            renderQueue(); // 用真实登录身份重新过滤渲染队列
+            loadQueue(); // 用真实登录身份重新过滤渲染队列
             showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
           }
           enterApp();
@@ -715,6 +744,7 @@
     t.addEventListener('click', function(){
       document.querySelectorAll('.tmpl').forEach(function(x){ x.classList.remove('sel'); });
       t.classList.add('sel');
+      updatePreviewScript(); // 切换模板时同步「将使用的渲染脚本」标注
     });
   });
 
@@ -750,6 +780,9 @@
   var tmplFile    = document.getElementById('tmpl-file');
   var tmplUseBtn  = document.getElementById('tmpl-use');
   var tmplDlBtn   = document.getElementById('tmpl-download');
+  var tmplBatchBtn = document.getElementById('tmpl-batch-render');
+  var tmplBatchKeys = document.getElementById('tmpl-business-keys');
+  var tmplBatchStatus = document.getElementById('tmpl-batch-status');
   var tmplClose   = document.getElementById('tmpl-close');
   var currentTmpl = null;
 
@@ -776,6 +809,80 @@
     tmplModal.classList.add('show');
   }
   function closeTemplate(){ tmplModal.classList.remove('show'); currentTmpl = null; }
+
+  function bffBase(){
+    return ((window.FFMCP && window.FFMCP.bffBaseUrl) || '').replace(/\/+$/, '');
+  }
+
+  async function jsonRequest(url, options){
+    options = options || {};
+    options.credentials = 'include';
+    var r = await fetch(url, options);
+    var body = await r.json().catch(function(){ return {}; });
+    if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
+    return body;
+  }
+
+  function setBatchStatus(text, isError){
+    if (!tmplBatchStatus) return;
+    tmplBatchStatus.textContent = text || '';
+    tmplBatchStatus.style.color = isError ? 'var(--error)' : 'var(--text-secondary)';
+  }
+
+  async function renderTemplateBatch(){
+    if (!currentTmpl || !tmplBatchBtn) return;
+    if (window.FFMCP && window.FFMCP.demo){
+      setBatchStatus('演示模式不连接业务系统；请配置 BFF 后再提交真实批次。', true);
+      return;
+    }
+    var keys = (tmplBatchKeys.value || '').split(/[\n,，]+/).map(function(x){ return x.trim(); }).filter(Boolean);
+    if (!keys.length){ setBatchStatus('请至少填写一个业务 Key。', true); return; }
+    if (keys.length > 100){ setBatchStatus('单次最多提交 100 个业务 Key。', true); return; }
+    var base = bffBase();
+    if (!base){ setBatchStatus('未配置 BFF 地址，无法提交真实批次。', true); return; }
+    tmplBatchBtn.disabled = true;
+    setBatchStatus('正在创建模板和 ' + keys.length + ' 个场景…');
+    try {
+      var t = await jsonRequest(base + '/api/templates', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+        name: currentTmpl.title,
+        project_base: 'frameflow-' + Date.now(),
+        aspect_ratio: currentTmpl.ratio,
+        duration_per_image: parseInt(currentTmpl.duration, 10) || 3,
+        title_template: currentTmpl.title + ' - {{business_key}}'
+      })});
+      for (var i = 0; i < keys.length; i++){
+        setBatchStatus('正在添加场景 ' + (i + 1) + '/' + keys.length + '…');
+        await jsonRequest(base + '/api/templates/' + encodeURIComponent(t.id) + '/scenarios', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({business_key: keys[i]})
+        });
+      }
+      var batch = await jsonRequest(base + '/api/templates/' + encodeURIComponent(t.id) + '/batch-render', {method:'POST'});
+      setBatchStatus('批次已提交：' + batch.job_id + '\n正在等待各场景完成…');
+      await pollTemplateBatch(base, t.id, batch.job_id);
+      loadQueue();
+    } catch (e){
+      setBatchStatus('批量提交失败：' + e.message, true);
+    } finally {
+      tmplBatchBtn.disabled = false;
+    }
+  }
+
+  async function pollTemplateBatch(base, templateId, jobId){
+    var deadline = Date.now() + 15 * 60 * 1000;
+    while (Date.now() < deadline){
+      var data = await jsonRequest(base + '/api/templates/' + encodeURIComponent(templateId) + '/batch-render/' + encodeURIComponent(jobId));
+      var scenarios = await jsonRequest(base + '/api/templates/' + encodeURIComponent(templateId) + '/scenarios');
+      var list = scenarios.scenarios || [];
+      var done = list.filter(function(s){ return s.status === 'done'; }).length;
+      var failed = list.filter(function(s){ return s.status === 'failed'; }).length;
+      setBatchStatus('批次 ' + jobId + ' · 完成 ' + done + '/' + list.length + (failed ? ' · 失败 ' + failed : '') + '\n' + list.map(function(s){ return (s.business_key || s.id) + '：' + s.status + (s.video_url ? ' · ' + s.video_url : (s.error ? ' · ' + s.error : '')); }).join('\n'));
+      if (data.status === 'done') return;
+      await new Promise(function(resolve){ setTimeout(resolve, 2500); });
+    }
+    throw new Error('批次等待超时（15 分钟）');
+  }
+
+  tmplBatchBtn.addEventListener('click', renderTemplateBatch);
 
   document.querySelectorAll('#view-templates .vcard').forEach(function(card){
     card.addEventListener('click', function(){
@@ -974,7 +1081,7 @@
   // 拉取真实队列（会话隔离，只返回本人任务）
   async function loadQueue(){
     var base = queueBase();
-    if(!base){ // 演示模式：无 BFF，展示仅本人(晓明)的占位，演示「只看到自己」
+    if(!base || (window.FFMCP && window.FFMCP.demo)){ // 演示模式：无 BFF 或手动进入演示骨架，展示占位，演示「只看到自己」
       paintQueue([
         { job_id:'JOB-DEMO1', name:'产品发布会开场', res:'1080p', status:'渲染中', pct:87, created_at:new Date().toISOString() },
         { job_id:'JOB-DEMO2', name:'夏日旅行混剪', res:'1080p', status:'已完成', pct:100, created_at:new Date().toISOString() }
@@ -1014,9 +1121,30 @@
   var uploadedCount = 0;
   var lastBatchId   = null;
   var isUploading   = false;
+  // 已上传图片预览数据：{file, url, name, size}。仅记录上传成功的图片，render 提交成功后清空。
+  var uploadedImages = [];
+  var previewBox    = document.getElementById('upload-preview');
+  var thumbGrid     = document.getElementById('thumb-grid');
+  var previewCount  = document.getElementById('preview-count');
+  var previewScript = document.getElementById('preview-script');
+  var imageScriptSelect = document.getElementById('image-script-select');
+  var currentImageBatch = null;
   // Per-submission image cap. Default matches the free tier; refreshed from
   // /api/quota so the hint and the guard stay aligned with the user's tier.
   var maxFilesPerSubmission = 10;
+
+  async function ensureImageBatch(){
+    if (currentImageBatch) return currentImageBatch;
+    if (window.FFMCP && window.FFMCP.demo) return null;
+    var base = bffBase();
+    if (!base) throw new Error('未配置 BFF 地址');
+    currentImageBatch = await jsonRequest(base + '/api/image-batches', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({script_id: imageScriptSelect ? imageScriptSelect.value : 'photo-ken-burns'})
+    });
+    if (previewScript && imageScriptSelect) previewScript.textContent = imageScriptSelect.options[imageScriptSelect.selectedIndex].text;
+    return currentImageBatch;
+  }
 
   // Pull the real per-submission cap from the BFF quota endpoint and keep the
   // upload hint in sync. Skipped in demo mode (no BFF reachable).
@@ -1050,6 +1178,46 @@
     if (renderBtn) renderBtn.disabled = loading;
   }
 
+  // 把已上传图片渲染为缩略图网格，并标注本批将使用的渲染脚本（当前选中的模板）。
+  function renderUploadPreview(){
+    if (!thumbGrid) return;
+    if (!uploadedImages.length){
+      if (previewBox) previewBox.style.display = 'none';
+      return;
+    }
+    thumbGrid.innerHTML = '';
+    uploadedImages.forEach(function(im, idx){
+      var cell = document.createElement('div');
+      cell.className = 'thumb';
+      var img = document.createElement('img');
+      img.src = im.url; img.alt = im.name;
+      var ix = document.createElement('span');
+      ix.className = 'idx'; ix.textContent = String(idx + 1);
+      var nm = document.createElement('span');
+      nm.className = 'nm'; nm.textContent = im.name;
+      cell.appendChild(img); cell.appendChild(ix); cell.appendChild(nm);
+      thumbGrid.appendChild(cell);
+    });
+    if (previewCount) previewCount.textContent = String(uploadedImages.length);
+    if (previewBox) previewBox.style.display = 'block';
+    updatePreviewScript();
+  }
+
+  // 渲染脚本 = 当前选中的模板名（模板模式下整批图片共用一个预设）。
+  function updatePreviewScript(){
+    if (!previewScript) return;
+    var sel = document.querySelector('.tmpl.sel .tn');
+    previewScript.textContent = sel ? sel.textContent : '—';
+  }
+
+  // 清空预览并释放 object URL，避免内存泄漏。
+  function clearUploadedImages(){
+    uploadedImages.forEach(function(im){ if (im.url) URL.revokeObjectURL(im.url); });
+    uploadedImages = [];
+    if (thumbGrid) thumbGrid.innerHTML = '';
+    if (previewBox) previewBox.style.display = 'none';
+  }
+
   async function handleFiles(files){
     if (!files || !files.length) return;
     if (isUploading){
@@ -1068,10 +1236,13 @@
     for (var i = 0; i < list.length; i++){
       setCreateProgress(true, 0, '正在上传第 ' + (i + 1) + ' / ' + list.length + ' 张' + (failedCount ? '（已失败 ' + failedCount + ' 张）' : ''));
       try {
+        var imageBatch = await ensureImageBatch();
         var res = await window.FFMCP.chunkUpload(list[i], {
+          projectId: imageBatch ? imageBatch.project_id : undefined,
           onProgress: function(p){ if (createFill) createFill.style.width = p + '%'; }
         });
         uploadedCount++;
+        uploadedImages.push({ file: list[i], url: URL.createObjectURL(list[i]), name: list[i].name, size: list[i].size });
         lastBatchId = (res && res.batch_id) || (res && res.data && res.data.batch_id) || lastBatchId;
         lastMsg = (res && res.message) || '';
       } catch (err){
@@ -1081,6 +1252,7 @@
       }
     }
     setUploading(false);
+    renderUploadPreview(); // 上传完成后刷新缩略图与渲染脚本标注
     if (uploadInput) uploadInput.value = ''; // 重置，允许再次选择相同文件继续上传
     if (failedCount > 0){
       setCreateProgress(true, null, '上传结束：成功 ' + uploadedCount + ' 张，失败 ' + failedCount + ' 张。失败文件可重新选择上传。');
@@ -1111,7 +1283,13 @@
       renderBtn.disabled = true;
       setCreateProgress(true, 0, '正在提交渲染任务…');
       try {
-        var v = await window.FFMCP.createVideo({ title: '帧流作品', aspectRatio: '9:16' });
+        if (!currentImageBatch && !(window.FFMCP && window.FFMCP.demo)) throw new Error('当前图片批次不存在，请重新上传');
+        var v;
+        if (window.FFMCP && window.FFMCP.demo) {
+          v = await window.FFMCP.createVideo({ title: '帧流作品', aspectRatio: '9:16' });
+        } else {
+          v = await jsonRequest(bffBase() + '/api/image-batches/' + encodeURIComponent(currentImageBatch.id) + '/render', {method:'POST'});
+        }
         var jobId = v && (v.render_job_id || (v.data && v.data.render_job_id));
         setCreateProgress(true, 0, '已提交，任务号 ' + jobId + ' · 渲染中…');
         showToast('已提交渲染任务 ' + jobId);
@@ -1120,6 +1298,8 @@
         // 使「已上传 N 张」与后端「本轮提交」语义对齐，便于用户开始下一轮上传。
         uploadedCount = 0;
         lastBatchId = null;
+        currentImageBatch = null;
+        clearUploadedImages(); // 本轮提交结束：清掉缩略图预览并释放 object URL
         refreshQuota();
         window.FFMCP.subscribeProgress(jobId, function(ev){
           var pct = ev && (ev.percent || ev.progress || 0);
