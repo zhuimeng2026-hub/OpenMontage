@@ -1063,29 +1063,30 @@
       showToast('单次最多 ' + maxFilesPerSubmission + ' 张，已忽略多余的 ' + extra + ' 张');
     }
     setUploading(true);
-    setCreateProgress(true, 0, '正在上传第 1 / ' + list.length + ' 张图片…');
     var failedCount = 0;
+    var lastMsg = '';
     for (var i = 0; i < list.length; i++){
+      setCreateProgress(true, 0, '正在上传第 ' + (i + 1) + ' / ' + list.length + ' 张' + (failedCount ? '（已失败 ' + failedCount + ' 张）' : ''));
       try {
         var res = await window.FFMCP.chunkUpload(list[i], {
           onProgress: function(p){ if (createFill) createFill.style.width = p + '%'; }
         });
         uploadedCount++;
         lastBatchId = (res && res.batch_id) || (res && res.data && res.data.batch_id) || lastBatchId;
-        setCreateProgress(true, 100, '已上传 ' + uploadedCount + ' 张 · ' + ((res && res.message) || '可点击「开始渲染」'));
+        lastMsg = (res && res.message) || '';
       } catch (err){
         failedCount++;
-        var msg = '第 ' + (i + 1) + ' 张上传失败：' + err.message;
-        setCreateProgress(true, null, msg + '（失败 ' + failedCount + ' 张）');
-        showToast(msg);
+        showToast('第 ' + (i + 1) + ' 张上传失败：' + err.message);
         // 单张失败不中断整体，继续上传剩余图片
-      }
-      if (i < list.length - 1){
-        setCreateProgress(true, 0, '正在上传第 ' + (i + 2) + ' / ' + list.length + ' 张图片…');
       }
     }
     setUploading(false);
     if (uploadInput) uploadInput.value = ''; // 重置，允许再次选择相同文件继续上传
+    if (failedCount > 0){
+      setCreateProgress(true, null, '上传结束：成功 ' + uploadedCount + ' 张，失败 ' + failedCount + ' 张。失败文件可重新选择上传。');
+    } else {
+      setCreateProgress(true, 100, '已上传 ' + uploadedCount + ' 张 · ' + (lastMsg || '可点击「开始渲染」'));
+    }
     if (window.FFMCP.demo) showToast('当前为演示骨架（未配置 BFF），上传为本地模拟');
   }
 
