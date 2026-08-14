@@ -284,6 +284,7 @@
   .pill{height:24px;padding:0 10px;border-radius:12px;display:flex;align-items:center;font-size:11px;font-weight:500;flex:none;}
   .qrow .qtrack{width:180px;height:8px;border-radius:4px;background:rgba(255,255,255,0.1);overflow:hidden;flex:none;}
   .qrow .qfill{height:100%;border-radius:4px;}
+  .qrow .qpct{width:52px;text-align:right;font-size:13px;font-weight:500;flex:none;}
   .qrow .qres{width:90px;font-size:13px;}
   .qrow .quser{display:flex;align-items:center;gap:10px;width:200px;}
   .qrow .qs{width:28px;height:28px;border-radius:14px;flex:none;}
@@ -719,7 +720,7 @@
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="config.js?v=68779b6"></script>
-<script src="mcp-client.js?v=7d8b7b1"></script>
+<script src="mcp-client.js?v=queue-sse-1"></script>
 <script>
   // ---- 登录：微信服务号授权 / 演示模式 ----
   function enterApp(){
@@ -1104,7 +1105,7 @@
       var pill = row.querySelector('.pill');
       if(pill && status) pill.textContent = status;
       if(pill && status) pill.setAttribute('style', pillStyle(status));
-      var pctEl = row.querySelector('.pct');
+      var pctEl = row.querySelector('.pct, .qpct');
       if(pctEl && typeof pct === 'number') pctEl.textContent = pct + '%';
     });
   }
@@ -1162,6 +1163,7 @@
         return '<div class="qrow" data-job="' + j.job_id + '"><div class="qname">' + esc(j.name) + '</div>' +
           '<div class="pill" style="' + pillStyle(j.status) + '">' + j.status + '</div>' +
           '<div class="qtrack"><div class="qfill" style="width:' + fillW + ';background:' + grad + '"></div></div>' +
+          '<div class="qpct">' + (j.status === '排队' ? '排队' : ((j.pct != null ? j.pct : 0) + '%')) + '</div>' +
           '<div class="qres mono">' + esc(j.res) + '</div>' +
           '<div class="quser"><div class="qs" style="background:' + grad + '"></div><span>' + esc(ownerName()) + '</span></div>' +
           '<div class="qtime mono">' + (j.created_at ? fmtTime(j.created_at) : '') + '</div></div>';
