@@ -105,6 +105,15 @@ venv/
 
 # OpenMontage MCP proxy build artifact & local log (regenerable / runtime)
 OpenMontage-mcp-proxy/openmontage-mcp-proxy*
+OpenMontage-mcp-proxy/mcp-proxy.bak.*
 OpenMontage-mcp-proxy/proxy.log
 OpenMontage-mcp-proxy/*.log
+/openmontage-mcp-proxy*
+/proxy.log
 logs/
+
+# FrameFlow BFF compiled binary (go build output)
+frameflow/bff/frameflow-bff
+
+# WeChat 域名校验文件（部署产物，与具体域名绑定，不入库）
+MP_verify_*.txt

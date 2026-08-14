@@ -123,6 +123,35 @@
   .btn-wechat:hover{opacity:.92;transform:translateY(-1px);}
   .btn-wechat:active{transform:translateY(0);}
   .wx-icon{width:22px;height:22px;}
+  /* 桌面扫码登录弹窗 */
+  .qr-modal{
+    position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(5,1,15,0.7);backdrop-filter:blur(4px);z-index:200;
+  }
+  .qr-modal.show{display:flex;}
+  .qr-card{
+    width:300px;padding:28px 24px 22px;border-radius:18px;text-align:center;
+    background:var(--bg-surface);border:1px solid var(--border-soft);
+    box-shadow:0 24px 60px rgba(0,0,0,0.5);
+  }
+  .qr-card .qr-title{font-size:18px;font-weight:700;color:var(--text-primary);}
+  .qr-card .qr-sub{font-size:13px;color:var(--text-secondary);margin:6px 0 18px;}
+  .qr-canvas-wrap{
+    width:220px;height:220px;margin:0 auto;border-radius:12px;overflow:hidden;
+    background:#fff;display:flex;align-items:center;justify-content:center;
+  }
+  .qr-canvas-wrap canvas{display:block;}
+  .qr-card .qr-hint{font-size:12px;color:var(--text-tertiary);margin-top:14px;line-height:1.5;}
+  .qr-card .qr-expired{display:none;font-size:13px;color:var(--warning);margin-top:8px;}
+  .qr-card.expired .qr-expired{display:block;}
+  .qr-card.expired .qr-canvas-wrap{display:none;}
+  .qr-card .qr-btns{display:flex;gap:10px;margin-top:16px;}
+  .qr-card .qr-btns button{
+    flex:1;height:38px;border:1px solid var(--border-input);border-radius:10px;
+    background:transparent;color:var(--text-primary);font-size:13px;font-family:inherit;cursor:pointer;
+  }
+  .qr-card .qr-btns button.qr-primary{border-color:var(--primary);color:var(--primary);font-weight:600;}
+  .qr-card .qr-btns button:hover{background:rgba(255,255,255,0.06);}
   .demo-mode{text-align:center;font-size:13px;color:var(--text-secondary);margin-top:18px;}
   .demo-mode b{color:var(--primary);font-weight:500;cursor:pointer;}
   #toast{
@@ -377,6 +406,21 @@
     <button class="btn-ghost">使用 Google 账号继续</button>
     <div class="demo-mode">配置未完成？<b id="demo-link">体验演示模式 ›</b></div>
     <div class="signup">还没有账号？ <b>注册</b></div>
+  </div>
+</div>
+
+<!-- 桌面扫码登录弹窗 -->
+<div id="qr-login-modal" class="qr-modal">
+  <div class="qr-card" id="qr-card">
+    <div class="qr-title">微信扫码登录</div>
+    <div class="qr-sub">使用手机微信扫描二维码</div>
+    <div class="qr-canvas-wrap" id="qr-canvas-wrap"></div>
+    <div class="qr-hint">扫码后请在手机上确认授权，电脑端将自动进入</div>
+    <div class="qr-expired">二维码已过期，请点击下方按钮刷新</div>
+    <div class="qr-btns">
+      <button id="qr-refresh">刷新</button>
+      <button class="qr-primary" id="qr-close">取消</button>
+    </div>
   </div>
 </div>
 
@@ -673,6 +717,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="config.js"></script>
 <script src="mcp-client.js"></script>
 <script>
@@ -688,7 +733,7 @@
     window.__ffToast = setTimeout(function(){ t.classList.remove('show'); }, 2800);
   }
   function startWechatLogin(){
-    // 正式登录统一走 BFF：BFF 持有 appSecret，负责拼微信授权地址与回调换票。
+    // 微信内置浏览器：直接跳转服务号网页授权；桌面浏览器：弹窗扫码登录。
     var remo = (window.FF_CONFIG && window.FF_CONFIG.remotion) || {};
     var bff = (remo.bffBaseUrl || '').replace(/\/+$/, '');
     if(!bff){
@@ -696,8 +741,69 @@
       enterApp();
       return;
     }
-    window.location.href = bff + '/api/wechat/login';
+    if(/micromessenger/i.test(navigator.userAgent)){
+      window.location.href = bff + '/api/wechat/login';
+    }else{
+      showQrLogin(bff);
+    }
   }
+  // 桌面扫码登录：向 BFF 取 ticket + 授权地址，渲染二维码并轮询扫码结果。
+  function showQrLogin(bff){
+    var modal = document.getElementById('qr-login-modal');
+    var card  = document.getElementById('qr-card');
+    var wrap  = document.getElementById('qr-canvas-wrap');
+    card.classList.remove('expired');
+    fetch(bff + '/api/wechat/qrlogin').then(function(r){ return r.json(); }).then(function(d){
+      if(!d || !d.auth_url){
+        showToast('获取二维码失败：' + ((d && d.error) || '微信未配置'));
+        return;
+      }
+      modal.classList.add('show');
+      try{
+        // qrcodejs（davidshimjs）API：new QRCode(容器元素, {text,width,height,...})，
+        // 它会向容器里 append 一个 canvas。刷新前先清空，避免重复叠加。
+        wrap.innerHTML = '';
+        new QRCode(wrap, {text: d.auth_url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.H});
+      }catch(e){ showToast('二维码渲染失败'); return; }
+      pollQrStatus(bff, d.ticket);
+    }).catch(function(){ showToast('获取二维码失败，请稍后重试'); });
+  }
+  function pollQrStatus(bff, ticket){
+    var card = document.getElementById('qr-card');
+    var iv = setInterval(function(){
+      fetch(bff + '/api/wechat/qrlogin/status?ticket=' + encodeURIComponent(ticket))
+        .then(function(r){ return r.json(); })
+        .then(function(s){
+          if(s.status === 'authorized'){
+            clearInterval(iv);
+            document.getElementById('qr-login-modal').classList.remove('show');
+            fetch('/api/me').then(function(r){ return r.json(); }).then(function(u){
+              if(u && u.authenticated && u.user){
+                window.__ffUser = u.user;
+                showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
+              }
+              enterApp();
+            }).catch(enterApp);
+          }else if(s.status === 'expired' || s.status === 'invalid'){
+            clearInterval(iv);
+            card.classList.add('expired');
+          }
+        }).catch(function(){});
+    }, 2000);
+    window.__qrPoll = iv;
+  }
+  document.getElementById('qr-refresh').addEventListener('click', function(){
+    var modal = document.getElementById('qr-login-modal');
+    var bff = ((window.FF_CONFIG && window.FF_CONFIG.remotion) || {}).bffBaseUrl || '';
+    bff = bff.replace(/\/+$/, '');
+    if(window.__qrPoll){ clearInterval(window.__qrPoll); }
+    modal.classList.remove('show');
+    showQrLogin(bff);
+  });
+  document.getElementById('qr-close').addEventListener('click', function(){
+    if(window.__qrPoll){ clearInterval(window.__qrPoll); }
+    document.getElementById('qr-login-modal').classList.remove('show');
+  });
   document.getElementById('wechat-login-btn').addEventListener('click', startWechatLogin);
   document.getElementById('demo-link').addEventListener('click', function(){
     var hasBff = !!(window.FFMCP && window.FFMCP.bffBaseUrl);
@@ -721,6 +827,15 @@
         return;
       }
       if(params.get('code')){ showToast('已收到微信授权回调（应走 BFF），演示模式直接进入'); enterApp(); }
+      else{
+        // 已登录用户（会话 cookie 持久）刷新页面时直接进入，无需重复扫码
+        fetch('/api/me').then(function(r){ return r.json(); }).then(function(u){
+          if(u && u.authenticated && u.user){
+            window.__ffUser = u.user;
+            enterApp();
+          }
+        }).catch(function(){});
+      }
     }catch(e){}
   })();
   // ---- 侧边栏路由 ----

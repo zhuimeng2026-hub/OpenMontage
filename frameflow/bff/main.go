@@ -87,6 +87,9 @@ func main() {
 		// Public: WeChat OAuth entry, session probe, logout.
 		api.GET("/wechat/login", h.WechatLogin)
 		api.GET("/wechat/callback", h.WechatCallback)
+		// Desktop QR-login: create a ticket (rendered as a QR code) and poll it.
+		api.GET("/wechat/qrlogin", h.QrLoginCreate)
+		api.GET("/wechat/qrlogin/status", h.QrLoginStatus)
 		api.GET("/me", h.Me)
 		api.POST("/logout", h.Logout)
 		// DEV-ONLY: bootstraps a logged-in session without a real WeChat IdP,
