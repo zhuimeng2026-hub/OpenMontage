@@ -27,6 +27,7 @@
   var DEMO = !BFF;
   var demoMode = DEMO; // 运行时可切换：点「体验演示模式」后置 true，使全流程走本地模拟
   var CHUNK = 400 * 1000; // 单片二进制字节数，与 om_mcp_probe.py 的 chunk=400_000 对齐
+  var MCP_CALL_TIMEOUT_MS = 120000; // LAN/远程 MCP 上传分块允许更长的网络与处理时间
 
   // ---- base64 / hex 工具 ----
   function b64FromArrayBuffer(buf) {
@@ -114,7 +115,7 @@
   async function mcpCall(tool, args) {
     if (demoMode) return { __demo: true, tool: tool, args: args || {} };
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, 30000); // 30s 超时，防止请求挂死
+    var timer = setTimeout(function () { ctrl.abort(); }, MCP_CALL_TIMEOUT_MS);
     try {
       var resp = await fetch(BFF + '/api/mcp', {
         method: 'POST',
