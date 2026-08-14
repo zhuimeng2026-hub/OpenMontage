@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -78,6 +79,7 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 	id := "batch-" + randHex(12)
 	projectID := "frameflow-batch-" + id
 	if err := h.Sessions.CreateBatch(sid, id, projectID); err != nil {
+		log.Printf("[image-batch] create_session_failed batch_id=%s project_id=%s sid_hash=%s err=%v", id, projectID, mcp.ShortHashForLog(sid), err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -178,6 +180,7 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		"duration_per_image": 3.0, "aspect_ratio": aspectRatio,
 	})
 	if err != nil {
+		log.Printf("[image-batch] render_submit_failed batch_id=%s project_id=%s script_id=%s sid_hash=%s err=%v", b.ID, b.ProjectID, b.ScriptID, mcp.ShortHashForLog(sid), err)
 		if h.Semaphore != nil {
 			h.Semaphore.ReleaseBatch(b.ID)
 		}

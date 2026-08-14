@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -34,6 +35,9 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 		return
 	}
 	sid := h.ensureSession(c)
+	operation, _ := req.Args["operation"].(string)
+	projectID, _ := req.Args["project_id"].(string)
+	log.Printf("[bff-mcp] start tool=%s operation=%s sid_hash=%s project_id=%s", req.Tool, operation, mcp.ShortHashForLog(sid), projectID)
 
 	// Pre-check the per-submission file cap on a new upload. Rejecting at the
 	// "start" step prevents any bytes from being sent upstream once the cap is
@@ -57,8 +61,12 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 
 	res, err := h.Store.Call(sid, req.Tool, req.Args)
 	if err != nil {
+		log.Printf("[bff-mcp] upstream_failed tool=%s operation=%s sid_hash=%s project_id=%s err=%v", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
+	}
+	if failure, ok := res["error"].(string); ok && failure != "" {
+		log.Printf("[bff-mcp] tool_error tool=%s operation=%s sid_hash=%s project_id=%s error=%q", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, failure)
 	}
 
 	// A successful render submission enters the caller's own render queue. The

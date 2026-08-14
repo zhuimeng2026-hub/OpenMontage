@@ -2,10 +2,12 @@ package mcp
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -85,6 +87,9 @@ func (c *Client) id() int {
 func (c *Client) do(req jsonRPCRequest) (map[string]interface{}, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	started := time.Now()
+	method, tool := requestLabels(req)
+	sidBefore := shortHash(c.sid)
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -105,6 +110,7 @@ func (c *Client) do(req jsonRPCRequest) (map[string]interface{}, error) {
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		log.Printf("[mcp-http] transport_error method=%s tool=%s sid=%s elapsed_ms=%d err=%v", method, tool, sidBefore, time.Since(started).Milliseconds(), err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -115,12 +121,45 @@ func (c *Client) do(req jsonRPCRequest) (map[string]interface{}, error) {
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Printf("[mcp-http] read_error method=%s tool=%s status=%d sid_before=%s sid_after=%s elapsed_ms=%d err=%v", method, tool, resp.StatusCode, sidBefore, shortHash(c.sid), time.Since(started).Milliseconds(), err)
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("mcp http %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		body := truncateForLog(strings.TrimSpace(string(raw)), 800)
+		log.Printf("[mcp-http] upstream_error method=%s tool=%s status=%d sid_before=%s sid_after=%s elapsed_ms=%d body=%q", method, tool, resp.StatusCode, sidBefore, shortHash(c.sid), time.Since(started).Milliseconds(), body)
+		return nil, fmt.Errorf("mcp http %d: %s", resp.StatusCode, body)
 	}
+	log.Printf("[mcp-http] response method=%s tool=%s status=%d sid_before=%s sid_after=%s bytes=%d elapsed_ms=%d", method, tool, resp.StatusCode, sidBefore, shortHash(c.sid), len(raw), time.Since(started).Milliseconds())
 	return parseResponse(raw)
+}
+
+func requestLabels(req jsonRPCRequest) (string, string) {
+	tool := "-"
+	if params, ok := req.Params.(map[string]interface{}); ok {
+		if name, ok := params["name"].(string); ok && name != "" {
+			tool = name
+		}
+	}
+	return req.Method, tool
+}
+
+func shortHash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	sum := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", sum[:4])
+}
+
+// ShortHashForLog lets adjacent BFF packages correlate a request without
+// logging cookies or upstream MCP session identifiers in plaintext.
+func ShortHashForLog(value string) string { return shortHash(value) }
+
+func truncateForLog(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max] + "…"
 }
 
 func parseResponse(raw []byte) (map[string]interface{}, error) {

@@ -3,6 +3,7 @@ package mcp
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -332,6 +333,7 @@ func (s *SessionStore) recreateBatch(sessionID, batchID, projectID string, expec
 func (s *SessionStore) CallBatch(sessionID, batchID, projectID, tool string, args map[string]interface{}) (map[string]interface{}, error) {
 	entry, err := s.findBatch(sessionID, batchID, projectID)
 	if err != nil {
+		log.Printf("[mcp-route] batch_lookup_failed tool=%s batch_id=%s project_id=%s sid_hash=%s err=%v", tool, batchID, projectID, shortHash(sessionID), err)
 		return nil, err
 	}
 	if entry == nil {
@@ -349,12 +351,15 @@ func (s *SessionStore) CallBatch(sessionID, batchID, projectID, tool string, arg
 			}
 		}
 		if entry == nil {
+			log.Printf("[mcp-route] batch_not_found tool=%s batch_id=%s project_id=%s sid_hash=%s", tool, batchID, projectID, shortHash(sessionID))
 			return nil, fmt.Errorf("mcp batch session not found for batch %q", batchID)
 		}
 	}
+	log.Printf("[mcp-route] batch_call tool=%s batch_id=%s project_id=%s sid_hash=%s upstream_sid_hash=%s", tool, batchID, projectID, shortHash(sessionID), shortHash(entry.client.SessionID()))
 	res, err := entry.client.CallTool(tool, args)
 	_ = s.persistBatchSession(sessionID, batchID, projectID, entry.client.SessionID())
 	if err != nil {
+		log.Printf("[mcp-route] batch_call_failed tool=%s batch_id=%s project_id=%s sid_hash=%s err=%v", tool, batchID, projectID, shortHash(sessionID), err)
 		return nil, err
 	}
 	if !IsSessionError(res) {
