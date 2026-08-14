@@ -41,6 +41,18 @@ go mod tidy               # 拉取 gin / godotenv
 go run .                  # 默认 :8080
 ```
 
+运行参数统一从 BFF 工作目录下的 `.env` 读取（`internal/config.Load` 会在启动时调用
+`godotenv.Load()`）。远程局域网联调示例：
+
+```dotenv
+MCP_BASE_URL=http://192.168.20.173:8900/mcp
+FRONTEND_ORIGIN=http://192.168.20.173:8080
+CUSTOM_COMPOSITION_ENABLED=true
+```
+
+修改 `.env` 后必须重启 BFF 进程；不需要重新构建前端。不要把真实的
+`MCP_API_TOKEN` 提交到 Git。
+
 ## 前端接线
 
 推荐部署：**让本 BFF 同时托管前端 SPA**（把 `index.html` / `config.js` /
