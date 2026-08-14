@@ -291,6 +291,16 @@ func (h *TemplateHandler) runBatch(sid string, t *template.Template, scenarios [
 		}
 		h.Templates.SetScenarioRenderJob(sid, sc.ID, renderJobID)
 
+		// Each batch-rendered scenario is also an entry in the caller's own
+		// render queue (scoped by the BFF session, so never cross-visible).
+		h.Sessions.RecordJob(sid, mcp.RenderJob{
+			JobID:     renderJobID,
+			Name:      title,
+			Res:       t.AspectRatio,
+			Status:    "渲染中",
+			CreatedAt: time.Now(),
+		})
+
 		videoURL, perr := h.pollRender(sid, renderJobID)
 		if perr != nil {
 			h.Templates.SetScenarioStatus(sid, sc.ID, "failed", perr.Error())

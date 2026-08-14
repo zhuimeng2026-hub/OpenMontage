@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"frameflow-bff/internal/config"
+	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
 )
 
@@ -18,13 +19,15 @@ const sessionCookieName = "ff_sid"
 type Handlers struct {
 	Cfg       *config.Config
 	Store     *mcp.SessionStore
+	Limits    limits.Resolver
 	RateLimit *RateLimiter
 }
 
-func New(cfg *config.Config, store *mcp.SessionStore) *Handlers {
+func New(cfg *config.Config, store *mcp.SessionStore, lim limits.Resolver) *Handlers {
 	return &Handlers{
 		Cfg:       cfg,
 		Store:     store,
+		Limits:    lim,
 		RateLimit: NewRateLimiter(cfg.RateLimitPerMin),
 	}
 }
@@ -101,4 +104,38 @@ func (h *Handlers) dropUser(sid string) {
 	userStore.Lock()
 	delete(userStore.m, sid)
 	userStore.Unlock()
+}
+
+// DevLogin bootstraps a logged-in BFF session WITHOUT a real WeChat IdP. It
+// exists ONLY to verify per-user queue isolation on a dev machine that has no
+// configured WeChat service account — it sets the same user record that
+// WechatCallback would, so RequireAuth() treats the session as authenticated.
+//
+// It is a no-op (404) unless ALL of the following hold, so it can never be
+// enabled in production by accident:
+//   - AUTH_REQUIRED=true   (otherwise there is nothing to prove)
+//   - DEV_LOGIN_ALLOWED=true (explicit opt-in; defaults to false)
+//   - WECHAT_APP_ID is set (so RequireAuth would otherwise demand a real login)
+func (h *Handlers) DevLogin(c *gin.Context) {
+	if !h.Cfg.AuthRequired || !h.Cfg.DevLoginAllowed || h.Cfg.WechatAppID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "dev login disabled"})
+		return
+	}
+	name := c.Query("as")
+	if name == "" {
+		name = "dev-user"
+	}
+	sid := h.ensureSession(c)
+	user := map[string]interface{}{
+		"openid":       "dev-" + sid,
+		"nickname":     name,
+		"authenticated": true,
+		"dev":          true,
+	}
+	h.saveUser(sid, user)
+	c.JSON(http.StatusOK, gin.H{
+		"authenticated": true,
+		"user":          user,
+		"note":          "DEV-ONLY session; set DEV_LOGIN_ALLOWED=false before deploying",
+	})
 }

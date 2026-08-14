@@ -1,0 +1,5 @@
+# 本地编译产物：go build 输出与编辑器备份，均可用 `go build` 重建，勿提交
+frameflow-bff
+frameflow-bff~
+_ffbin
+*.exe

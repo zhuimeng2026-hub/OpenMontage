@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -125,6 +126,20 @@ func (h *CompositionHandler) Render(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
+	}
+	// A successful render submission enters the caller's own render queue.
+	if jobID := digString(res, "render_job_id"); jobID != "" {
+		name := req.Title
+		if name == "" {
+			name = comp.Name
+		}
+		h.Sessions.RecordJob(sid, mcp.RenderJob{
+			JobID:     jobID,
+			Name:      name,
+			Res:       req.AspectRatio,
+			Status:    "渲染中",
+			CreatedAt: time.Now(),
+		})
 	}
 	c.JSON(http.StatusOK, res)
 }

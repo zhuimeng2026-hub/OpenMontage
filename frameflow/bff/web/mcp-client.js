@@ -51,14 +51,21 @@
   // ---- BFF 调用封装 ----
   async function mcpCall(tool, args) {
     if (DEMO) return { __demo: true, tool: tool, args: args || {} };
-    var resp = await fetch(BFF + '/api/mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include', // 让 BFF 通过 cookie 维持用户会话
-      body: JSON.stringify({ tool: tool, args: args || {} })
-    });
-    if (!resp.ok) throw new Error('BFF.' + tool + ' HTTP ' + resp.status);
-    return await resp.json();
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, 30000); // 30s 超时，防止请求挂死
+    try {
+      var resp = await fetch(BFF + '/api/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // 让 BFF 通过 cookie 维持用户会话
+        body: JSON.stringify({ tool: tool, args: args || {} }),
+        signal: ctrl.signal
+      });
+      if (!resp.ok) throw new Error('BFF.' + tool + ' HTTP ' + resp.status);
+      return await resp.json();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ---- 分块上传单张图片：start -> append* -> complete ----

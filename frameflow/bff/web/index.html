@@ -4,6 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>帧流 FrameFlow · 多用户图生视频云平台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237C5CFF'/%3E%3Cpath d='M12 10v12l9-6z' fill='%23fff'/%3E%3C/svg%3E" />
+<meta name="description" content="帧流 FrameFlow — 多用户图生视频云平台：上传图片、选择模板或编写脚本，一键渲染并分享竖屏视频。" />
+<meta name="theme-color" content="#05010F" />
+<meta name="author" content="FrameFlow" />
+<meta property="og:title" content="帧流 FrameFlow · 多用户图生视频云平台" />
+<meta property="og:description" content="上传图片、选择模板或编写脚本，一键渲染并分享竖屏视频。" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -92,6 +100,7 @@
   }
   .btn-primary:hover{opacity:.92;transform:translateY(-1px);}
   .btn-primary:active{transform:translateY(0);}
+  .btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none;}
   .divider{display:flex;align-items:center;gap:12px;margin:24px 0;}
   .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border-input);}
   .divider span{font-size:12px;color:var(--text-tertiary);}
@@ -263,6 +272,35 @@
   .settings-card{background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-card);padding:24px;}
   .settings-card h4{font-size:16px;font-weight:600;margin-bottom:14px;}
 
+  /* ============ TEMPLATE MARKET: clickable cards + detail modal ============ */
+  #view-templates .vcard{cursor:pointer;}
+  #view-templates .vcard:hover{transform:translateY(-3px);border-color:rgba(124,92,255,0.6);box-shadow:0 8px 24px rgba(124,92,255,0.18);}
+  #view-templates .vcard .open-hint{position:absolute;left:12px;top:12px;display:flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:13px;background:rgba(5,1,15,0.55);color:#fff;font-size:11px;font-weight:500;opacity:0;transition:opacity .15s ease;}
+  #view-templates .vcard:hover .open-hint{opacity:1;}
+
+  .modal-mask{position:fixed;inset:0;background:rgba(5,1,15,0.6);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:60;padding:24px;}
+  .modal-mask.show{display:flex;}
+  .modal-card{width:560px;max-width:100%;max-height:88vh;overflow:auto;background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-card);box-shadow:0 24px 60px rgba(0,0,0,0.5);}
+  .modal-head{display:flex;align-items:flex-start;gap:16px;padding:24px 24px 18px;}
+  .modal-banner{width:96px;height:96px;border-radius:14px;flex:none;position:relative;display:flex;align-items:center;justify-content:center;}
+  .modal-banner svg{width:40px;height:40px;color:rgba(255,255,255,0.9);}
+  .modal-head .mh-title{font-size:20px;font-weight:700;margin-bottom:4px;}
+  .modal-head .mh-sub{font-size:13px;color:var(--text-secondary);}
+  .modal-close{margin-left:auto;width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,0.06);border:1px solid var(--border-soft);color:var(--text-secondary);font-size:18px;cursor:pointer;flex:none;line-height:1;}
+  .modal-close:hover{background:rgba(255,255,255,0.12);color:var(--text-primary);}
+  .modal-body{padding:0 24px 20px;}
+  .modal-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px;}
+  .modal-stat{background:rgba(255,255,255,0.04);border:1px solid var(--border-soft);border-radius:12px;padding:14px;}
+  .modal-stat .ms-l{font-size:11px;color:var(--text-secondary);}
+  .modal-stat .ms-v{font-size:16px;font-weight:600;margin-top:4px;}
+  .modal-desc{font-size:13px;line-height:1.7;color:var(--text-secondary);margin-bottom:16px;}
+  .modal-file-label{font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}
+  .modal-file-label .dl{color:var(--primary);cursor:pointer;font-weight:500;}
+  .modal-file{background:#05010F;border:1px solid var(--border-soft);border-radius:12px;padding:14px 16px;font-family:"JetBrains Mono",monospace;font-size:12px;line-height:1.6;color:#9FE7C4;white-space:pre-wrap;word-break:break-word;margin-bottom:20px;max-height:200px;overflow:auto;}
+  .modal-actions{display:flex;gap:12px;padding:0 24px 24px;}
+  .btn-primary{height:42px;padding:0 22px;border-radius:10px;border:none;background:var(--grad-primary);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:filter .15s ease;}
+  .btn-primary:hover{filter:brightness(1.08);}
+
   /* scrollbar */
   .content::-webkit-scrollbar{width:8px;}
   .content::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px;}
@@ -388,7 +426,7 @@
       <!-- DASHBOARD -->
       <section class="view active" id="view-dashboard">
         <div class="greet">下午好，晓明</div>
-        <div class="greet-sub">今天是 2026年8月13日 · 你还有 3 个渲染任务正在进行中</div>
+        <div class="greet-sub" id="greet-sub">今天是 2026年8月13日 · 你还有 3 个渲染任务正在进行中</div>
         <div class="kpi-grid">
           <div class="kpi"><div class="l">总视频数</div><div class="v">128</div><div class="s" style="color:var(--success)">+12 本月</div></div>
           <div class="kpi"><div class="l">本月渲染</div><div class="v">46</div><div class="s" style="color:var(--text-secondary)">总时长 3h12m</div></div>
@@ -411,9 +449,7 @@
           </div>
         </div>
         <div class="section-head"><h3>渲染队列</h3><span class="more">管理 ›</span></div>
-        <div class="queue-row"><span class="dot" style="background:var(--accent)"></span><div style="flex:1"><div class="name">产品发布会开场 · 1080p</div><div class="sub mono">JOB-8F3A2C · 渲染中</div></div><div class="track"><div class="fill" style="width:87%"></div></div><div class="pct">87%</div></div>
-        <div class="queue-row"><span class="dot" style="background:var(--accent)"></span><div style="flex:1"><div class="name">城市宣传片 · 4K</div><div class="sub mono">JOB-5C1D90 · 渲染中</div></div><div class="track"><div class="fill" style="width:45%"></div></div><div class="pct">45%</div></div>
-        <div class="queue-row"><span class="dot" style="background:var(--warning)"></span><div style="flex:1"><div class="name">团队年度合集 · 720p</div><div class="sub mono">JOB-2B9E11 · 等待资源</div></div><div class="track"></div><div class="pct" style="color:var(--warning)">排队</div></div>
+        <div id="dash-queue"></div>
       </section>
 
       <!-- CREATE -->
@@ -431,7 +467,7 @@
               <div class="drop" id="upload-drop">
                 <div class="up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V6M5 12l7-7 7 7"/></svg></div>
                 <div class="d1">拖拽图片到此处，或 点击上传</div>
-                <div class="d2">支持 JPG / PNG / WEBP · 单次最多 50 张</div>
+                <div class="d2" id="upload-hint">支持 JPG / PNG / WEBP · 单次最多 10 张</div>
                 <input type="file" id="upload-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
               </div>
               <div class="step-label">2 · 选择模板</div>
@@ -516,7 +552,7 @@
 
       <!-- QUEUE -->
       <section class="view" id="view-queue">
-        <div class="qsub">共 12 个任务 · 3 渲染中 · 1 排队 · 7 已完成 · 1 失败</div>
+        <div class="qsub" id="queue-summary">共 12 个任务 · 3 渲染中 · 1 排队 · 7 已完成 · 1 失败</div>
         <div class="filter-bar">
           <div class="chip active">全部</div>
           <div class="chip">渲染中</div>
@@ -525,12 +561,7 @@
         </div>
         <div class="qtable">
           <div class="qhead"><div class="qname">任务 / 模板</div><div style="width:84px">状态</div><div style="width:180px">进度</div><div style="width:90px">分辨率</div><div style="width:200px">提交人</div><div style="margin-left:auto">提交时间</div></div>
-          <div class="qrow"><div class="qname">产品发布会开场</div><div class="pill" style="background:rgba(79,216,255,0.2);color:var(--accent)">渲染中</div><div class="qtrack"><div class="qfill" style="width:87%;background:var(--grad-primary)"></div></div><div class="qres mono">1080p</div><div class="quser"><div class="qs" style="background:var(--grad-primary)"></div><span>晓明</span></div><div class="qtime mono">14:02</div></div>
-          <div class="qrow"><div class="qname">城市宣传片</div><div class="pill" style="background:rgba(79,216,255,0.2);color:var(--accent)">渲染中</div><div class="qtrack"><div class="qfill" style="width:45%;background:var(--grad-primary)"></div></div><div class="qres mono">4K</div><div class="quser"><div class="qs" style="background:linear-gradient(135deg,#F87171,#FBBD23)"></div><span>李雷</span></div><div class="qtime mono">13:48</div></div>
-          <div class="qrow"><div class="qname">团队年度合集</div><div class="pill" style="background:rgba(251,189,35,0.2);color:var(--warning)">排队</div><div class="qtrack"></div><div class="qres mono">720p</div><div class="quser"><div class="qs" style="background:linear-gradient(135deg,#34D399,#4FD8FF)"></div><span>韩梅梅</span></div><div class="qtime mono">13:30</div></div>
-          <div class="qrow"><div class="qname">夏日旅行混剪</div><div class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</div><div class="qtrack"><div class="qfill" style="width:100%;background:linear-gradient(90deg,#34D399,#4FD8FF)"></div></div><div class="qres mono">1080p</div><div class="quser"><div class="qs" style="background:var(--grad-primary)"></div><span>晓明</span></div><div class="qtime mono">12:15</div></div>
-          <div class="qrow"><div class="qname">节日祝福卡片</div><div class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</div><div class="qtrack"><div class="qfill" style="width:100%;background:linear-gradient(90deg,#34D399,#4FD8FF)"></div></div><div class="qres mono">720p</div><div class="quser"><div class="qs" style="background:linear-gradient(135deg,#F87171,#FBBD23)"></div><span>李雷</span></div><div class="qtime mono">11:40</div></div>
-          <div class="qrow"><div class="qname">产品功能演示</div><div class="pill" style="background:rgba(248,113,113,0.2);color:var(--error)">失败</div><div class="qtrack"></div><div class="qres mono">1080p</div><div class="quser"><div class="qs" style="background:linear-gradient(135deg,#34D399,#4FD8FF)"></div><span>韩梅梅</span></div><div class="qtime mono">10:05</div></div>
+          <div id="queue-body"></div>
         </div>
       </section>
 
@@ -538,12 +569,12 @@
       <section class="view" id="view-templates">
         <div class="gsub">从模板市场挑选风格，一键套用你的图片</div>
         <div class="video-grid">
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"></div><div class="meta"><div class="t">旅行混剪</div><div class="m">12 个变体</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"></div><div class="meta"><div class="t">产品宣传</div><div class="m">8 个变体</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#F87171)"></div><div class="meta"><div class="t">节日祝福</div><div class="m">6 个变体</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#34D399,#4FD8FF)"></div><div class="meta"><div class="t">科技发布会</div><div class="m">5 个变体</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#FBBD23,#F87171)"></div><div class="meta"><div class="t">美食记录</div><div class="m">9 个变体</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#34D399)"></div><div class="meta"><div class="t">城市延时</div><div class="m">4 个变体</div></div></div>
+          <div class="vcard" data-tmpl="travel"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">旅行混剪</div><div class="m">12 个变体</div></div></div>
+          <div class="vcard" data-tmpl="product"><div class="thumb" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">产品宣传</div><div class="m">8 个变体</div></div></div>
+          <div class="vcard" data-tmpl="festival"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#F87171)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">节日祝福</div><div class="m">6 个变体</div></div></div>
+          <div class="vcard" data-tmpl="tech"><div class="thumb" style="background:linear-gradient(135deg,#34D399,#4FD8FF)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">科技发布会</div><div class="m">5 个变体</div></div></div>
+          <div class="vcard" data-tmpl="food"><div class="thumb" style="background:linear-gradient(135deg,#FBBD23,#F87171)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">美食记录</div><div class="m">9 个变体</div></div></div>
+          <div class="vcard" data-tmpl="city"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#34D399)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">城市延时</div><div class="m">4 个变体</div></div></div>
         </div>
       </section>
 
@@ -579,6 +610,35 @@
           <div class="settings-card"><h4>团队成员</h4><div style="font-size:13px;color:var(--text-secondary)">晓明、李雷、韩梅梅 等 3 人</div></div>
         </div>
       </section>
+    </div>
+  </div>
+</div>
+
+<!-- TEMPLATE DETAIL MODAL -->
+<div class="modal-mask" id="tmpl-modal">
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <div class="modal-banner" id="tmpl-banner">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div class="mh-title" id="tmpl-title">模板</div>
+        <div class="mh-sub" id="tmpl-sub"></div>
+      </div>
+      <button class="modal-close" id="tmpl-close" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-stats">
+        <div class="modal-stat"><div class="ms-l">变体数量</div><div class="ms-v" id="tmpl-variants">—</div></div>
+        <div class="modal-stat"><div class="ms-l">画幅比例</div><div class="ms-v" id="tmpl-ratio">—</div></div>
+        <div class="modal-stat"><div class="ms-l">单张时长</div><div class="ms-v" id="tmpl-duration">—</div></div>
+      </div>
+      <div class="modal-desc" id="tmpl-desc"></div>
+      <div class="modal-file-label"><span>模板文件 · template.json</span><span class="dl" id="tmpl-download">下载文件</span></div>
+      <div class="modal-file" id="tmpl-file"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-primary" id="tmpl-use">使用此模板</button>
     </div>
   </div>
 </div>
@@ -621,6 +681,7 @@
         fetch('/api/me').then(function(r){ return r.json(); }).then(function(u){
           if(u && u.authenticated && u.user){
             window.__ffUser = u.user;
+            renderQueue(); // 用真实登录身份重新过滤渲染队列
             showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
           }
           enterApp();
@@ -630,7 +691,6 @@
       if(params.get('code')){ showToast('已收到微信授权回调（应走 BFF），演示模式直接进入'); enterApp(); }
     }catch(e){}
   })();
-
   // ---- 侧边栏路由 ----
   var titles = {
     'dashboard':'工作台','create':'创建视频','gallery':'我的视频',
@@ -646,6 +706,7 @@
       document.getElementById('view-' + view).classList.add('active');
       document.getElementById('topbar-title').textContent = titles[view];
       document.querySelector('.content').scrollTop = 0;
+      if (view === 'create') refreshQuota();
     });
   });
 
@@ -667,22 +728,280 @@
     });
   });
 
-  // ---- 模拟渲染进度（进入队列页时轻微推进）----
-  var animating = false;
-  document.querySelector('[data-view="queue"]').addEventListener('click', function(){
-    if(animating) return; animating = true;
-    var fills = document.querySelectorAll('#view-queue .qfill');
-    fills.forEach(function(f){
-      var target = parseFloat(f.style.width) || 0;
-      if(target > 0 && target < 100){
-        var cur = target;
-        var timer = setInterval(function(){
-          cur += 0.4;
-          if(cur >= 100){ cur = 100; clearInterval(timer); animating = false; }
-          f.style.width = cur + '%';
-        }, 120);
-      }
+  // ---- 模板市场：点击卡片打开模板文件（详情弹窗）----
+  // 每个市场模板都映射到一份「模板文件」配置，供预览/下载/套用。
+  var TEMPLATE_CATALOG = {
+    travel:   { title:'旅行混剪',   grad:'135deg,#7C5CFF,#4FD8FF', variants:12, ratio:'9:16', duration:'3s', desc:'将旅途照片按时间线混合剪辑，自动配乐与转场，适合游记 / Vlog 快速成片。', createMatch:'旅行混剪' },
+    product:  { title:'产品宣传',   grad:'135deg,#4FD8FF,#3366E6', variants:8,  ratio:'9:16', duration:'3s', desc:'突出产品卖点的快节奏卡点模板，适合电商主图视频与社交媒体投放。', createMatch:'产品宣传' },
+    festival: { title:'节日祝福',   grad:'135deg,#7C5CFF,#F87171', variants:6,  ratio:'9:16', duration:'4s', desc:'节庆氛围的贺卡式模板，支持自定义祝福语与封面，适合节日营销。', createMatch:'节日祝福' },
+    tech:     { title:'科技发布会', grad:'135deg,#34D399,#4FD8FF', variants:5,  ratio:'16:9', duration:'4s', desc:'冷峻科技风开场，适合新品发布、融资路演等正式场合。', createMatch:null },
+    food:     { title:'美食记录',   grad:'135deg,#FBBD23,#F87171', variants:9,  ratio:'9:16', duration:'3s', desc:'暖色调食物特写拼接，自动慢速运镜，适合探店 / 食谱分享。', createMatch:null },
+    city:     { title:'城市延时',   grad:'135deg,#7C5CFF,#34D399', variants:4,  ratio:'16:9', duration:'5s', desc:'城市夜景与车流延时风格，适合城市宣传片与品牌片头。', createMatch:null }
+  };
+
+  var tmplModal   = document.getElementById('tmpl-modal');
+  var tmplBanner  = document.getElementById('tmpl-banner');
+  var tmplTitle   = document.getElementById('tmpl-title');
+  var tmplSub     = document.getElementById('tmpl-sub');
+  var tmplVariants= document.getElementById('tmpl-variants');
+  var tmplRatio   = document.getElementById('tmpl-ratio');
+  var tmplDur     = document.getElementById('tmpl-duration');
+  var tmplDesc    = document.getElementById('tmpl-desc');
+  var tmplFile    = document.getElementById('tmpl-file');
+  var tmplUseBtn  = document.getElementById('tmpl-use');
+  var tmplDlBtn   = document.getElementById('tmpl-download');
+  var tmplClose   = document.getElementById('tmpl-close');
+  var currentTmpl = null;
+
+  function openTemplate(key){
+    var t = TEMPLATE_CATALOG[key];
+    if (!t){ showToast('模板数据缺失'); return; }
+    currentTmpl = t;
+    tmplBanner.style.background = 'linear-gradient(' + t.grad + ')';
+    tmplTitle.textContent = t.title;
+    tmplSub.textContent = '模板市场 · 精选预设';
+    tmplVariants.textContent = t.variants + ' 个';
+    tmplRatio.textContent = t.ratio;
+    tmplDur.textContent = t.duration;
+    tmplDesc.textContent = t.desc;
+    var file = {
+      name: t.title,
+      aspect_ratio: t.ratio,
+      duration_per_image: parseInt(t.duration, 10) || 3,
+      variants: t.variants,
+      type: 'frameflow.template'
+    };
+    tmplFile.textContent = JSON.stringify(file, null, 2);
+    tmplUseBtn.textContent = t.createMatch ? '使用此模板' : '去创建页使用';
+    tmplModal.classList.add('show');
+  }
+  function closeTemplate(){ tmplModal.classList.remove('show'); currentTmpl = null; }
+
+  document.querySelectorAll('#view-templates .vcard').forEach(function(card){
+    card.addEventListener('click', function(){
+      var key = card.getAttribute('data-tmpl');
+      if (key) openTemplate(key);
     });
+  });
+  tmplClose.addEventListener('click', closeTemplate);
+  tmplModal.addEventListener('click', function(e){ if (e.target === tmplModal) closeTemplate(); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && tmplModal.classList.contains('show')) closeTemplate(); });
+
+  tmplDlBtn.addEventListener('click', function(){
+    if (!currentTmpl) return;
+    var file = {
+      name: currentTmpl.title,
+      aspect_ratio: currentTmpl.ratio,
+      duration_per_image: parseInt(currentTmpl.duration, 10) || 3,
+      variants: currentTmpl.variants,
+      type: 'frameflow.template'
+    };
+    var blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = currentTmpl.title + '.template.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    showToast('已下载模板文件：' + currentTmpl.title + '.template.json');
+  });
+
+  // 「使用此模板」：跳转到创建页；若创建页存在同名模板则自动选中。
+  tmplUseBtn.addEventListener('click', function(){
+    if (!currentTmpl) return;
+    var match = currentTmpl.createMatch;
+    // 切换到创建视图
+    var createNav = document.querySelector('.nav-item[data-view="create"]');
+    if (createNav){
+      createNav.click();
+      if (match){
+        var target = Array.prototype.find.call(
+          document.querySelectorAll('#mode-template .tmpl'),
+          function(el){ return el.getAttribute('data-name') === match || (el.querySelector('.tn') && el.querySelector('.tn').textContent === match); }
+        );
+        if (!target){
+          target = Array.prototype.find.call(
+            document.querySelectorAll('#mode-template .tmpl'),
+            function(el){ return el.querySelector('.tn') && el.querySelector('.tn').textContent.indexOf(match) >= 0; }
+          );
+        }
+        if (target){
+          document.querySelectorAll('#mode-template .tmpl').forEach(function(x){ x.classList.remove('sel'); });
+          target.classList.add('sel');
+          showToast('已套用模板：' + match);
+        } else {
+          showToast('已跳转创建页（模板市场「' + match + '」可在创建页选择）');
+        }
+      } else {
+        showToast('已跳转创建页，请选择模板模式后上传图片');
+      }
+    }
+    closeTemplate();
+  });
+
+  // ---- 渲染队列：拉取真实后端，且【只返回当前会话自己的任务】 ----
+  // 后端 /api/render-queue 按 ff_sid 会话隔离，天然只返回本人提交的渲染任务。
+  // 进行中的任务通过 SSE(/api/render-progress/:jobId) 实时刷新进度与状态。
+  function pillStyle(status){
+    switch(status){
+      case '渲染中': return 'background:rgba(79,216,255,0.2);color:var(--accent)';
+      case '排队':   return 'background:rgba(251,189,35,0.2);color:var(--warning)';
+      case '已完成': return 'background:rgba(52,211,153,0.2);color:var(--success)';
+      case '失败':   return 'background:rgba(248,113,113,0.2);color:var(--error)';
+      default:       return 'background:rgba(79,216,255,0.2);color:var(--accent)';
+    }
+  }
+  // 上游 SSE 状态 -> 前端展示状态
+  function mapStatus(s){
+    switch(s){
+      case 'rendering': case 'running': return '渲染中';
+      case 'queued': case 'waiting': return '排队';
+      case 'published': case 'done': case 'succeeded': return '已完成';
+      case 'failed': case 'error': return '失败';
+      default: return s || '渲染中';
+    }
+  }
+  var QUEUE_JOBS = [];            // 最近一次拉取的队列
+  var queueSubs = {};             // jobId -> unsubscribe 函数（SSE）
+
+  function queueBase(){ return (window.FFMCP && window.FFMCP.bffBaseUrl) || ''; }
+
+  // 把单条进度的 pct / 状态写回到对应行（工作台预览 + 完整队列页）
+  function applyProgress(jobId, pct, status){
+    var rows = document.querySelectorAll('[data-job="' + cssEsc(jobId) + '"]');
+    rows.forEach(function(row){
+      var fill = row.querySelector('.qfill, .fill');
+      if(fill && typeof pct === 'number'){
+        var grad = fill.style.background || 'var(--grad-primary)';
+        fill.style.width = pct + '%';
+        if(status === '已完成') fill.style.background = 'linear-gradient(90deg,#34D399,#4FD8FF)';
+        else fill.style.background = grad;
+      }
+      var pill = row.querySelector('.pill');
+      if(pill && status) pill.textContent = status;
+      if(pill && status) pill.setAttribute('style', pillStyle(status));
+      var pctEl = row.querySelector('.pct');
+      if(pctEl && typeof pct === 'number') pctEl.textContent = pct + '%';
+    });
+  }
+  function cssEsc(s){ return String(s).replace(/["\\]/g, '\\$&'); }
+
+  // 订阅某任务进度；到达终态后写回并关闭
+  function subscribeJob(job){
+    if(queueSubs[job.job_id]) return;
+    if(!window.FFMCP || window.FFMCP.demo) return;
+    if(job.status !== '渲染中' && job.status !== '排队') return;
+    try {
+      var unsub = window.FFMCP.subscribeProgress(job.job_id, function(ev){
+        var pct = ev && (ev.percent || ev.progress);
+        if(typeof pct !== 'number') pct = null;
+        var st = mapStatus(ev && ev.status);
+        applyProgress(job.job_id, pct, st);
+        if(st === '已完成' || st === '失败'){
+          queueSubs[job.job_id] = null;
+          if(unsub) unsub();
+        }
+      }, function(){ queueSubs[job.job_id] = null; });
+      queueSubs[job.job_id] = unsub;
+    } catch(e){ /* SSE 不可用时静默降级为静态状态 */ }
+  }
+
+  // 把任务数组渲染到工作台预览 + 完整队列页 + 统计摘要
+  function paintQueue(jobs){
+    QUEUE_JOBS = jobs || [];
+    // 清理旧的订阅
+    Object.keys(queueSubs).forEach(function(k){ if(queueSubs[k]) try{ queueSubs[k](); }catch(e){} queueSubs[k] = null; });
+
+    // 工作台预览：进行中 / 排队 优先，最多 3 条
+    var dash = document.getElementById('dash-queue');
+    if(dash){
+      var active = QUEUE_JOBS.filter(function(j){ return j.status === '渲染中' || j.status === '排队'; }).slice(0, 3);
+      if(!active.length) dash.innerHTML = '<div style="color:var(--text-tertiary);font-size:13px;padding:8px 0">暂无进行中的渲染任务</div>';
+      else dash.innerHTML = active.map(function(j){
+        var dot = j.status === '排队' ? 'var(--warning)' : 'var(--accent)';
+        var pct = j.status === '排队' ? '<span style="color:var(--warning)">排队</span>' : (j.pct != null ? j.pct + '%' : '0%');
+        return '<div class="queue-row" data-job="' + j.job_id + '"><span class="dot" style="background:' + dot + '"></span>' +
+          '<div style="flex:1"><div class="name">' + esc(j.name) + ' · ' + esc(j.res) + '</div>' +
+          '<div class="sub mono">' + esc(j.job_id) + ' · ' + j.status + '</div></div>' +
+          '<div class="track"><div class="fill" style="width:' + (j.status === '排队' ? '0' : (j.pct != null ? j.pct : 0) + '%') + '"></div></div>' +
+          '<div class="pct">' + pct + '</div></div>';
+      }).join('');
+    }
+
+    // 完整队列页
+    var body = document.getElementById('queue-body');
+    if(body){
+      if(!QUEUE_JOBS.length) body.innerHTML = '<div style="color:var(--text-tertiary);font-size:13px;padding:16px 0">你还没有渲染任务，去「创建视频」提交一个吧。</div>';
+      else body.innerHTML = QUEUE_JOBS.map(function(j){
+        var grad = (j.status === '已完成') ? 'linear-gradient(90deg,#34D399,#4FD8FF)' : 'var(--grad-primary)';
+        var fillW = j.status === '已完成' ? '100%' : (j.pct != null ? j.pct + '%' : '0%');
+        return '<div class="qrow" data-job="' + j.job_id + '"><div class="qname">' + esc(j.name) + '</div>' +
+          '<div class="pill" style="' + pillStyle(j.status) + '">' + j.status + '</div>' +
+          '<div class="qtrack"><div class="qfill" style="width:' + fillW + ';background:' + grad + '"></div></div>' +
+          '<div class="qres mono">' + esc(j.res) + '</div>' +
+          '<div class="quser"><div class="qs" style="background:' + grad + '"></div><span>' + esc(ownerName()) + '</span></div>' +
+          '<div class="qtime mono">' + (j.created_at ? fmtTime(j.created_at) : '') + '</div></div>';
+      }).join('');
+    }
+
+    // 统计摘要（仅本人任务）
+    var cRender = QUEUE_JOBS.filter(function(j){ return j.status === '渲染中'; }).length;
+    var cQueue = QUEUE_JOBS.filter(function(j){ return j.status === '排队'; }).length;
+    var cDone  = QUEUE_JOBS.filter(function(j){ return j.status === '已完成'; }).length;
+    var cFail  = QUEUE_JOBS.filter(function(j){ return j.status === '失败'; }).length;
+    var sum = document.getElementById('queue-summary');
+    if(sum) sum.textContent = '共 ' + QUEUE_JOBS.length + ' 个任务 · ' + cRender + ' 渲染中 · ' + cQueue + ' 排队 · ' + cDone + ' 已完成 · ' + cFail + ' 失败';
+
+    var greet = document.getElementById('greet-sub');
+    if(greet) greet.textContent = '今天是 2026年8月13日 · 你还有 ' + cRender + ' 个渲染任务正在进行中';
+
+    // 为进行中任务订阅实时进度
+    QUEUE_JOBS.forEach(subscribeJob);
+  }
+
+  function ownerName(){
+    // 队列数据已是本人会话的，提交人展示当前登录身份（无登录则侧边栏默认「晓明」）
+    return (window.__ffUser && (window.__ffUser.nickname || window.__ffUser.openid)) || '晓明';
+  }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function fmtTime(iso){
+    try { var d = new Date(iso); if(isNaN(d)) return '';
+      var p = function(n){ return (n<10?'0':'')+n; };
+      return p(d.getHours()) + ':' + p(d.getMinutes());
+    } catch(e){ return ''; }
+  }
+
+  // 拉取真实队列（会话隔离，只返回本人任务）
+  async function loadQueue(){
+    var base = queueBase();
+    if(!base){ // 演示模式：无 BFF，展示仅本人(晓明)的占位，演示「只看到自己」
+      paintQueue([
+        { job_id:'JOB-DEMO1', name:'产品发布会开场', res:'1080p', status:'渲染中', pct:87, created_at:new Date().toISOString() },
+        { job_id:'JOB-DEMO2', name:'夏日旅行混剪', res:'1080p', status:'已完成', pct:100, created_at:new Date().toISOString() }
+      ]);
+      return;
+    }
+    try {
+      var r = await fetch(base + '/api/render-queue', { credentials: 'include' });
+      if(!r.ok){ paintQueue([]); return; }
+      var data = await r.json();
+      (data.jobs || []).forEach(function(j){ if(j.pct == null && j.status === '渲染中') j.pct = 0; });
+      paintQueue(data.jobs || []);
+    } catch(e){ paintQueue([]); }
+  }
+  loadQueue();
+
+  // 进入队列页 / 创建页提交后刷新；在队列页内每 5s 轮询一次（SSE 负责实时）
+  var queueTimer = null;
+  document.querySelector('[data-view="queue"]').addEventListener('click', function(){
+    loadQueue();
+    if(queueTimer) clearInterval(queueTimer);
+    queueTimer = setInterval(loadQueue, 5000);
+  });
+  document.querySelectorAll('.nav-item').forEach(function(item){
+    if(item.getAttribute('data-view') !== 'queue' && item.getAttribute('data-view') !== 'dashboard'){
+      item.addEventListener('click', function(){ if(queueTimer){ clearInterval(queueTimer); queueTimer = null; } });
+    }
   });
 
   // ---- 创建页：上传 / 渲染 接入 MCP 调用骨架（走 BFF）----
@@ -694,6 +1013,27 @@
   var createStatus = document.getElementById('create-status');
   var uploadedCount = 0;
   var lastBatchId   = null;
+  var isUploading   = false;
+  // Per-submission image cap. Default matches the free tier; refreshed from
+  // /api/quota so the hint and the guard stay aligned with the user's tier.
+  var maxFilesPerSubmission = 10;
+
+  // Pull the real per-submission cap from the BFF quota endpoint and keep the
+  // upload hint in sync. Skipped in demo mode (no BFF reachable).
+  async function refreshQuota(){
+    if (window.FFMCP && window.FFMCP.demo) return;
+    try {
+      var base = (window.FFMCP && window.FFMCP.bffBaseUrl) || '';
+      var r = await fetch(base + '/api/quota', { credentials: 'include' });
+      if (!r.ok) return;
+      var q = await r.json();
+      if (q && typeof q.max_files_per_submission === 'number' && q.max_files_per_submission > 0){
+        maxFilesPerSubmission = q.max_files_per_submission;
+      }
+    } catch (e){ /* keep default */ }
+    var hint = document.getElementById('upload-hint');
+    if (hint) hint.textContent = '支持 JPG / PNG / WEBP · 单次最多 ' + maxFilesPerSubmission + ' 张';
+  }
 
   function setCreateProgress(show, pct, text){
     if (createProg) createProg.style.display = show ? 'block' : 'none';
@@ -701,23 +1041,51 @@
     if (createStatus && text) createStatus.textContent = text;
   }
 
+  function setUploading(loading){
+    isUploading = !!loading;
+    if (uploadDrop){
+      uploadDrop.style.pointerEvents = loading ? 'none' : '';
+      uploadDrop.style.opacity = loading ? '0.6' : '';
+    }
+    if (renderBtn) renderBtn.disabled = loading;
+  }
+
   async function handleFiles(files){
     if (!files || !files.length) return;
-    setCreateProgress(true, 0, '正在上传 ' + files.length + ' 张图片…');
-    for (var i = 0; i < files.length; i++){
+    if (isUploading){
+      showToast('已有图片正在上传，请等待当前批次完成');
+      return;
+    }
+    var list = Array.prototype.slice.call(files);
+    if (list.length > maxFilesPerSubmission){
+      var extra = list.length - maxFilesPerSubmission;
+      list = list.slice(0, maxFilesPerSubmission);
+      showToast('单次最多 ' + maxFilesPerSubmission + ' 张，已忽略多余的 ' + extra + ' 张');
+    }
+    setUploading(true);
+    setCreateProgress(true, 0, '正在上传第 1 / ' + list.length + ' 张图片…');
+    var failedCount = 0;
+    for (var i = 0; i < list.length; i++){
       try {
-        var res = await window.FFMCP.chunkUpload(files[i], {
+        var res = await window.FFMCP.chunkUpload(list[i], {
           onProgress: function(p){ if (createFill) createFill.style.width = p + '%'; }
         });
         uploadedCount++;
         lastBatchId = (res && res.batch_id) || (res && res.data && res.data.batch_id) || lastBatchId;
         setCreateProgress(true, 100, '已上传 ' + uploadedCount + ' 张 · ' + ((res && res.message) || '可点击「开始渲染」'));
       } catch (err){
-        setCreateProgress(true, null, '上传失败：' + err.message);
-        showToast('上传失败：' + err.message);
-        return;
+        failedCount++;
+        var msg = '第 ' + (i + 1) + ' 张上传失败：' + err.message;
+        setCreateProgress(true, null, msg + '（失败 ' + failedCount + ' 张）');
+        showToast(msg);
+        // 单张失败不中断整体，继续上传剩余图片
+      }
+      if (i < list.length - 1){
+        setCreateProgress(true, 0, '正在上传第 ' + (i + 2) + ' / ' + list.length + ' 张图片…');
       }
     }
+    setUploading(false);
+    if (uploadInput) uploadInput.value = ''; // 重置，允许再次选择相同文件继续上传
     if (window.FFMCP.demo) showToast('当前为演示骨架（未配置 BFF），上传为本地模拟');
   }
 
@@ -746,6 +1114,12 @@
         var jobId = v && (v.render_job_id || (v.data && v.data.render_job_id));
         setCreateProgress(true, 0, '已提交，任务号 ' + jobId + ' · 渲染中…');
         showToast('已提交渲染任务 ' + jobId);
+        loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
+        // 本轮提交已结束：后端会话计数已被 ResetAsset 清零，前端同步重置展示态，
+        // 使「已上传 N 张」与后端「本轮提交」语义对齐，便于用户开始下一轮上传。
+        uploadedCount = 0;
+        lastBatchId = null;
+        refreshQuota();
         window.FFMCP.subscribeProgress(jobId, function(ev){
           var pct = ev && (ev.percent || ev.progress || 0);
           if (ev && ev.status === 'published'){
@@ -911,6 +1285,7 @@
       var jobId = rJ.render_job_id || (rJ.data && rJ.data.render_job_id);
       st.textContent = '已提交，任务号 ' + jobId + ' · 渲染中…';
       showToast('已提交渲染任务 ' + jobId);
+      loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
       window.FFMCP.subscribeProgress(jobId, function(ev){
         var pct = ev && (ev.percent || ev.progress || 0);
         if (ev && ev.status === 'published'){ fill.style.width = '100%'; st.textContent = '渲染完成 · 链接：' + (ev.share_url || '(见控制台)'); showToast('渲染完成！'); btn.disabled = false; }

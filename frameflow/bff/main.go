@@ -21,7 +21,9 @@ import (
 func main() {
 	cfg := config.Load()
 	store := mcp.NewSessionStore(cfg.MCPBaseURL, cfg.MCPAPIToken)
-	h := handlers.New(cfg, store)
+	tierLimits := limits.NewResolver(cfg.DefaultTier, cfg.TierOverrides)
+	usage := limits.NewUsage()
+	h := handlers.New(cfg, store, tierLimits)
 	comps := composition.NewStore()
 	ch := handlers.NewCompositionHandler(cfg, comps, store)
 
@@ -43,8 +45,6 @@ func main() {
 		fetcher = business.NewStubFetcher(cfg.BusinessStubJSON)
 		log.Println("[business] WEIYUN_API_KEY not set — using StubFetcher (set BUSINESS_STUB_IMAGES or WEIYUN_API_KEY to source real images).")
 	}
-	tierLimits := limits.NewResolver(cfg.DefaultTier, cfg.TierOverrides)
-	usage := limits.NewUsage()
 	th := handlers.NewTemplateHandler(cfg, tpls, store, fetcher, tierLimits, usage)
 
 	r := gin.Default()
@@ -56,11 +56,17 @@ func main() {
 		// Expensive, upstream-facing routes: rate-limited (group) + auth-gated.
 		api.POST("/mcp", h.RequireAuth(), h.MCPProxy)
 		api.GET("/render-progress/:jobId", h.RequireAuth(), h.RenderProgress)
+		// Render queue: returns ONLY the caller's own jobs (scoped by ff_sid).
+		api.GET("/render-queue", h.RequireAuth(), h.RenderQueue)
 		// Public: WeChat OAuth entry, session probe, logout.
 		api.GET("/wechat/login", h.WechatLogin)
 		api.GET("/wechat/callback", h.WechatCallback)
 		api.GET("/me", h.Me)
 		api.POST("/logout", h.Logout)
+		// DEV-ONLY: bootstraps a logged-in session without a real WeChat IdP,
+		// for verifying per-user queue isolation. 404 unless AuthRequired +
+		// DevLoginAllowed + WechatAppID are all set (see Handlers.DevLogin).
+		api.GET("/_dev_login", h.DevLogin)
 		// Custom Remotion composition editor surface (save/list/get are local;
 		// render is upstream-facing and auth-gated).
 		api.GET("/compositions", ch.List)
