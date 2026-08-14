@@ -105,7 +105,10 @@ func (h *CompositionHandler) Render(c *gin.Context) {
 		req.AspectRatio = "9:16"
 	}
 	if req.DurationPerImage <= 0 {
-		req.DurationPerImage = 30
+		// Short-form defaults: three seconds per image keeps an 8-image
+		// composition in the ~30 second range instead of producing a
+		// multi-minute video.
+		req.DurationPerImage = 3
 	}
 
 	if !h.Cfg.CustomCompositionEnabled {

@@ -551,7 +551,7 @@
               <div class="pl">分辨率</div>
               <div class="opt">1080p</div>
               <div class="pl">时长</div>
-              <div class="opt">0:30</div>
+              <div class="opt">0:03 / 张</div>
               <button class="btn-primary" id="render-btn" style="margin-top:18px">开始渲染</button>
               <div id="create-progress" style="display:none;margin-top:14px">
                 <div class="track" style="height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden">
@@ -1449,7 +1449,7 @@
 'import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing} from "remotion";\n' +
 '\n' +
 'export const MyComposition: React.FC<{images: string[]; durationPerImage?: number}> = (\n' +
-'  {images, durationPerImage = 30}\n' +
+'  {images, durationPerImage = 3}\n' +
 ') => {\n' +
 '  const frame = useCurrentFrame();\n' +
 '  const n = Math.max(images.length, 1);\n' +
@@ -1580,7 +1580,7 @@
       st.textContent = '已保存，正在提交渲染…';
       var rR = await fetch('/api/compositions/' + saveJ.id + '/render', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: name, aspect_ratio: '9:16', duration_per_image: 30 })
+        body: JSON.stringify({ title: name, aspect_ratio: '9:16', duration_per_image: 3 })
       });
       var rJ = await rR.json();
       if (!rR.ok){ st.textContent = '提交未成功：' + (rJ.error || rR.status); showToast('渲染提交：' + (rJ.note || rJ.error || rR.status)); btn.disabled = false; return; }
