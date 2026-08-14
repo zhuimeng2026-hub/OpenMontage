@@ -7,6 +7,11 @@ import {
   W as LW,
   H as LH,
 } from "./LuggagePromoLandscape";
+import {
+  EcommerceProductDemo,
+  ecommerceProductDemoDefaultProps,
+  ECOMMERCE_PRODUCT_DEMO_DURATION,
+} from "./EcommerceProductDemo";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -30,6 +35,15 @@ export const RemotionRoot: React.FC = () => {
         width={LW}
         height={LH}
         defaultProps={{}}
+      />
+      <Composition
+        id="EcommerceProductDemo"
+        component={EcommerceProductDemo}
+        durationInFrames={ECOMMERCE_PRODUCT_DEMO_DURATION}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={ecommerceProductDemoDefaultProps}
       />
     </>
   );

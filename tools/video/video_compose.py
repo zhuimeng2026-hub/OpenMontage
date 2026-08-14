@@ -762,13 +762,15 @@ class VideoCompose(BaseTool):
     # Each family MUST map to a distinct composition — collapsing defeats visual grammar.
     # Maps renderer_family → Remotion composition ID.
     # Only compositions registered in remotion-composer/src/Root.tsx are valid.
-    # Current compositions: Explainer, CinematicRenderer, TalkingHead
+    # Current compositions: Explainer, CinematicRenderer, TalkingHead,
+    # ProductReveal, EcommerceProductDemo
     RENDERER_FAMILY_MAP = {
         "explainer-data": "Explainer",
         "explainer-teacher": "Explainer",
         "cinematic-trailer": "CinematicRenderer",
         "documentary-montage": "CinematicRenderer",
         "product-reveal": "Explainer",
+        "ecommerce-product-demo": "EcommerceProductDemo",
         "screen-demo": "Explainer",
         "presenter": "TalkingHead",
         "animation-first": "Explainer",
@@ -1500,6 +1502,17 @@ class VideoCompose(BaseTool):
                 if audio.get(layer, {}).get("src"):
                     audio[layer]["src"] = self._stage_remotion_asset(
                         audio[layer]["src"], -1, staged_dir
+                    )
+
+        # The parameterized e-commerce composition keeps its image/audio
+        # references under assets rather than cuts/audio. Stage those fields
+        # too so MCP callers can pass absolute local paths safely.
+        assets = props.get("assets")
+        if isinstance(assets, dict):
+            for key in ("hero", "product", "detail", "lifestyle", "logo", "music"):
+                if assets.get(key):
+                    assets[key] = self._stage_remotion_asset(
+                        assets[key], -2, staged_dir
                     )
 
         # Build a custom themeConfig from the playbook's actual colors.

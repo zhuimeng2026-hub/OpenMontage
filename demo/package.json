@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "remotion studio",
     "render": "remotion render LuggagePromo out/luggage_promo.mp4",
+    "render:ecommerce": "remotion render EcommerceProductDemo out/ecommerce_product_demo.mp4",
     "upgrade": "remotion upgrade"
   },
   "dependencies": {

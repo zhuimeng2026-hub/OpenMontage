@@ -16,6 +16,13 @@ import { ProductReveal, ProductRevealProps } from "./components/ProductReveal";
 import { CaptionOverlay, WordCaption } from "./components/CaptionOverlay";
 import { CollageBurst, CollageBurstProps } from "./CollageBurst";
 import { LyricOverlay, LyricOverlayProps } from "./LyricOverlay";
+// Shared with the runnable demo so MCP and the local demo use the same
+// parameterized e-commerce product flow.
+import {
+  EcommerceProductDemo,
+  ecommerceProductDemoDefaultProps,
+  ECOMMERCE_PRODUCT_DEMO_DURATION,
+} from "../../demo/src/EcommerceProductDemo";
 
 // ---------------------------------------------------------------------------
 // Theme System — prevents every video from looking like dark fintech
@@ -252,6 +259,15 @@ export const Root: React.FC = () => {
           closer: "Less is nothing.",
           accentColor: "#00D4FF",
         } as ProductRevealProps}
+      />
+      <Composition
+        id="EcommerceProductDemo"
+        component={EcommerceProductDemo}
+        durationInFrames={ECOMMERCE_PRODUCT_DEMO_DURATION}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={ecommerceProductDemoDefaultProps}
       />
       <Composition
         id="CaptionOverlayOnly"
