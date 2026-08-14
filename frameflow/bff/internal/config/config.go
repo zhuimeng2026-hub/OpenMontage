@@ -27,7 +27,7 @@ type Config struct {
 	// DevLoginAllowed enables the DEV-ONLY /api/_dev_login session bootstrap
 	// (see Handlers.DevLogin). It must stay false in production.
 	DevLoginAllowed       bool
-	RateLimitPerMin       int // token-bucket refill rate per session/IP (0 => 30)
+	RateLimitPerMin       int // token-bucket refill rate per session/IP (0 => disabled)
 	ImageBatchMaxParallel int // local process-wide image batch render limit (0 => 2)
 	ImageBatchMaxPerUser  int // local per-session image batch render limit (0 => 2)
 	ImageBatchLeaseTTLMin int // SQLite render lease TTL in minutes (0 => 30)
