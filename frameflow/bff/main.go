@@ -147,6 +147,11 @@ func spaFallback(dir string) gin.HandlerFunc {
 		}
 		full := filepath.Join(dir, filepath.Clean(rel))
 		if info, err := os.Stat(full); err == nil && !info.IsDir() {
+			// Runtime config and the browser-side MCP client contain deployment
+			// endpoints and must not stay stale after a BFF restart/deploy.
+			if rel == "config.js" || rel == "mcp-client.js" || rel == "index.html" {
+				c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+			}
 			c.File(full)
 			return
 		}
