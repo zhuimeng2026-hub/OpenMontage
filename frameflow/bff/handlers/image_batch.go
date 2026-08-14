@@ -17,8 +17,9 @@ import (
 // Named scripts are deliberately server-side choices. They map to trusted
 // Remotion compositions; arbitrary browser-supplied TSX is not executed.
 var imageScripts = map[string]string{
-	"photo-ken-burns":   "照片运镜",
-	"cinematic-montage": "电影混剪",
+	"photo-ken-burns":        "照片运镜",
+	"cinematic-montage":      "电影混剪",
+	"ecommerce-product-demo": "电商产品演示",
 }
 
 type ImageBatchHandler struct {
@@ -168,9 +169,13 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "render capacity is full; retry shortly"})
 		return
 	}
+	aspectRatio := "9:16"
+	if b.ScriptID == "ecommerce-product-demo" {
+		aspectRatio = "16:9"
+	}
 	res, err := h.Sessions.CallBatch(sid, b.ID, b.ProjectID, "create_remotion_video_share", map[string]interface{}{
 		"project_id": b.ProjectID, "script_id": b.ScriptID, "title": "帧流作品 " + b.ID,
-		"duration_per_image": 3.0, "aspect_ratio": "9:16",
+		"duration_per_image": 3.0, "aspect_ratio": aspectRatio,
 	})
 	if err != nil {
 		if h.Semaphore != nil {
@@ -195,6 +200,9 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": updateErr.Error()})
 		return
 	}
-	h.Sessions.RecordJob(sid, mcp.RenderJob{JobID: jobID, BatchID: b.ID, ProjectID: b.ProjectID, Name: "帧流作品 " + b.ID, Res: "9:16", Status: "渲染中", CreatedAt: time.Now()})
+	h.Sessions.RecordJob(sid, mcp.RenderJob{JobID: jobID, BatchID: b.ID, ProjectID: b.ProjectID, Name: "帧流作品 " + b.ID, Res: aspectRatio, Status: "渲染中", CreatedAt: time.Now()})
+	// This batch has been closed by a successful render submission. Reset the
+	// per-submission counter so a later batch starts with its own tier quota.
+	h.Sessions.ResetAsset(sid)
 	c.JSON(http.StatusAccepted, gin.H{"batch_id": b.ID, "render_job_id": jobID, "status": "rendering"})
 }

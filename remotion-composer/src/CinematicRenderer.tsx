@@ -1,5 +1,4 @@
 import React from "react";
-import { loadFont } from "@remotion/google-fonts/SpaceGrotesk";
 import {
   AbsoluteFill,
   Audio,
@@ -28,10 +27,9 @@ import { CaptionOverlay } from "./components/CaptionOverlay";
 
 const FPS = 30;
 
-const { fontFamily } = loadFont("normal", {
-  weights: ["400", "500", "700"],
-  subsets: ["latin"],
-});
+// Keep local rendering self-contained: remote Google Fonts are unavailable to
+// the sandboxed Chromium process, so use the platform's sans-serif stack.
+const fontFamily = "Arial, Helvetica, sans-serif";
 
 const toneGradient = (tone: CinematicTone) => {
   switch (tone) {

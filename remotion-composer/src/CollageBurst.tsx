@@ -11,16 +11,10 @@ import {
   useVideoConfig,
 } from "remotion";
 import React from "react";
-import { loadFont as loadPlayfair } from "@remotion/google-fonts/PlayfairDisplay";
-
-const { fontFamily: playfairFamily } = loadPlayfair("normal", {
-  weights: ["400", "700"],
-  subsets: ["latin"],
-});
-const { fontFamily: playfairItalic } = loadPlayfair("italic", {
-  weights: ["400", "700"],
-  subsets: ["latin"],
-});
+// Use local fallbacks so unrelated registered compositions do not trigger
+// network font requests while the e-commerce composition renders.
+const playfairFamily = "Georgia, 'Times New Roman', serif";
+const playfairItalic = "Georgia, 'Times New Roman', serif";
 
 function resolveAsset(src: string): string {
   if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) return src;

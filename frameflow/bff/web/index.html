@@ -498,6 +498,7 @@
               <select id="image-script-select" class="opt" style="width:100%;box-sizing:border-box;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft)">
                 <option value="photo-ken-burns">照片运镜</option>
                 <option value="cinematic-montage">电影混剪</option>
+                <option value="ecommerce-product-demo">电商产品演示</option>
               </select>
             </div>
             <div class="panel">
@@ -699,8 +700,10 @@
   }
   document.getElementById('wechat-login-btn').addEventListener('click', startWechatLogin);
   document.getElementById('demo-link').addEventListener('click', function(){
-    if (window.FFMCP && window.FFMCP.setDemo) window.FFMCP.setDemo(true); // 进入本地模拟骨架，全流程纯前端可用
-    showToast('已进入演示模式（本地模拟，无需后端）'); enterApp();
+    var hasBff = !!(window.FFMCP && window.FFMCP.bffBaseUrl);
+    if (!hasBff && window.FFMCP && window.FFMCP.setDemo) window.FFMCP.setDemo(true);
+    showToast(hasBff ? '已进入本地开发模式（连接 BFF）' : '已进入演示模式（本地模拟，无需后端）');
+    enterApp();
   });
   // 处理微信 OAuth 回调：正式环境 code 由 BFF 换票，BFF 回调跳回 /?login=wechat
   (function(){
@@ -1206,8 +1209,9 @@
   // 渲染脚本 = 当前选中的模板名（模板模式下整批图片共用一个预设）。
   function updatePreviewScript(){
     if (!previewScript) return;
-    var sel = document.querySelector('.tmpl.sel .tn');
-    previewScript.textContent = sel ? sel.textContent : '—';
+    var scriptSelect = document.getElementById('image-script-select');
+    var selected = scriptSelect && scriptSelect.options[scriptSelect.selectedIndex];
+    previewScript.textContent = selected ? selected.textContent : '—';
   }
 
   // 清空预览并释放 object URL，避免内存泄漏。

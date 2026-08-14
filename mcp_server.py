@@ -578,6 +578,7 @@ async def create_remotion_video_share(
     script_families = {
         "photo-ken-burns": "animation-first",
         "cinematic-montage": "cinematic-trailer",
+        "ecommerce-product-demo": "ecommerce-product-demo",
     }
     renderer_family = script_families.get(script_id)
     if renderer_family is None:
@@ -646,6 +647,31 @@ async def create_remotion_video_share(
             "renderer_family": renderer_family, "composition_mode": "templated",
             "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "compose_target": {"width": width, "height": height, "fit": "cover"}},
         }
+        if script_id == "ecommerce-product-demo":
+            if len(safe_assets) < 4:
+                raise ValueError("ecommerce-product-demo requires at least 4 uploaded images")
+            # The Remotion composition has four semantic slots. Keep the
+            # uploaded batch order deterministic: hero, product, detail,
+            # lifestyle. Additional uploads remain available in the batch but
+            # are intentionally ignored by this four-slot template.
+            edit_decisions.update({
+                "brandName": "VOYAGE",
+                "productName": "AeroShell Carry-On",
+                "promise": "Travel lighter. Move further.",
+                "price": "$189",
+                "compareAtPrice": "$239",
+                "offer": "Free worldwide shipping · 30-day returns",
+                "cta": "SHOP NOW",
+                "featureOne": {"title": "Silent 360° wheels", "body": "Glides smoothly through terminals and streets."},
+                "featureTwo": {"title": "Impact-ready shell", "body": "Aerospace-grade protection for every trip."},
+                "featureThree": {"title": "Smart interior", "body": "Compression panels keep every item in place."},
+                "specs": [{"label": "CAPACITY", "value": "38 L"}, {"label": "WEIGHT", "value": "3.2 kg"}, {"label": "WARRANTY", "value": "Lifetime"}],
+                # The template's default props include a demo bgm.wav. This
+                # production path has no supplied music, so override it with
+                # an empty value instead of requesting a non-existent asset.
+                "assets": {"hero": safe_assets[0]["path"], "product": safe_assets[1]["path"], "detail": safe_assets[2]["path"], "lifestyle": safe_assets[3]["path"], "music": ""},
+                "accentColor": "#D1A84B",
+            })
         asset_manifest = {"version": "1.0", "assets": safe_assets, "metadata": {"project_id": project, "batch_id": batch_id}}
         output = root / "renders" / f"{batch_id}-{job_id}.mp4"
         profile = {"9:16": "tiktok", "16:9": "generic_hd", "1:1": "instagram_feed"}[aspect_ratio]
