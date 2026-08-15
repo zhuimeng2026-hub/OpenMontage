@@ -12,6 +12,20 @@ import {
   ecommerceProductDemoDefaultProps,
   ECOMMERCE_PRODUCT_DEMO_DURATION,
 } from "./EcommerceProductDemo";
+import {
+  AeroShellPromo,
+  FPS as AFPS,
+  DURATION as ADURATION,
+  W as AW,
+  H as AH,
+} from "./AeroShellPromo";
+import {
+  AeroShellPromoLandscape,
+  FPS as ALFPS,
+  DURATION as ALDURATION,
+  W as ALW,
+  H as ALH,
+} from "./AeroShellPromoLandscape";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -44,6 +58,26 @@ export const RemotionRoot: React.FC = () => {
         width={1920}
         height={1080}
         defaultProps={ecommerceProductDemoDefaultProps}
+      />
+      {/* AeroShell Carry-On — portrait 9:16 promo (8 generated stills) */}
+      <Composition
+        id="AeroShellPromo"
+        component={AeroShellPromo}
+        durationInFrames={ADURATION}
+        fps={AFPS}
+        width={AW}
+        height={AH}
+        defaultProps={{}}
+      />
+      {/* AeroShell Carry-On — landscape 16:9 promo with BGM */}
+      <Composition
+        id="AeroShellPromoLandscape"
+        component={AeroShellPromoLandscape}
+        durationInFrames={ALDURATION}
+        fps={ALFPS}
+        width={ALW}
+        height={ALH}
+        defaultProps={{}}
       />
     </>
   );
