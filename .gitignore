@@ -117,3 +117,25 @@ frameflow/bff/frameflow-bff
 
 # WeChat 域名校验文件（部署产物，与具体域名绑定，不入库）
 MP_verify_*.txt
+
+# Runtime artifacts (dev logs, caches, binaries, temp uploads) — regenerable
+.bff-mcp.err.log
+.bff-mcp.out.log
+.ff_loop*.log
+.om_mcp.log
+.ff_test.png
+.tmp-upload-*/
+.gocache-browser/
+.gocache-log/
+.gocache-test/
+frameflow/bff/.bff-bin/
+frameflow/bff/data/
+
+# nginx runtime logs / generated tool lists (regenerable)
+nginx/direct_mcp.log
+nginx/e2e_browser.log
+nginx/e2e_render.log
+nginx/_tools_list.json
+
+# TLS private keys & certs (deployment secrets — never commit)
+nginx/ssl/
