@@ -276,6 +276,49 @@ func (s *SessionStore) DropBatch(sessionID, batchID, projectID string) {
 	_ = s.deletePersistedBatchSession(sessionID, batchID, projectID)
 }
 
+// persistUserSession / findPersistedUserSession / deletePersistedUserSession
+// keep a durable record of each ff_sid's upstream Mcp-Session-Id so another
+// BFF instance (or a restarted one) can resume the SAME upstream session.
+
+func (s *SessionStore) persistUserSession(sessionID, upstreamID string) error {
+	if s.db == nil {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(`INSERT INTO mcp_user_sessions (session_id, upstream_session_id, created_at, updated_at)
+VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET upstream_session_id=excluded.upstream_session_id, updated_at=excluded.updated_at`,
+		sessionID, upstreamID, now, now)
+	return err
+}
+
+func (s *SessionStore) deletePersistedUserSession(sessionID string) error {
+	if s.db == nil {
+		return nil
+	}
+	_, err := s.db.Exec(`DELETE FROM mcp_user_sessions WHERE session_id=?`, sessionID)
+	return err
+}
+
+func (s *SessionStore) findPersistedUserSession(sessionID string) (string, error) {
+	if s.db == nil {
+		return "", nil
+	}
+	row := s.db.QueryRow(`SELECT upstream_session_id FROM mcp_user_sessions WHERE session_id=? LIMIT 1`, sessionID)
+	var up string
+	if err := row.Scan(&up); err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return up, nil
+}
+
+// getOrCreate returns the long-lived MCP client for a BFF session. On a cold
+// start (no in-memory client) it first tries to RESUME a previously persisted
+// upstream session id, so the same ff_sid keeps one upstream Mcp-Session-Id
+// across BFF instances/restarts. If none is persisted, it opens a fresh
+// upstream session via initialize and persists the new id.
 func (s *SessionStore) getOrCreate(sessionID string) (*Client, error) {
 	s.mu.RLock()
 	c, ok := s.clients[sessionID]
@@ -288,11 +331,22 @@ func (s *SessionStore) getOrCreate(sessionID string) (*Client, error) {
 	if c, ok := s.clients[sessionID]; ok {
 		return c, nil
 	}
+	// Cold start: resume the durable upstream session if we have one. The
+	// upstream accepts a valid existing Mcp-Session-Id on a fresh connection,
+	// so we skip initialize and just pin the id.
+	if up, err := s.findPersistedUserSession(sessionID); err == nil && up != "" {
+		c := NewClient(s.baseURL, s.token)
+		c.SetSessionID(up)
+		s.clients[sessionID] = c
+		log.Printf("[mcp-route] user_session_resumed sid_hash=%s upstream_sid_hash=%s", shortHash(sessionID), shortHash(up))
+		return c, nil
+	}
 	c = NewClient(s.baseURL, s.token)
 	if err := c.Initialize(); err != nil {
 		return nil, fmt.Errorf("mcp initialize: %w", err)
 	}
 	s.clients[sessionID] = c
+	_ = s.persistUserSession(sessionID, c.SessionID())
 	return c, nil
 }
 
@@ -411,13 +465,19 @@ func (s *SessionStore) Call(sessionID, tool string, args map[string]interface{})
 	if err != nil {
 		return nil, err
 	}
-	if IsSessionError(res) {
-		s.drop(sessionID)
-		c, err = s.getOrCreate(sessionID)
-		if err != nil {
-			return nil, err
-		}
-		return c.CallTool(tool, args)
+	// Keep the durable upstream session id current (the upstream rotates it on
+	// every response, so re-persist after each successful call).
+	if !IsSessionError(res) {
+		_ = s.persistUserSession(sessionID, c.SessionID())
+		return res, nil
 	}
-	return res, nil
+	// Upstream rejected the session: drop the in-memory client and the durable
+	// record, then open a brand-new upstream session and retry once.
+	s.drop(sessionID)
+	_ = s.deletePersistedUserSession(sessionID)
+	c, err = s.getOrCreate(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return c.CallTool(tool, args)
 }

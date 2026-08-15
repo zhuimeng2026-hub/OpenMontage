@@ -47,6 +47,16 @@ func (c *Client) SessionID() string {
 	return c.sid
 }
 
+// SetSessionID pins the upstream MCP session identifier this client will send
+// on every request. Used to RESUME a session whose id was persisted by another
+// BFF instance, so the same ff_sid keeps using one upstream Mcp-Session-Id
+// across instances/restarts (the upstream binds uploaded assets to it).
+func (c *Client) SetSessionID(sid string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sid = sid
+}
+
 func NewClient(baseURL, token string) *Client {
 	return NewClientAuth(baseURL, token, "Authorization", "Bearer ")
 }
@@ -272,14 +282,36 @@ func Extract(resp map[string]interface{}) map[string]interface{} {
 }
 
 // IsSessionError reports whether the upstream rejected the call because the MCP
-// session is gone (SID rotated away / expired). Used to trigger a re-init.
+// session is gone (SID rotated away / expired / not found). It is intentionally
+// strict: it must NOT match ordinary business errors that merely mention the
+// word "session" (e.g. "No uploaded image batch found for this MCP session"),
+// otherwise the caller would wrongly drop + reinitialize a healthy session and
+// mask the real error. Only the upstream's session-rejection signatures match.
 func IsSessionError(res map[string]interface{}) bool {
 	if res == nil {
 		return false
 	}
-	if e, ok := res["error"]; ok {
-		s := strings.ToLower(fmt.Sprintf("%v", e))
-		if strings.Contains(s, "mcp-session-id") || strings.Contains(s, "session") {
+	var blob string
+	switch e := res["error"].(type) {
+	case string:
+		blob = e
+	case map[string]interface{}:
+		if m, ok := e["message"].(string); ok {
+			blob = m
+		} else {
+			b, _ := json.Marshal(e)
+			blob = string(b)
+		}
+	default:
+		return false
+	}
+	s := strings.ToLower(blob)
+	for _, sig := range []string{
+		"mcp-session-id", "session not found", "missing session",
+		"session id", "invalid session", "unknown session",
+		"session expired", "session has ended", "session is invalid",
+	} {
+		if strings.Contains(s, sig) {
 			return true
 		}
 	}

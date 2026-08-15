@@ -51,6 +51,18 @@ CREATE TABLE IF NOT EXISTS mcp_batch_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_batch_sessions_project ON mcp_batch_sessions(session_id, project_id);
 
+-- One row per BFF session (ff_sid) holding the upstream MCP session id that
+-- the browser's render loop depends on. Persisting it lets any BFF instance
+-- (multi-instance deploy / restart) resume the SAME upstream Mcp-Session-Id
+-- instead of opening a fresh upstream session and losing the uploaded assets.
+CREATE TABLE IF NOT EXISTS mcp_user_sessions (
+  session_id TEXT PRIMARY KEY,
+  upstream_session_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_user_sessions_upstream ON mcp_user_sessions(upstream_session_id);
+
 CREATE TABLE IF NOT EXISTS render_jobs (
   session_id TEXT NOT NULL,
   job_id TEXT NOT NULL,
