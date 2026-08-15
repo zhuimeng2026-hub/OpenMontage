@@ -87,6 +87,27 @@ class UploadAsset(BaseTool):
         },
     }
 
+    @staticmethod
+    def _sanitize_filename(filename: str) -> tuple[str, str]:
+        """Return (safe_filename, original_filename).
+
+        Accepts unicode/special filenames (e.g. WeChat screenshot names) by
+        replacing the unsafe basename with a sha256 hash prefix while preserving
+        the original extension. Already-safe names are returned unchanged.
+        """
+        if not isinstance(filename, str) or not filename:
+            raise ValueError("filename must be a non-empty string")
+        original = filename.strip()
+        base = Path(original).stem
+        suffix = Path(original).suffix.lower()
+        safe_candidate = original
+        if not _SAFE_FILENAME.fullmatch(safe_candidate):
+            digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:12]
+            safe_candidate = f"asset_{digest}{suffix}"
+            if not _SAFE_FILENAME.fullmatch(safe_candidate):
+                safe_candidate = f"asset_{digest}"
+        return safe_candidate, original
+
     def _project_dir(self, project_id: str) -> Path:
         if not isinstance(project_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", project_id):
             raise ValueError("project_id must be a safe basename (letters, numbers, '.', '_' and '-' only)")
@@ -122,9 +143,7 @@ class UploadAsset(BaseTool):
         started = __import__("time").monotonic()
         try:
             project_id = inputs.get("project_id")
-            filename = inputs.get("filename")
-            if not isinstance(filename, str) or not _SAFE_FILENAME.fullmatch(filename):
-                raise ValueError("filename must be a safe basename without path separators")
+            filename, original_filename = self._sanitize_filename(inputs.get("filename"))
             suffix = Path(filename).suffix.lower()
             if suffix not in _ALLOWED_EXTENSIONS:
                 raise ValueError(f"unsupported media extension: {suffix or '<none>'}")
@@ -170,6 +189,7 @@ class UploadAsset(BaseTool):
             asset = {
                 "id": f"{project_id}-{digest[:12]}",
                 "filename": filename,
+                "original_filename": original_filename,
                 "path": str(target),
                 "relative_path": relative_path,
                 "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media",
