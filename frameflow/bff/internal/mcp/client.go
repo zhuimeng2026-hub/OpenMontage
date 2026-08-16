@@ -317,3 +317,22 @@ func IsSessionError(res map[string]interface{}) bool {
 	}
 	return false
 }
+
+// IsSessionTransportError recognizes only an HTTP-level rejection of the
+// current MCP session. Ordinary upstream failures (including business errors
+// that happen to mention "session") must not trigger a destructive reconnect.
+func IsSessionTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if !strings.Contains(s, "mcp http 404:") && !strings.Contains(s, "mcp http 410:") {
+		return false
+	}
+	for _, sig := range []string{"session not found", "missing session", "invalid session", "unknown session", "session expired", "session has ended", "session is invalid"} {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
+}

@@ -443,6 +443,15 @@ func (s *SessionStore) CallBatch(sessionID, batchID, projectID, tool string, arg
 	res, err := entry.client.CallTool(tool, args)
 	_ = s.persistBatchSession(sessionID, batchID, projectID, entry.client.SessionID())
 	if err != nil {
+		if IsSessionTransportError(err) {
+			entry, recreateErr := s.recreateBatch(sessionID, batchID, projectID, entry)
+			if recreateErr != nil {
+				return nil, recreateErr
+			}
+			res, err = entry.client.CallTool(tool, args)
+			_ = s.persistBatchSession(sessionID, batchID, projectID, entry.client.SessionID())
+			return res, err
+		}
 		log.Printf("[mcp-route] batch_call_failed tool=%s batch_id=%s project_id=%s sid_hash=%s err=%v", tool, batchID, projectID, shortHash(sessionID), err)
 		return nil, err
 	}
@@ -493,6 +502,19 @@ func (s *SessionStore) Call(sessionID, tool string, args map[string]interface{})
 	}
 	res, err := c.CallTool(tool, args)
 	if err != nil {
+		if IsSessionTransportError(err) {
+			s.drop(sessionID)
+			_ = s.deletePersistedUserSession(sessionID)
+			c, err = s.getOrCreate(sessionID)
+			if err != nil {
+				return nil, err
+			}
+			res, err = c.CallTool(tool, args)
+			if err == nil {
+				_ = s.persistUserSession(sessionID, c.SessionID())
+			}
+			return res, err
+		}
 		return nil, err
 	}
 	// Keep the durable upstream session id current (the upstream rotates it on
