@@ -208,6 +208,8 @@ python3 scripts/frameflow_capacity_analyzer.py \
   --output perf/assessment-jobs-N.json
 ```
 
+开发端可使用 `scripts/frameflow_remote_load_runner.py` 自动完成逐级压测、远端指标采样和容量判定。观测令牌只通过本机环境变量 `FRAMEFLOW_OBSERVER_TOKEN` 传入，不得放在命令行参数中。控制器默认按 `1,2,4,5,6` 推进，任一级不稳定会立即停止。
+
 ## 9. 故障与回滚
 
 观测服务异常时只需：
