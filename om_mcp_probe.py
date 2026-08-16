@@ -27,7 +27,7 @@ OpenMontage MCP 探测 / 复测工具
 环境变量
 --------
   OM_MCP_URL     端点（默认 https://dw.aixifs.com/mcp）
-  OM_MCP_TOKEN   Bearer token（默认内置 h6LQ...RT6WJE）
+  OM_MCP_TOKEN   Bearer token（优先级高于 MCP_API_TOKEN）
 
 示例
 ----
@@ -48,7 +48,7 @@ import tempfile
 import time
 
 DEFAULT_URL = "https://dw.aixifs.com/mcp"
-DEFAULT_TOKEN = "h6LQUTVPA5vBmqXijUydpockVrPx2ruUqPaVQRT6WJE"
+DEFAULT_TOKEN = ""
 
 LOG = logging.getLogger("om_mcp_probe")
 
@@ -261,7 +261,7 @@ def _b64_path(path: str) -> str:
 def main(argv=None):
     ap = argparse.ArgumentParser(description="OpenMontage MCP 探测 / 复测工具")
     ap.add_argument("--url", default=os.environ.get("OM_MCP_URL", DEFAULT_URL))
-    ap.add_argument("--token", default=os.environ.get("OM_MCP_TOKEN", DEFAULT_TOKEN))
+    ap.add_argument("--token", default=os.environ.get("OM_MCP_TOKEN", os.environ.get("MCP_API_TOKEN", DEFAULT_TOKEN)))
     ap.add_argument("--retries", type=int, default=6)
     ap.add_argument("--log", default="om_mcp_probe.log", help="日志文件路径（默认 om_mcp_probe.log）")
     ap.add_argument("--quiet", action="store_true", help="仅写日志文件，不打印到控制台")
@@ -292,6 +292,8 @@ def main(argv=None):
 
     args = ap.parse_args(argv)
     setup_logging(args.log, args.quiet)
+    if not args.token:
+        ap.error("MCP token is required; set MCP_API_TOKEN (or OM_MCP_TOKEN) or pass --token")
     cli = MCPClient(args.url, args.token, max_retries=args.retries)
 
     try:

@@ -7,12 +7,23 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Validate rejects unsafe production combinations before opening the listener.
+func Validate(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if cfg.AuthRequired && (cfg.WechatAppID == "" || cfg.WechatAppSecret == "") {
+		return fmt.Errorf("AUTH_REQUIRED=true requires WECHAT_APP_ID and WECHAT_APP_SECRET")
+	}
+	return nil
+}
+
 // Config holds every tunable for the FrameFlow BFF. Secrets (MCP_API_TOKEN,
 // WechatAppSecret, ...) must come from the environment / .env, NEVER from the
 // browser bundle.
 type Config struct {
 	MCPBaseURL        string // Streamable-HTTP MCP endpoint
-	MCPAPIToken       string // Bearer token for dw.aixifs.com/mcp (server-side only)
+	MCPAPIToken       string // Bearer token for the upstream MCP (server-side only)
 	MCPProgressURL    string // base URL for the render-progress SSE endpoint
 	WechatAppID       string
 	WechatAppSecret   string // server-side only
@@ -32,7 +43,7 @@ type Config struct {
 	ImageBatchMaxPerUser  int // local per-session image batch render limit (0 => 2)
 	ImageBatchLeaseTTLMin int // SQLite render lease TTL in minutes (0 => 30)
 	// CustomCompositionEnabled gates rendering of user-authored Remotion code.
-	// Upstream dw.aixifs.com/mcp does NOT yet accept composition source, so this
+	// The upstream MCP does NOT yet accept composition source, so this
 	// stays false: a render request with custom code returns 501 + a clear note
 	// instead of silently falling back to a template.
 	CustomCompositionEnabled bool
@@ -62,9 +73,9 @@ func Load() *Config {
 		return def
 	}
 	return &Config{
-		MCPBaseURL:               get("MCP_BASE_URL", "https://dw.aixifs.com/mcp"),
+		MCPBaseURL:               get("MCP_BASE_URL", "http://127.0.0.1:8900/mcp"),
 		MCPAPIToken:              os.Getenv("MCP_API_TOKEN"),
-		MCPProgressURL:           get("MCP_PROGRESS_URL", "https://dw.aixifs.com/render-progress"),
+		MCPProgressURL:           get("MCP_PROGRESS_URL", "http://127.0.0.1:8900/render-progress"),
 		WechatAppID:              os.Getenv("WECHAT_APP_ID"),
 		WechatAppSecret:          os.Getenv("WECHAT_APP_SECRET"),
 		WechatRedirectURI:        os.Getenv("WECHAT_REDIRECT_URI"),

@@ -645,7 +645,7 @@ async def create_remotion_video_share(
         edit_decisions = {
             "version": "1.0", "cuts": cuts, "render_runtime": "remotion",
             "renderer_family": renderer_family, "composition_mode": "templated",
-            "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "compose_target": {"width": width, "height": height, "fit": "cover"}},
+            "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "targetDurationSeconds": duration * len(safe_assets), "compose_target": {"width": width, "height": height, "fit": "cover"}},
         }
         if script_id == "ecommerce-product-demo":
             if len(safe_assets) < 4:
@@ -671,6 +671,7 @@ async def create_remotion_video_share(
                 # an empty value instead of requesting a non-existent asset.
                 "assets": {"hero": safe_assets[0]["path"], "product": safe_assets[1]["path"], "detail": safe_assets[2]["path"], "lifestyle": safe_assets[3]["path"], "music": ""},
                 "accentColor": "#D1A84B",
+                "targetDurationSeconds": duration * len(safe_assets),
             })
         asset_manifest = {"version": "1.0", "assets": safe_assets, "metadata": {"project_id": project, "batch_id": batch_id}}
         output = root / "renders" / f"{batch_id}-{job_id}.mp4"

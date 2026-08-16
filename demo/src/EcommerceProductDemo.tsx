@@ -33,6 +33,8 @@ export interface EcommerceProductDemoProps {
     music?: string;
   };
   accentColor?: string;
+  /** Total output duration requested by the render job, in seconds. */
+  targetDurationSeconds?: number;
   [key: string]: unknown;
 }
 
@@ -191,16 +193,20 @@ function Offer({ p }: { p: EcommerceProductDemoProps }) {
 
 export const EcommerceProductDemo: React.FC<Partial<EcommerceProductDemoProps>> = (input) => {
   const p = { ...DEFAULT_PROPS, ...input, assets: { ...DEFAULT_PROPS.assets, ...(input.assets || {}) } } as EcommerceProductDemoProps;
+  const scale = p.targetDurationSeconds && p.targetDurationSeconds > 0
+    ? (p.targetDurationSeconds * 30) / ECOMMERCE_PRODUCT_DEMO_DURATION
+    : 1;
+  const frame = (base: number) => Math.round(base * scale);
   return (
     <AbsoluteFill>
       {p.assets.music && <Audio src={staticFile(p.assets.music)} volume={0.22} />}
-      <Sequence from={0} durationInFrames={90}><Hook p={p} /></Sequence>
-      <Sequence from={90} durationInFrames={120}><Overview p={p} /></Sequence>
-      <Sequence from={210} durationInFrames={105}><Feature p={p} index={1} image={p.assets.product} /></Sequence>
-      <Sequence from={315} durationInFrames={105}><Feature p={p} index={2} image={p.assets.detail} /></Sequence>
-      <Sequence from={420} durationInFrames={105}><Feature p={p} index={3} image={p.assets.lifestyle} /></Sequence>
-      <Sequence from={525} durationInFrames={120}><Proof p={p} /></Sequence>
-      <Sequence from={645} durationInFrames={105}><Offer p={p} /></Sequence>
+      <Sequence from={frame(0)} durationInFrames={frame(90)}><Hook p={p} /></Sequence>
+      <Sequence from={frame(90)} durationInFrames={frame(120)}><Overview p={p} /></Sequence>
+      <Sequence from={frame(210)} durationInFrames={frame(105)}><Feature p={p} index={1} image={p.assets.product} /></Sequence>
+      <Sequence from={frame(315)} durationInFrames={frame(105)}><Feature p={p} index={2} image={p.assets.detail} /></Sequence>
+      <Sequence from={frame(420)} durationInFrames={frame(105)}><Feature p={p} index={3} image={p.assets.lifestyle} /></Sequence>
+      <Sequence from={frame(525)} durationInFrames={frame(120)}><Proof p={p} /></Sequence>
+      <Sequence from={frame(645)} durationInFrames={frame(105)}><Offer p={p} /></Sequence>
     </AbsoluteFill>
   );
 };

@@ -12,6 +12,14 @@ import (
 	"frameflow-bff/internal/mcp"
 )
 
+const maxMCPBodyBytes = 2 << 20
+
+var allowedMCPTools = map[string]bool{
+	"upload_asset_chunk":          true,
+	"create_remotion_video_share": true,
+	"get_render_status":           true,
+}
+
 // MCPProxy receives { "tool": "<name>", "args": { ... } } and forwards it to the
 // OpenMontage MCP server as a tools/call, returning the extract()-ed structured
 // result (mirrors om_mcp_probe.py). The caller's BFF session cookie selects the
@@ -22,6 +30,7 @@ import (
 // performs in TemplateHandler.BatchRender. The cap is tracked per BFF session
 // in SessionStore (completed-upload count), reset when a video is created.
 func (h *Handlers) MCPProxy(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxMCPBodyBytes)
 	var req struct {
 		Tool string                 `json:"tool"`
 		Args map[string]interface{} `json:"args"`
@@ -32,6 +41,10 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	}
 	if req.Tool == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tool is required"})
+		return
+	}
+	if !allowedMCPTools[req.Tool] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tool is not allowed"})
 		return
 	}
 	sid := h.ensureSession(c)

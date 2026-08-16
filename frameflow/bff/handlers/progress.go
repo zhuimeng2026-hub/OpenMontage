@@ -17,6 +17,11 @@ func (h *Handlers) RenderProgress(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "jobId required"})
 		return
 	}
+	sid, err := c.Cookie(sessionCookieName)
+	if err != nil || sid == "" || !h.Store.OwnsJob(sid, jobID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "render job not found"})
+		return
+	}
 	upstream := fmt.Sprintf("%s/%s", h.Cfg.MCPProgressURL, jobID)
 	req, err := http.NewRequest(http.MethodGet, upstream, nil)
 	if err != nil {

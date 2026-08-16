@@ -240,11 +240,46 @@
       return function () { clearInterval(timer); };
     }
     var es = new EventSource(BFF + '/api/render-progress/' + encodeURIComponent(jobId));
+    var pollTimer = null;
+    var stopped = false;
+    var pollAttempts = 0;
+    function stop(){
+      stopped = true;
+      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      es.close();
+    }
+    function poll(){
+      if (stopped || pollAttempts++ >= 300) {
+        if (!stopped && onError) onError(new Error('render status polling timed out'));
+        return;
+      }
+      getRenderStatus(jobId).then(function(res){
+        if (stopped) return;
+        var data = (res && res.data) || res || {};
+        var status = String(data.status || '').toLowerCase();
+        onEvent(data);
+        if (status === 'published' || status === 'done' || status === 'success' || status === 'completed' || status === 'finished' || status === 'failed' || status === 'error') {
+          stop();
+          return;
+        }
+        pollTimer = setTimeout(poll, 3000);
+      }).catch(function(err){
+        if (stopped) return;
+        if (pollAttempts >= 300) { if (onError) onError(err); return; }
+        pollTimer = setTimeout(poll, 5000);
+      });
+    }
     es.onmessage = function (e) {
       try { onEvent(JSON.parse(e.data)); } catch (err) { onEvent({ raw: e.data }); }
     };
-    es.onerror = function (err) { if (onError) onError(err); es.close(); };
-    return function () { es.close(); };
+    es.onerror = function () {
+      // EventSource cannot be reliably resumed through every reverse proxy.
+      // Switch to the MCP status API so a dropped SSE stream still reaches a
+      // terminal state in the create page and queue.
+      es.close();
+      poll();
+    };
+    return stop;
   }
 
   window.FFMCP = {

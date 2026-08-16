@@ -17,6 +17,15 @@ export interface CinematicVideoScene extends CinematicBaseScene {
   fadeOutFrames?: number;
 }
 
+export interface CinematicImageScene extends CinematicBaseScene {
+  kind: "image";
+  src: string;
+  tone?: CinematicTone;
+  filter?: string;
+  fadeInFrames?: number;
+  fadeOutFrames?: number;
+}
+
 export interface CinematicTitleScene extends CinematicBaseScene {
   kind: "title";
   text: string;
@@ -28,7 +37,7 @@ export interface CinematicTitleScene extends CinematicBaseScene {
   variant?: "plate" | "overlay";
 }
 
-export type CinematicScene = CinematicVideoScene | CinematicTitleScene;
+export type CinematicScene = CinematicVideoScene | CinematicImageScene | CinematicTitleScene;
 
 export interface CinematicSoundtrack {
   src: string;

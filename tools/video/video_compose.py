@@ -1495,6 +1495,26 @@ class VideoCompose(BaseTool):
                     for img in cut["images"]
                 ]
 
+        # CinematicRenderer consumes `scenes`, while the MCP workflow emits
+        # `cuts`. Bridge the trusted cut timeline explicitly so cinematic-
+        # montage renders uploaded stills instead of merely accepting a
+        # renderer_family label and receiving an empty composition.
+        renderer_family = (composition_data or {}).get("renderer_family", "explainer-data")
+        if renderer_family in {"cinematic-trailer", "documentary-montage"} and not props.get("scenes"):
+            props["scenes"] = [
+                {
+                    "id": cut.get("id", f"scene-{idx:04d}"),
+                    "kind": "image",
+                    "src": cut.get("source", ""),
+                    "startSeconds": float(cut.get("in_seconds", 0)),
+                    "durationSeconds": max(0.1, float(cut.get("out_seconds", 0)) - float(cut.get("in_seconds", 0))),
+                    "fadeInFrames": 8 if idx else 14,
+                    "fadeOutFrames": 8,
+                }
+                for idx, cut in enumerate(props.get("cuts", []))
+                if cut.get("source")
+            ]
+
         # audio.narration.src / audio.music.src
         audio = props.get("audio")
         if audio:
@@ -1536,7 +1556,6 @@ class VideoCompose(BaseTool):
 
         # Route to the correct Remotion composition based on renderer_family.
         # This prevents all pipelines from collapsing into the Explainer visual grammar.
-        renderer_family = (composition_data or {}).get("renderer_family", "explainer-data")
         composition_id = self._get_composition_id(renderer_family)
 
         cmd = [

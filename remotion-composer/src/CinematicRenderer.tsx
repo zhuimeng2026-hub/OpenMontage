@@ -3,6 +3,7 @@ import {
   AbsoluteFill,
   Audio,
   CalculateMetadataFunction,
+  Img,
   OffthreadVideo,
   Sequence,
   interpolate,
@@ -22,7 +23,7 @@ function resolveAsset(src: string): string {
   }
   return staticFile(clean);
 }
-import { CinematicRendererProps, CinematicTone, CinematicVideoScene } from "./cinematic/types";
+import { CinematicRendererProps, CinematicScene, CinematicTone, CinematicVideoScene } from "./cinematic/types";
 import { CaptionOverlay } from "./components/CaptionOverlay";
 
 const FPS = 30;
@@ -118,6 +119,22 @@ const SceneVideo: React.FC<{ scene: CinematicVideoScene }> = ({ scene }) => {
       />
     </AbsoluteFill>
   );
+};
+
+const SceneImage: React.FC<{ scene: Extract<CinematicScene, { kind: "image" }> }> = ({ scene }) => {
+  const frame = useCurrentFrame();
+  const { durationInFrames } = useVideoConfig();
+  const fadeInFrames = scene.fadeInFrames ?? 10;
+  const fadeOutFrames = scene.fadeOutFrames ?? 10;
+  const fadeOutStart = Math.max(fadeInFrames, durationInFrames - fadeOutFrames);
+  const fadeIn = fadeInFrames === 0 ? 1 : interpolate(frame, [0, fadeInFrames], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const fadeOut = fadeOutFrames === 0 ? 1 : interpolate(frame, [fadeOutStart, durationInFrames], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const scale = interpolate(frame, [0, durationInFrames], [1.04, 1.01], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  return <AbsoluteFill style={{ backgroundColor: "#020407", opacity: Math.min(fadeIn, fadeOut) }}>
+    <Img src={resolveAsset(scene.src)} style={{ width: "100%", height: "100%", objectFit: "cover", transform: `scale(${scale})`, filter: scene.filter ?? "contrast(1.06) saturate(0.9) brightness(0.92)" }} />
+    <AbsoluteFill style={{ background: toneGradient(scene.tone ?? "cold"), mixBlendMode: "multiply" }} />
+    <AbsoluteFill style={{ background: "radial-gradient(circle at center, transparent 52%, rgba(0,0,0,0.52) 100%)" }} />
+  </AbsoluteFill>;
 };
 
 const SignalTexture: React.FC<{
@@ -503,6 +520,8 @@ export const CinematicRenderer: React.FC<CinematicRendererProps> = ({
         >
           {scene.kind === "video" ? (
             <SceneVideo scene={scene} />
+          ) : scene.kind === "image" ? (
+            <SceneImage scene={scene} />
           ) : (
             <TitleCard
               text={scene.text}

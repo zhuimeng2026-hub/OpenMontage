@@ -146,6 +146,21 @@ func (s *SessionStore) ListJobs(sessionID string) []*RenderJob {
 	return out
 }
 
+// OwnsJob reports whether a render job belongs to the BFF session. It is used
+// before proxying progress so a caller cannot subscribe to another session's
+// job by guessing its upstream id.
+func (s *SessionStore) OwnsJob(sessionID, jobID string) bool {
+	if sessionID == "" || jobID == "" {
+		return false
+	}
+	for _, job := range s.ListJobs(sessionID) {
+		if job != nil && job.JobID == jobID {
+			return true
+		}
+	}
+	return false
+}
+
 // UpdateJobStatus rewrites the status of a single job (used when the upstream
 // render reaches a terminal state).
 func (s *SessionStore) UpdateJobStatus(sessionID, jobID, status string) {
@@ -236,7 +251,13 @@ func (s *SessionStore) CreateBatch(sessionID, batchID, projectID string) error {
 	s.mu.RUnlock()
 
 	c := NewClient(s.baseURL, s.token)
-	if err := c.Initialize(); err != nil {
+	// On restart or another BFF instance, resume the persisted upstream session
+	// instead of initializing a new one and losing the uploaded assets.
+	if persisted, err := s.findPersistedBatchSession(sessionID, batchID, projectID); err != nil {
+		return fmt.Errorf("lookup persisted mcp batch %q: %w", batchID, err)
+	} else if persisted != nil && persisted.UpstreamSessionID != "" {
+		c.SetSessionID(persisted.UpstreamSessionID)
+	} else if err := c.Initialize(); err != nil {
 		return fmt.Errorf("mcp initialize image batch %q: %w", batchID, err)
 	}
 	entry := &batchClient{client: c, batchID: batchID, projectID: projectID}

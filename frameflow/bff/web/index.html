@@ -526,7 +526,7 @@
               <div class="drop" id="upload-drop">
                 <div class="up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V6M5 12l7-7 7 7"/></svg></div>
                 <div class="d1">拖拽图片到此处，或 点击上传</div>
-                <div class="d2" id="upload-hint">支持 JPG / PNG / WEBP · 单次最多 10 张</div>
+                <div class="d2" id="upload-hint">支持 JPG / PNG / WEBP · 每次 5–10 张 · 成片固定 60 秒</div>
                 <input type="file" id="upload-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
               </div>
               <div class="upload-preview" id="upload-preview" style="display:none">
@@ -541,9 +541,9 @@
               </div>
               <div class="pl" style="margin-top:14px">Remotion 渲染脚本</div>
               <select id="image-script-select" class="opt" style="width:100%;box-sizing:border-box;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft)">
-                <option value="photo-ken-burns">照片运镜</option>
-                <option value="cinematic-montage">电影混剪</option>
                 <option value="ecommerce-product-demo">电商产品演示</option>
+                <option value="cinematic-montage">电影混剪</option>
+                <option value="photo-ken-burns">照片运镜</option>
               </select>
             </div>
             <div class="panel">
@@ -551,7 +551,7 @@
               <div class="pl">分辨率</div>
               <div class="opt">1080p</div>
               <div class="pl">时长</div>
-              <div class="opt">0:03 / 张</div>
+              <div class="opt">固定 60 秒</div>
               <button class="btn-primary" id="render-btn" style="margin-top:18px">开始渲染</button>
               <div id="create-progress" style="display:none;margin-top:14px">
                 <div class="track" style="height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden">
@@ -778,7 +778,7 @@
           if(s.status === 'authorized'){
             clearInterval(iv);
             document.getElementById('qr-login-modal').classList.remove('show');
-            fetch('/api/me').then(function(r){ return r.json(); }).then(function(u){
+            fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
               if(u && u.authenticated && u.user){
                 window.__ffUser = u.user;
                 showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
@@ -817,7 +817,7 @@
     try{
       var params = new URLSearchParams(location.search);
       if(params.get('login') === 'wechat'){
-        fetch('/api/me').then(function(r){ return r.json(); }).then(function(u){
+        fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
           if(u && u.authenticated && u.user){
             window.__ffUser = u.user;
             loadQueue(); // 用真实登录身份重新过滤渲染队列
@@ -830,7 +830,7 @@
       if(params.get('code')){ showToast('已收到微信授权回调（应走 BFF），演示模式直接进入'); enterApp(); }
       else{
         // 已登录用户（会话 cookie 持久）刷新页面时直接进入，无需重复扫码
-        fetch('/api/me').then(function(r){ return r.json(); }).then(function(u){
+        fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
           if(u && u.authenticated && u.user){
             window.__ffUser = u.user;
             enterApp();
@@ -1252,6 +1252,7 @@
   // Per-submission image cap. Default matches the free tier; refreshed from
   // /api/quota so the hint and the guard stay aligned with the user's tier.
   var maxFilesPerSubmission = 10;
+  var minFilesPerSubmission = 5;
 
   async function ensureImageBatch(){
     if (currentImageBatch) return currentImageBatch;
@@ -1260,7 +1261,7 @@
     if (!base) throw new Error('未配置 BFF 地址');
     currentImageBatch = await jsonRequest(base + '/api/image-batches', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({script_id: imageScriptSelect ? imageScriptSelect.value : 'photo-ken-burns'})
+      body:JSON.stringify({script_id: imageScriptSelect ? imageScriptSelect.value : 'ecommerce-product-demo'})
     });
     if (previewScript && imageScriptSelect) previewScript.textContent = imageScriptSelect.options[imageScriptSelect.selectedIndex].text;
     return currentImageBatch;
@@ -1276,11 +1277,11 @@
       if (!r.ok) return;
       var q = await r.json();
       if (q && typeof q.max_files_per_submission === 'number' && q.max_files_per_submission > 0){
-        maxFilesPerSubmission = q.max_files_per_submission;
+        maxFilesPerSubmission = Math.min(10, q.max_files_per_submission);
       }
     } catch (e){ /* keep default */ }
     var hint = document.getElementById('upload-hint');
-    if (hint) hint.textContent = '支持 JPG / PNG / WEBP · 单次最多 ' + maxFilesPerSubmission + ' 张';
+    if (hint) hint.textContent = '支持 JPG / PNG / WEBP · 每次 ' + minFilesPerSubmission + '–' + maxFilesPerSubmission + ' 张 · 成片固定 60 秒';
   }
 
   function setCreateProgress(show, pct, text){
@@ -1346,10 +1347,15 @@
       return;
     }
     var list = Array.prototype.slice.call(files);
-    if (list.length > maxFilesPerSubmission){
-      var extra = list.length - maxFilesPerSubmission;
-      list = list.slice(0, maxFilesPerSubmission);
-      showToast('单次最多 ' + maxFilesPerSubmission + ' 张，已忽略多余的 ' + extra + ' 张');
+    var available = maxFilesPerSubmission - uploadedCount;
+    if (available <= 0){
+      showToast('本批次已达到 ' + maxFilesPerSubmission + ' 张上限，请先开始渲染');
+      return;
+    }
+    if (list.length > available){
+      var extra = list.length - available;
+      list = list.slice(0, available);
+      showToast('本批次最多 ' + maxFilesPerSubmission + ' 张，已忽略多余的 ' + extra + ' 张');
     }
     setUploading(true);
     var failedCount = 0;
@@ -1396,9 +1402,9 @@
 
   if (renderBtn){
     renderBtn.addEventListener('click', async function(){
-      if (uploadedCount === 0){
-        setCreateProgress(true, null, '请先上传至少 1 张图片');
-        showToast('请先上传至少 1 张图片');
+      if (uploadedCount < minFilesPerSubmission){
+        setCreateProgress(true, null, '请先上传至少 ' + minFilesPerSubmission + ' 张图片（当前 ' + uploadedCount + ' 张）');
+        showToast('请先上传至少 ' + minFilesPerSubmission + ' 张图片');
         return;
       }
       renderBtn.disabled = true;
@@ -1514,8 +1520,9 @@
     var name = (document.getElementById('comp-name').value || '未命名').trim();
     var code = ffMonaco.getValue();
     try {
-      var r = await fetch('/api/compositions', {
+      var r = await fetch(bffBase() + '/api/compositions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ name: name, code: code })
       });
       var j = await r.json();
@@ -1549,9 +1556,16 @@
     var prog = document.getElementById('script-progress');
     var st = document.getElementById('script-status');
     prog.style.display = 'block';
-    for (var i = 0; i < files.length; i++){
+    var list = Array.prototype.slice.call(files);
+    var available = maxFilesPerSubmission - scriptUploaded;
+    if (available <= 0){ showToast('脚本模式本批次已达到 ' + maxFilesPerSubmission + ' 张上限'); return; }
+    if (list.length > available){
+      showToast('脚本模式每批最多 ' + maxFilesPerSubmission + ' 张，已忽略多余图片');
+      list = list.slice(0, available);
+    }
+    for (var i = 0; i < list.length; i++){
       try {
-        await window.FFMCP.chunkUpload(files[i], {});
+        await window.FFMCP.chunkUpload(list[i], {});
         scriptUploaded++;
         st.textContent = '已上传 ' + scriptUploaded + ' 张素材';
       } catch (e){ st.textContent = '上传失败：' + e.message; showToast('上传失败：' + e.message); return; }
@@ -1561,7 +1575,7 @@
   // 脚本模式渲染（先保存再提交；上游未支持自定义代码时返回明确提示）
   document.getElementById('render-btn-script').addEventListener('click', async function(){
     if (!ffMonaco){ showToast('编辑器未就绪'); return; }
-    if (scriptUploaded === 0){ showToast('请先上传至少 1 张素材'); return; }
+    if (scriptUploaded < minFilesPerSubmission){ showToast('请先上传至少 ' + minFilesPerSubmission + ' 张素材'); return; }
     var code = ffMonaco.getValue();
     var name = (document.getElementById('comp-name').value || '帧流作品').trim();
     var btn = this; btn.disabled = true;
@@ -1570,16 +1584,18 @@
     var st = document.getElementById('script-status');
     prog.style.display = 'block';
     try {
-      var saveR = await fetch('/api/compositions', {
+      var saveR = await fetch(bffBase() + '/api/compositions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ name: name, code: code })
       });
       var saveJ = await saveR.json();
       if (!saveR.ok){ st.textContent = '保存失败：' + (saveJ.error || saveR.status); btn.disabled = false; return; }
       window.__ffCompId = saveJ.id;
       st.textContent = '已保存，正在提交渲染…';
-      var rR = await fetch('/api/compositions/' + saveJ.id + '/render', {
+      var rR = await fetch(bffBase() + '/api/compositions/' + saveJ.id + '/render', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ title: name, aspect_ratio: '9:16', duration_per_image: 3 })
       });
       var rJ = await rR.json();

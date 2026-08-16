@@ -6,7 +6,7 @@ import base64, io, json, os, re, time, traceback
 import requests
 from PIL import Image, ImageDraw
 
-TOKEN = "h6LQUTVPA5vBmqXijUydpockVrPx2ruUqPaVQRT6WJE"
+TOKEN = os.environ.get("MCP_API_TOKEN", "").strip()
 URL = "http://localhost:8900/mcp"
 PROJECT_ID = "e2e-direct-" + time.strftime("%Y%m%d-%H%M%S")
 
@@ -29,6 +29,8 @@ def parse(r):
     except Exception: return {"raw": text}
 
 def main():
+    if not TOKEN:
+        raise SystemExit("MCP_API_TOKEN is required for direct MCP tests")
     s = requests.Session()
     h = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json",
          "Accept": "application/json, text/event-stream"}

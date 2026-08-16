@@ -23,6 +23,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := config.Validate(cfg); err != nil {
+		log.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Dir(cfg.StateDBPath), 0750); err != nil {
 		log.Fatal(err)
 	}

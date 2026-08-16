@@ -125,6 +125,10 @@ MP_verify_*.txt
 .om_mcp.log
 .ff_test.png
 .tmp-upload-*/
+.remote-*.log
+.remote-*.db
+.remote-*.db-shm
+.remote-*.db-wal
 .gocache-browser/
 .gocache-log/
 .gocache-test/

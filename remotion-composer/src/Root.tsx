@@ -24,6 +24,11 @@ import {
   ECOMMERCE_PRODUCT_DEMO_DURATION,
 } from "../../demo/src/EcommerceProductDemo";
 
+const calculateEcommerceMetadata: CalculateMetadataFunction<Record<string, unknown>> = async ({ props }) => {
+  const target = Number((props as { targetDurationSeconds?: number }).targetDurationSeconds);
+  return { durationInFrames: target > 0 ? Math.max(1, Math.round(target * 30)) : ECOMMERCE_PRODUCT_DEMO_DURATION };
+};
+
 // ---------------------------------------------------------------------------
 // Theme System — prevents every video from looking like dark fintech
 // ---------------------------------------------------------------------------
@@ -268,6 +273,7 @@ export const Root: React.FC = () => {
         width={1920}
         height={1080}
         defaultProps={ecommerceProductDemoDefaultProps}
+        calculateMetadata={calculateEcommerceMetadata}
       />
       <Composition
         id="CaptionOverlayOnly"

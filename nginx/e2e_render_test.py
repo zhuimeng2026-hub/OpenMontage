@@ -9,7 +9,6 @@ import base64, io, json, os, sys, time, traceback
 import requests
 from PIL import Image, ImageDraw
 
-TOKEN = "h6LQUTVPA5vBmqXijUydpockVrPx2ruUqPaVQRT6WJE"
 TARGET_HTTPS = "https://render.mengxa.com/api/mcp"
 TARGET_DIRECT = "http://localhost:8900/mcp"
 
@@ -40,10 +39,16 @@ class MCPClient:
 
     def _headers(self, has_id=True):
         h = {
-            "Authorization": f"Bearer {TOKEN}",
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        # Only direct MCP needs the server token.  BFF requests must rely on
+        # its own authenticated session and never receive MCP_API_TOKEN.
+        if not self.base.rstrip("/").endswith("/api/mcp"):
+            token = os.environ.get("MCP_API_TOKEN", "").strip()
+            if not token:
+                raise RuntimeError("MCP_API_TOKEN is required for direct MCP tests")
+            h["Authorization"] = f"Bearer {token}"
         if self.sid:
             h["Mcp-Session-Id"] = self.sid
         return h

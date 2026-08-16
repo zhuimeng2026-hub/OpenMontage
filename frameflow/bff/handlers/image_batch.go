@@ -23,6 +23,13 @@ var imageScripts = map[string]string{
 	"ecommerce-product-demo": "电商产品演示",
 }
 
+func validateImageCount(count int) error {
+	if count < 5 || count > 10 {
+		return fmt.Errorf("image batch requires 5 to 10 images")
+	}
+	return nil
+}
+
 type ImageBatchHandler struct {
 	Batches   *imagebatch.Store
 	Sessions  *mcp.SessionStore
@@ -159,8 +166,8 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("batch status is %s", b.Status)})
 		return
 	}
-	if b.AssetCount == 0 {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "upload at least one image before rendering"})
+	if err := validateImageCount(b.AssetCount); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "asset_count": b.AssetCount, "min": 5, "max": 10})
 		return
 	}
 	if err := h.ensureBatchSession(sid, b); err != nil {
@@ -177,7 +184,7 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 	}
 	res, err := h.Sessions.CallBatch(sid, b.ID, b.ProjectID, "create_remotion_video_share", map[string]interface{}{
 		"project_id": b.ProjectID, "script_id": b.ScriptID, "title": "帧流作品 " + b.ID,
-		"duration_per_image": 3.0, "aspect_ratio": aspectRatio,
+		"duration_per_image": 60.0 / float64(b.AssetCount), "aspect_ratio": aspectRatio,
 	})
 	if err != nil {
 		log.Printf("[image-batch] render_submit_failed batch_id=%s project_id=%s script_id=%s sid_hash=%s err=%v", b.ID, b.ProjectID, b.ScriptID, mcp.ShortHashForLog(sid), err)

@@ -46,9 +46,10 @@ func (h *Handlers) RequireAuth() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if h.Cfg.WechatAppID == "" {
-			// dev fallback: IdP not configured, nothing to authenticate against
-			c.Next()
+		if h.Cfg.WechatAppID == "" || h.Cfg.WechatAppSecret == "" {
+			// Fail closed. A production deployment with authentication enabled but
+			// no configured IdP must never silently become anonymous.
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "authentication provider is not configured"})
 			return
 		}
 		sid, err := c.Cookie(sessionCookieName)

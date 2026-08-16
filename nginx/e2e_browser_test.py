@@ -9,7 +9,6 @@ import base64, io, json, os, sys, time, traceback
 import requests
 from PIL import Image, ImageDraw
 
-TOKEN = "h6LQUTVPA5vBmqXijUydpockVrPx2ruUqPaVQRT6WJE"
 BFF = "https://render.mengxa.com/api/mcp"
 PROJECT_ID = "e2e-browser-" + time.strftime("%Y%m%d-%H%M%S")
 N_IMAGES = 3
@@ -26,7 +25,9 @@ def make_test_png(idx, w=540, h=960):
     buf = io.BytesIO(); img.save(buf, format="PNG"); return buf.getvalue()
 
 _session = requests.Session()
-_session.headers.update({"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"})
+# This is a BFF test: the BFF owns MCP_API_TOKEN server-side.  Do not send it
+# from the browser/client side; authentication is via the BFF session cookie.
+_session.headers.update({"Content-Type": "application/json"})
 
 def bff_call(tool, arguments):
     """真实浏览器协议：POST /api/mcp {tool, args}（BFF 用 args 承载参数）。
