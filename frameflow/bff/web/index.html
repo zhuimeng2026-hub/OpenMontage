@@ -1262,15 +1262,19 @@
     var jobID = button.getAttribute('data-republish-job');
     if(!jobID) return;
     var card = button.closest('.vcard'), error = card && card.querySelector('.qerror');
+    var originalLabel = button.textContent;
     button.disabled = true; button.textContent = '正在生成…';
     if(error) error.textContent = '';
     try {
       var r = await fetch(queueBase() + '/api/render-queue/' + encodeURIComponent(jobID) + '/republish', {method:'POST', credentials:'include', headers:{'Accept':'application/json'}});
+      var contentType = r.headers.get('content-type') || '';
+      if(!/application\/json/i.test(contentType)) throw new Error('服务端恢复接口未部署或未返回有效链接');
       var data = await r.json().catch(function(){ return {}; });
       if(!r.ok) throw new Error(data.error || '生成微云链接失败');
+      if(!safeDownloadURL(data.share_url)) throw new Error('服务端恢复接口未部署或未返回有效链接');
       await loadQueue();
     } catch(e) {
-      button.disabled = false; button.textContent = '生成微云链接';
+      button.disabled = false; button.textContent = originalLabel;
       if(error) error.textContent = e.message || '生成失败，请稍后重试';
     }
   }

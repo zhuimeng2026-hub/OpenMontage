@@ -31,6 +31,10 @@ def test_gallery_uses_real_queue_data_without_static_demo_cards():
     assert "function republishRender" in html
     assert "'/api/render-queue/' + encodeURIComponent(jobID) + '/republish'" in html
     assert "e.target.closest('.qrepublish')" in html
+    assert "r.headers.get('content-type')" in html
+    assert "application\\/json" in html
+    assert "服务端恢复接口未部署或未返回有效链接" in html
+    assert "safeDownloadURL(data.share_url)" in html
     assert "JOB-DEMO" not in html
     assert "javascript:" not in gallery
 
