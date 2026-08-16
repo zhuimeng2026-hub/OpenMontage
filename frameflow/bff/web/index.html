@@ -224,6 +224,8 @@
   .vcard .meta{padding:16px 12px 18px;}
   .vcard .t{font-size:15px;font-weight:600;}
   .vcard .m{font-size:12px;color:var(--text-secondary);margin-top:4px;}
+  .vcard .qdownload{display:inline-flex;align-items:center;margin-top:12px;height:28px;padding:0 10px;border:1px solid rgba(52,211,153,.45);border-radius:6px;color:var(--success);font-size:11px;line-height:1;text-decoration:none;}
+  .vcard .qdownload:hover{background:rgba(52,211,153,.12);border-color:var(--success);}
   .queue-row{
     display:flex;align-items:center;gap:16px;height:64px;padding:0 16px;margin-bottom:8px;
     background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-sm);
@@ -487,28 +489,15 @@
       <!-- DASHBOARD -->
       <section class="view active" id="view-dashboard">
         <div class="greet">下午好，晓明</div>
-        <div class="greet-sub" id="greet-sub">今天是 2026年8月13日 · 你还有 3 个渲染任务正在进行中</div>
+        <div class="greet-sub" id="greet-sub">正在加载任务概况…</div>
         <div class="kpi-grid">
-          <div class="kpi"><div class="l">总视频数</div><div class="v">128</div><div class="s" style="color:var(--success)">+12 本月</div></div>
-          <div class="kpi"><div class="l">本月渲染</div><div class="v">46</div><div class="s" style="color:var(--text-secondary)">总时长 3h12m</div></div>
-          <div class="kpi"><div class="l">渲染中</div><div class="v" style="color:var(--accent)">3</div><div class="s" style="color:var(--text-secondary)">队列任务进行中</div></div>
-          <div class="kpi"><div class="l">配额用量</div><div class="v" style="color:var(--warning)">68%</div><div class="s" style="color:var(--text-secondary)">本月已用额度</div></div>
+          <div class="kpi"><div class="l">总视频数</div><div class="v" id="kpi-total-videos">0</div><div class="s" style="color:var(--success)">当前会话任务</div></div>
+          <div class="kpi"><div class="l">本月渲染</div><div class="v">—</div><div class="s" style="color:var(--text-secondary)">月度统计暂未接入</div></div>
+          <div class="kpi"><div class="l">渲染中</div><div class="v" id="kpi-rendering" style="color:var(--accent)">0</div><div class="s" style="color:var(--text-secondary)">当前会话任务</div></div>
+          <div class="kpi"><div class="l">配额用量</div><div class="v" style="color:var(--warning)">—</div><div class="s" style="color:var(--text-secondary)">用量统计暂未接入</div></div>
         </div>
         <div class="section-head"><h3>最近视频</h3><span class="more">查看全部 ›</span></div>
-        <div class="video-grid">
-          <div class="vcard">
-            <div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div>
-            <div class="meta"><div class="t">夏日旅行混剪</div><div class="m">0:45 · 2天前</div></div>
-          </div>
-          <div class="vcard">
-            <div class="thumb" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div>
-            <div class="meta"><div class="t">产品发布会开场</div><div class="m">1:30 · 昨天</div></div>
-          </div>
-          <div class="vcard">
-            <div class="thumb" style="background:linear-gradient(135deg,#F87171,#7C5CFF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(248,113,113,0.2);color:var(--error)">渲染失败</span></div>
-            <div class="meta"><div class="t">城市夜景延时</div><div class="m">0:20 · 3天前</div></div>
-          </div>
-        </div>
+        <div class="video-grid" id="dash-recent-videos"><div style="color:var(--text-tertiary);font-size:13px;padding:8px 0">正在加载最近视频…</div></div>
         <div class="section-head"><h3>渲染队列</h3><span class="more">管理 ›</span></div>
         <div id="dash-queue"></div>
       </section>
@@ -605,25 +594,16 @@
       <!-- GALLERY -->
       <section class="view" id="view-gallery">
         <div class="gsub">管理你生成的所有视频，按状态筛选</div>
-        <div class="filter-bar">
+        <div class="filter-bar" id="gallery-filters">
           <div class="chip active">全部</div>
-          <div class="chip">草稿</div>
           <div class="chip">已发布</div>
-          <div class="chip">归档</div>
         </div>
-        <div class="video-grid">
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div><div class="meta"><div class="t">夏日旅行混剪</div><div class="m">0:45 · 2天前</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div><div class="meta"><div class="t">产品发布会开场</div><div class="m">1:30 · 昨天</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#F87171,#7C5CFF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(248,113,113,0.2);color:var(--error)">渲染失败</span></div><div class="meta"><div class="t">城市夜景延时</div><div class="m">0:20 · 3天前</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#34D399,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(79,216,255,0.2);color:var(--accent)">渲染中</span></div><div class="meta"><div class="t">团队年度合集</div><div class="m">2:10 · 4天前</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#34D399)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div><div class="meta"><div class="t">节日祝福卡片</div><div class="m">0:15 · 5天前</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#FBBD23,#F87171)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(251,189,35,0.2);color:var(--warning)">草稿</span></div><div class="meta"><div class="t">产品功能演示</div><div class="m">0:45 · 6天前</div></div></div>
-        </div>
+        <div class="video-grid" id="gallery-body"><div style="color:var(--text-tertiary);font-size:13px;padding:16px 0">正在加载我的视频…</div></div>
       </section>
 
       <!-- QUEUE -->
       <section class="view" id="view-queue">
-        <div class="qsub" id="queue-summary">共 12 个任务 · 3 渲染中 · 1 排队 · 7 已完成 · 1 失败</div>
+        <div class="qsub" id="queue-summary">正在加载渲染队列…</div>
         <div class="filter-bar">
           <div class="chip active">全部</div>
           <div class="chip">渲染中</div>
@@ -857,6 +837,7 @@
       document.getElementById('topbar-title').textContent = titles[view];
       document.querySelector('.content').scrollTop = 0;
       if (view === 'create') refreshQuota();
+      if (view === 'gallery') { loadGallery(); }
     });
   });
 
@@ -875,6 +856,7 @@
       chip.addEventListener('click', function(){
         bar.querySelectorAll('.chip').forEach(function(c){ c.classList.remove('active'); });
         chip.classList.add('active');
+        if (bar.id === 'gallery-filters') { GALLERY_FILTER = chip.textContent.trim(); renderGallery(); }
       });
     });
   });
@@ -1125,9 +1107,16 @@
         var st = mapStatus(ev && ev.status);
         applyProgress(job.job_id, pct, st);
         if(st === '已完成' || st === '失败'){
+          var current = QUEUE_JOBS.find(function(item){ return item.job_id === job.job_id; });
+          if(current){
+            current.status = st;
+            if(st === '已完成') current.pct = 100;
+            if(ev && safeDownloadURL(ev.share_url)) current.share_url = ev.share_url;
+            renderGallery(); renderRecent();
+          }
           queueSubs[job.job_id] = null;
           if(unsub) unsub();
-          loadQueue();
+          setTimeout(loadQueue, 750);
         }
       }, function(){ queueSubs[job.job_id] = null; });
       queueSubs[job.job_id] = unsub;
@@ -1137,6 +1126,7 @@
   // 把任务数组渲染到工作台预览 + 完整队列页 + 统计摘要
   function paintQueue(jobs){
     QUEUE_JOBS = jobs || [];
+    renderGallery(); renderRecent();
     // 清理旧的订阅
     Object.keys(queueSubs).forEach(function(k){ if(queueSubs[k]) try{ queueSubs[k](); }catch(e){} queueSubs[k] = null; });
 
@@ -1150,7 +1140,7 @@
         var pct = j.status === '排队' ? '<span style="color:var(--warning)">排队</span>' : (j.pct != null ? j.pct + '%' : '0%');
         return '<div class="queue-row" data-job="' + esc(j.job_id) + '"><span class="dot" style="background:' + dot + '"></span>' +
           '<div style="flex:1"><div class="name">' + esc(j.name) + ' · ' + esc(j.res) + '</div>' +
-          '<div class="sub mono">' + esc(j.job_id) + ' · ' + j.status + '</div></div>' +
+          '<div class="sub mono">' + esc(j.job_id) + ' · ' + esc(j.status) + '</div></div>' +
           '<div class="track"><div class="fill" style="width:' + (j.status === '排队' ? '0' : (j.pct != null ? j.pct : 0) + '%') + '"></div></div>' +
           '<div class="pct">' + pct + '</div></div>';
       }).join('');
@@ -1164,7 +1154,7 @@
         var grad = (j.status === '已完成') ? 'linear-gradient(90deg,#34D399,#4FD8FF)' : 'var(--grad-primary)';
         var fillW = j.status === '已完成' ? '100%' : (j.pct != null ? j.pct + '%' : '0%');
         return '<div class="qrow" data-job="' + esc(j.job_id) + '"><div class="qname">' + esc(j.name) + '</div>' +
-          '<div class="pill" style="' + pillStyle(j.status) + '">' + j.status + '</div>' +
+          '<div class="pill" style="' + pillStyle(j.status) + '">' + esc(j.status) + '</div>' +
           '<div class="qtrack"><div class="qfill" style="width:' + fillW + ';background:' + grad + '"></div></div>' +
           '<div class="qpct">' + (j.status === '排队' ? '排队' : ((j.pct != null ? j.pct : 0) + '%')) + '</div>' +
           '<div class="qres mono">' + esc(j.res) + '</div>' +
@@ -1178,14 +1168,27 @@
     var cQueue = QUEUE_JOBS.filter(function(j){ return j.status === '排队'; }).length;
     var cDone  = QUEUE_JOBS.filter(function(j){ return j.status === '已完成'; }).length;
     var cFail  = QUEUE_JOBS.filter(function(j){ return j.status === '失败'; }).length;
+    var totalKpi = document.getElementById('kpi-total-videos');
+    var renderingKpi = document.getElementById('kpi-rendering');
+    if(totalKpi) totalKpi.textContent = cDone;
+    if(renderingKpi) renderingKpi.textContent = cRender;
     var sum = document.getElementById('queue-summary');
     if(sum) sum.textContent = '共 ' + QUEUE_JOBS.length + ' 个任务 · ' + cRender + ' 渲染中 · ' + cQueue + ' 排队 · ' + cDone + ' 已完成 · ' + cFail + ' 失败';
 
     var greet = document.getElementById('greet-sub');
-    if(greet) greet.textContent = '今天是 2026年8月13日 · 你还有 ' + cRender + ' 个渲染任务正在进行中';
+    if(greet){
+      var today = new Date();
+      var dateText = today.getFullYear() + '年' + (today.getMonth() + 1) + '月' + today.getDate() + '日';
+      var activeCount = cRender + cQueue;
+      greet.textContent = '今天是 ' + dateText + ' · 你还有 ' + activeCount + ' 个渲染任务正在进行中';
+    }
 
     // 为进行中任务订阅实时进度
     QUEUE_JOBS.forEach(subscribeJob);
+  }
+
+  function loadGallery(){
+    loadQueue();
   }
 
   function ownerName(){
@@ -1206,23 +1209,60 @@
     } catch(e){ return ''; }
   }
 
+  var GALLERY_FILTER = '全部';
+  function galleryCard(j){
+    var url = safeDownloadURL(j.share_url);
+    var link = url ? '<a class="qdownload" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">打开微云 / 下载</a>' : '';
+    var jobID = j.job_id || 'unknown-job', name = j.name || '未命名视频', status = j.status || '未知';
+    return '<div class="vcard" data-job="' + esc(jobID) + '"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="' + pillStyle(status) + '">' + esc(status) + '</span></div><div class="meta"><div class="t">' + esc(name) + '</div><div class="m">' + esc(fmtTime(j.created_at) || '时间未知') + ' · ' + esc(jobID) + '</div>' + link + '</div></div>';
+  }
+  function renderGallery(){
+    var body = document.getElementById('gallery-body'); if(!body) return;
+    var jobs = QUEUE_JOBS.filter(function(j){
+      if(GALLERY_FILTER === '已发布') return j.status === '已完成' && !!safeDownloadURL(j.share_url);
+      return true;
+    });
+    body.innerHTML = jobs.length ? jobs.map(galleryCard).join('') : '<div style="color:var(--text-tertiary);font-size:13px;padding:16px 0">暂无符合条件的视频。</div>';
+  }
+  function renderRecent(){
+    var body = document.getElementById('dash-recent-videos'); if(!body) return;
+    var jobs = QUEUE_JOBS.filter(function(j){ return j.status === '已完成'; }).slice(0, 3);
+    body.innerHTML = jobs.length ? jobs.map(galleryCard).join('') : '<div style="color:var(--text-tertiary);font-size:13px;padding:8px 0">暂无已完成视频。</div>';
+  }
+  function galleryError(){ var body = document.getElementById('gallery-body'); if(body) body.innerHTML = '<div style="color:var(--error);font-size:13px;padding:16px 0">加载失败，请稍后重试。</div>'; }
+  function paintLoadError(){
+    galleryError();
+    var recent = document.getElementById('dash-recent-videos');
+    var dash = document.getElementById('dash-queue');
+    var queue = document.getElementById('queue-body');
+    var summary = document.getElementById('queue-summary');
+    var greet = document.getElementById('greet-sub');
+    var totalKpi = document.getElementById('kpi-total-videos');
+    var renderingKpi = document.getElementById('kpi-rendering');
+    var message = '<div style="color:var(--error);font-size:13px;padding:8px 0">任务数据加载失败，请稍后重试。</div>';
+    if(recent) recent.innerHTML = message;
+    if(dash) dash.innerHTML = message;
+    if(queue) queue.innerHTML = message;
+    if(summary) summary.textContent = '渲染队列加载失败';
+    if(greet) greet.textContent = '任务概况加载失败，请稍后重试';
+    if(totalKpi) totalKpi.textContent = '—';
+    if(renderingKpi) renderingKpi.textContent = '—';
+  }
+
   // 拉取真实队列（会话隔离，只返回本人任务）
   async function loadQueue(){
     var base = queueBase();
-    if(!base || (window.FFMCP && window.FFMCP.demo)){ // 演示模式：无 BFF 或手动进入演示骨架，展示占位，演示「只看到自己」
-      paintQueue([
-        { job_id:'JOB-DEMO1', name:'产品发布会开场', res:'1080p', status:'渲染中', pct:87, created_at:new Date().toISOString() },
-        { job_id:'JOB-DEMO2', name:'夏日旅行混剪', res:'1080p', status:'已完成', pct:100, created_at:new Date().toISOString() }
-      ]);
+    if(!base || (window.FFMCP && window.FFMCP.demo)){
+      paintQueue([]);
       return;
     }
     try {
       var r = await fetch(base + '/api/render-queue', { credentials: 'include' });
-      if(!r.ok){ paintQueue([]); return; }
+      if(!r.ok){ paintLoadError(); return; }
       var data = await r.json();
       (data.jobs || []).forEach(function(j){ if(j.pct == null && j.status === '渲染中') j.pct = 0; });
       paintQueue(data.jobs || []);
-    } catch(e){ paintQueue([]); }
+    } catch(e){ paintLoadError(); }
   }
   loadQueue();
 
