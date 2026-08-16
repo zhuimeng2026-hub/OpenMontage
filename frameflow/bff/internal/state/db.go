@@ -87,6 +87,22 @@ CREATE TABLE IF NOT EXISTS image_batch_render_leases (
 CREATE INDEX IF NOT EXISTS idx_image_batch_render_leases_expiry ON image_batch_render_leases(expires_at);
 CREATE INDEX IF NOT EXISTS idx_image_batch_render_leases_user ON image_batch_render_leases(user_id, expires_at);
 
+-- Durable WeChat login state. Each browser ff_sid cookie is bound to a WeChat
+-- user profile here so a login survives a BFF restart and is visible to every
+-- instance in a multi-instance deploy. The in-memory userStore is only a hot
+-- cache; this table is the cross-instance source of truth.
+CREATE TABLE IF NOT EXISTS wechat_users (
+  ff_sid TEXT PRIMARY KEY,
+  openid TEXT NOT NULL DEFAULT '',
+  nickname TEXT NOT NULL DEFAULT '',
+  scope TEXT NOT NULL DEFAULT '',
+  profile_json TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wechat_users_openid ON wechat_users(openid);
+CREATE INDEX IF NOT EXISTS idx_wechat_users_expiry ON wechat_users(expires_at);
+
 	`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("sqlite schema: %w", err)

@@ -3,9 +3,13 @@ package handlers
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -26,7 +30,8 @@ type Handlers struct {
 	ImageBatches *imagebatch.Store
 }
 
-func New(cfg *config.Config, store *mcp.SessionStore, lim limits.Resolver, batches *imagebatch.Store) *Handlers {
+func New(cfg *config.Config, store *mcp.SessionStore, lim limits.Resolver, batches *imagebatch.Store, db *sql.DB) *Handlers {
+	userDB = db
 	return &Handlers{
 		Cfg:          cfg,
 		Store:        store,
@@ -92,39 +97,140 @@ func randHex(n int) string {
 // the BFF session. The raw openid/session cookie is never sent upstream.
 func renderQueueOwnerID(sid string) string {
 	identity := "session:" + sid
-	userStore.RLock()
-	if user := userStore.m[sid]; user != nil {
-		if openid, ok := user["openid"].(string); ok && openid != "" {
+	if u := loadUserMap(sid); u != nil {
+		if openid, ok := u["openid"].(string); ok && openid != "" {
 			identity = "wechat:" + openid
 		}
 	}
-	userStore.RUnlock()
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }
 
-// in-memory user store (swap for Redis in multi-instance deploys)
+// userStore is the in-memory hot-cache for WeChat login state. It speeds up the
+// per-request /api/me probe and the queue-owner lookup; the durable copy lives
+// in the wechat_users SQLite table so logins survive BFF restarts and are
+// shared across instances in a multi-instance deploy.
 var userStore = struct {
 	sync.RWMutex
 	m map[string]map[string]interface{}
 }{m: make(map[string]map[string]interface{})}
 
+// userDB is the shared SQLite handle for durable WeChat login state. New() sets
+// it once; a nil handle degrades to in-memory-only (dev / no DB available).
+var userDB *sql.DB
+
+// wechatSessionTTL matches the ff_sid cookie lifetime (7 days).
+const wechatSessionTTL = 7 * 24 * time.Hour
+
+// loadUserMap returns the user record for a session id. It checks the hot cache
+// first and falls back to the wechat_users table, so a login stays visible after
+// a BFF restart or on another instance. Expired rows are deleted and reported as
+// not-logged-in.
+func loadUserMap(sid string) map[string]interface{} {
+	userStore.RLock()
+	if u, ok := userStore.m[sid]; ok {
+		userStore.RUnlock()
+		return u
+	}
+	userStore.RUnlock()
+
+	if userDB != nil {
+		u, err := findPersistedUser(userDB, sid)
+		if err != nil {
+			log.Printf("[auth] load persisted user ff_sid=%s err=%v", sid, err)
+			return nil
+		}
+		if u != nil {
+			if isExpired(u) {
+				_ = deletePersistedUser(userDB, sid)
+				return nil
+			}
+			userStore.Lock()
+			userStore.m[sid] = u
+			userStore.Unlock()
+			return u
+		}
+	}
+	return nil
+}
+
 func (h *Handlers) saveUser(sid string, u map[string]interface{}) {
 	userStore.Lock()
 	userStore.m[sid] = u
 	userStore.Unlock()
+	if userDB != nil {
+		if err := persistUser(userDB, sid, u); err != nil {
+			log.Printf("[auth] persist user ff_sid=%s err=%v", sid, err)
+		}
+	}
 }
 
 func (h *Handlers) loadUser(sid string) map[string]interface{} {
-	userStore.RLock()
-	defer userStore.RUnlock()
-	return userStore.m[sid]
+	return loadUserMap(sid)
 }
 
 func (h *Handlers) dropUser(sid string) {
 	userStore.Lock()
 	delete(userStore.m, sid)
 	userStore.Unlock()
+	if userDB != nil {
+		_ = deletePersistedUser(userDB, sid)
+	}
+}
+
+// ---- durable WeChat login persistence (wechat_users table) ----
+
+func persistUser(db *sql.DB, sid string, u map[string]interface{}) error {
+	openid, _ := u["openid"].(string)
+	nickname, _ := u["nickname"].(string)
+	scope, _ := u["scope"].(string)
+	profile, err := json.Marshal(u)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	expires := time.Now().Add(wechatSessionTTL).UTC().Format(time.RFC3339Nano)
+	_, err = db.Exec(`INSERT INTO wechat_users (ff_sid, openid, nickname, scope, profile_json, created_at, expires_at)
+VALUES(?,?,?,?,?,?,?)
+ON CONFLICT(ff_sid) DO UPDATE SET
+  openid=excluded.openid, nickname=excluded.nickname, scope=excluded.scope,
+  profile_json=excluded.profile_json, expires_at=excluded.expires_at`,
+		sid, openid, nickname, scope, string(profile), now, expires)
+	return err
+}
+
+func findPersistedUser(db *sql.DB, sid string) (map[string]interface{}, error) {
+	row := db.QueryRow(`SELECT profile_json, expires_at FROM wechat_users WHERE ff_sid=? LIMIT 1`, sid)
+	var profile, expires string
+	if err := row.Scan(&profile, &expires); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var u map[string]interface{}
+	if err := json.Unmarshal([]byte(profile), &u); err != nil {
+		return nil, err
+	}
+	u["expires_at"] = expires
+	return u, nil
+}
+
+func deletePersistedUser(db *sql.DB, sid string) error {
+	_, err := db.Exec(`DELETE FROM wechat_users WHERE ff_sid=?`, sid)
+	return err
+}
+
+func isExpired(u map[string]interface{}) bool {
+	exp, ok := u["expires_at"].(string)
+	if !ok || exp == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339Nano, exp)
+	if err != nil {
+		return false
+	}
+	return time.Now().After(t)
 }
 
 // DevLogin bootstraps a logged-in BFF session WITHOUT a real WeChat IdP. It

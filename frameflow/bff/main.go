@@ -37,7 +37,7 @@ func main() {
 	tierLimits := limits.NewResolver(cfg.DefaultTier, cfg.TierOverrides)
 	usage := limits.NewUsage()
 	imageBatches := imagebatch.NewStore(db)
-	h := handlers.New(cfg, store, tierLimits, imageBatches)
+	h := handlers.New(cfg, store, tierLimits, imageBatches, db)
 	comps := composition.NewStore()
 	ch := handlers.NewCompositionHandler(cfg, comps, store)
 	ibh := handlers.NewImageBatchHandler(cfg, imageBatches, store)
