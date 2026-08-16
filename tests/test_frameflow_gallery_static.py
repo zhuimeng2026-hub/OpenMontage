@@ -19,6 +19,13 @@ def test_gallery_uses_real_queue_data_without_static_demo_cards():
     assert "safeDownloadURL(j.share_url)" in html
     assert "credentials: 'include'" in html
     assert "paintLoadError" in html
+    assert 'class="vcard video-link"' in html
+    assert "role=\"button\" tabindex=\"0\"" in html
+    assert "aria-label=\"打开视频：" in html
+    assert "openGalleryCard" in html
+    assert "window.open(url, '_blank', 'noopener,noreferrer')" in html
+    assert "打开微云 / 播放下载" in html
+    assert "e.target.closest('.qdownload')" in html
     assert "JOB-DEMO" not in html
     assert "javascript:" not in gallery
 
@@ -34,3 +41,4 @@ def test_dashboard_recent_videos_are_dynamic():
     assert "function renderRecent" in html
     assert "夏日旅行混剪" not in dashboard
     assert "产品发布会开场" not in dashboard
+    assert "dash-recent-videos" in html

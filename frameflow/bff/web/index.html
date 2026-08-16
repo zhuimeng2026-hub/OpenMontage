@@ -226,6 +226,8 @@
   .vcard .m{font-size:12px;color:var(--text-secondary);margin-top:4px;}
   .vcard .qdownload{display:inline-flex;align-items:center;margin-top:12px;height:28px;padding:0 10px;border:1px solid rgba(52,211,153,.45);border-radius:6px;color:var(--success);font-size:11px;line-height:1;text-decoration:none;}
   .vcard .qdownload:hover{background:rgba(52,211,153,.12);border-color:var(--success);}
+  .vcard.video-link{cursor:pointer;}
+  .vcard.video-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}
   .queue-row{
     display:flex;align-items:center;gap:16px;height:64px;padding:0 16px;margin-bottom:8px;
     background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-sm);
@@ -1212,9 +1214,11 @@
   var GALLERY_FILTER = '全部';
   function galleryCard(j){
     var url = safeDownloadURL(j.share_url);
-    var link = url ? '<a class="qdownload" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">打开微云 / 下载</a>' : '';
+    var interactive = j.status === '已完成' && !!url;
+    var link = interactive ? '<a class="qdownload" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">打开微云 / 播放下载</a>' : '';
     var jobID = j.job_id || 'unknown-job', name = j.name || '未命名视频', status = j.status || '未知';
-    return '<div class="vcard" data-job="' + esc(jobID) + '"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="' + pillStyle(status) + '">' + esc(status) + '</span></div><div class="meta"><div class="t">' + esc(name) + '</div><div class="m">' + esc(fmtTime(j.created_at) || '时间未知') + ' · ' + esc(jobID) + '</div>' + link + '</div></div>';
+    var attrs = interactive ? ' class="vcard video-link" role="button" tabindex="0" aria-label="打开视频：' + esc(name) + '"' : ' class="vcard"';
+    return '<div' + attrs + ' data-job="' + esc(jobID) + '" data-share-url="' + (interactive ? esc(url) : '') + '"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="' + pillStyle(status) + '">' + esc(status) + '</span></div><div class="meta"><div class="t">' + esc(name) + '</div><div class="m">' + esc(fmtTime(j.created_at) || '时间未知') + ' · ' + esc(jobID) + '</div>' + link + '</div></div>';
   }
   function renderGallery(){
     var body = document.getElementById('gallery-body'); if(!body) return;
@@ -1229,6 +1233,24 @@
     var jobs = QUEUE_JOBS.filter(function(j){ return j.status === '已完成'; }).slice(0, 3);
     body.innerHTML = jobs.length ? jobs.map(galleryCard).join('') : '<div style="color:var(--text-tertiary);font-size:13px;padding:8px 0">暂无已完成视频。</div>';
   }
+  function openGalleryCard(card){
+    var url = safeDownloadURL(card && card.getAttribute('data-share-url'));
+    if(!url || !card.classList.contains('video-link')) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+  ['gallery-body', 'dash-recent-videos'].forEach(function(id){
+    var host = document.getElementById(id); if(!host) return;
+    host.addEventListener('click', function(e){
+      if(e.target.closest('.qdownload')) return;
+      var card = e.target.closest('.vcard.video-link');
+      if(card) openGalleryCard(card);
+    });
+    host.addEventListener('keydown', function(e){
+      if(e.key !== 'Enter' && e.key !== ' ') return;
+      var card = e.target.closest('.vcard.video-link');
+      if(card && e.target === card){ e.preventDefault(); openGalleryCard(card); }
+    });
+  });
   function galleryError(){ var body = document.getElementById('gallery-body'); if(body) body.innerHTML = '<div style="color:var(--error);font-size:13px;padding:16px 0">加载失败，请稍后重试。</div>'; }
   function paintLoadError(){
     galleryError();

@@ -252,7 +252,10 @@ def mcp_call(mcp_url, headers, tool_name, arguments, max_retries=3):
         retcode = parsed.get("retcode", 0)
         if retcode == 50000 and attempt < max_retries:
             wait = random.uniform(2, 5)
-            print(f"  ⚠️ 服务繁忙(50000)，{wait:.1f}s 后重试 ({attempt}/{max_retries})...")
+            # Keep CLI output ASCII-only: production on Windows may use a
+            # cp936/GBK stdout that cannot encode the warning emoji.
+            print(f"  [WARN] service busy (50000), retrying in {wait:.1f}s "
+                  f"({attempt}/{max_retries})...")
             time.sleep(wait)
             continue
         return parsed
@@ -333,7 +336,7 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
         if pre_rsp.get("file_exist", False):
             file_id = pre_rsp.get("file_id", "")
             fname = pre_rsp.get("filename", filename)
-            print(f"  ✅ 秒传成功！file_id={file_id}")
+            print(f"  [OK] instant upload succeeded; file_id={file_id}")
             return {"file_id": file_id, "filename": fname}
         # 获取通道列表
         ch_list = pre_rsp.get("channel_list", [])
@@ -352,7 +355,7 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
                 fname = pre_rsp.get("filename", filename) or filename
                 if not file_id:
                     file_id, fname = _resolve_file_id()
-                print(f"  ✅ 上传完成！file_id={file_id}")
+                print(f"  [OK] upload completed; file_id={file_id}")
                 return {"file_id": file_id, "filename": fname}
             raise RuntimeError(f"无可上传通道，upload_state={state}")
         offset = int(ch["offset"])
@@ -389,7 +392,7 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
             fname = up_rsp.get("filename", filename) or filename
             if not file_id:
                 file_id, fname = _resolve_file_id()
-            print(f"[3/3] ✅ 上传完成！file_id={file_id}, filename={fname}")
+            print(f"[3/3] [OK] upload completed; file_id={file_id}, filename={fname}")
             return {"file_id": file_id, "filename": fname}
     raise RuntimeError(f"超过最大上传轮数 ({max_rounds})，上传未完成")
 
