@@ -289,6 +289,8 @@
   .qrow .quser{display:flex;align-items:center;gap:10px;width:200px;}
   .qrow .qs{width:28px;height:28px;border-radius:14px;flex:none;}
   .qrow .qtime{margin-left:auto;font-size:12px;}
+  .qrow .qdownload{flex:none;display:inline-flex;align-items:center;height:26px;padding:0 8px;border:1px solid rgba(52,211,153,.45);border-radius:6px;color:var(--success);font-size:11px;line-height:1;text-decoration:none;white-space:nowrap;}
+  .qrow .qdownload:hover{background:rgba(52,211,153,.12);border-color:var(--success);}
 
   /* ============ GALLERY ============ */
   .gsub{font-size:13px;color:var(--text-secondary);margin-bottom:18px;}
@@ -1125,6 +1127,7 @@
         if(st === '已完成' || st === '失败'){
           queueSubs[job.job_id] = null;
           if(unsub) unsub();
+          loadQueue();
         }
       }, function(){ queueSubs[job.job_id] = null; });
       queueSubs[job.job_id] = unsub;
@@ -1145,7 +1148,7 @@
       else dash.innerHTML = active.map(function(j){
         var dot = j.status === '排队' ? 'var(--warning)' : 'var(--accent)';
         var pct = j.status === '排队' ? '<span style="color:var(--warning)">排队</span>' : (j.pct != null ? j.pct + '%' : '0%');
-        return '<div class="queue-row" data-job="' + j.job_id + '"><span class="dot" style="background:' + dot + '"></span>' +
+        return '<div class="queue-row" data-job="' + esc(j.job_id) + '"><span class="dot" style="background:' + dot + '"></span>' +
           '<div style="flex:1"><div class="name">' + esc(j.name) + ' · ' + esc(j.res) + '</div>' +
           '<div class="sub mono">' + esc(j.job_id) + ' · ' + j.status + '</div></div>' +
           '<div class="track"><div class="fill" style="width:' + (j.status === '排队' ? '0' : (j.pct != null ? j.pct : 0) + '%') + '"></div></div>' +
@@ -1160,13 +1163,13 @@
       else body.innerHTML = QUEUE_JOBS.map(function(j){
         var grad = (j.status === '已完成') ? 'linear-gradient(90deg,#34D399,#4FD8FF)' : 'var(--grad-primary)';
         var fillW = j.status === '已完成' ? '100%' : (j.pct != null ? j.pct + '%' : '0%');
-        return '<div class="qrow" data-job="' + j.job_id + '"><div class="qname">' + esc(j.name) + '</div>' +
+        return '<div class="qrow" data-job="' + esc(j.job_id) + '"><div class="qname">' + esc(j.name) + '</div>' +
           '<div class="pill" style="' + pillStyle(j.status) + '">' + j.status + '</div>' +
           '<div class="qtrack"><div class="qfill" style="width:' + fillW + ';background:' + grad + '"></div></div>' +
           '<div class="qpct">' + (j.status === '排队' ? '排队' : ((j.pct != null ? j.pct : 0) + '%')) + '</div>' +
           '<div class="qres mono">' + esc(j.res) + '</div>' +
           '<div class="quser"><div class="qs" style="background:' + grad + '"></div><span>' + esc(ownerName()) + '</span></div>' +
-          '<div class="qtime mono">' + (j.created_at ? fmtTime(j.created_at) : '') + '</div></div>';
+          '<div class="qtime mono">' + (j.created_at ? fmtTime(j.created_at) : '') + '</div>' + (j.status === '已完成' && safeDownloadURL(j.share_url) ? '<a class="qdownload" href="' + esc(safeDownloadURL(j.share_url)) + '" target="_blank" rel="noopener noreferrer">打开微云 / 下载</a>' : '') + '</div>';
       }).join('');
     }
 
@@ -1188,6 +1191,11 @@
   function ownerName(){
     // 队列数据已是本人会话的，提交人展示当前登录身份（无登录则侧边栏默认「晓明」）
     return (window.__ffUser && (window.__ffUser.nickname || window.__ffUser.openid)) || '晓明';
+  }
+  function safeDownloadURL(value){
+    var raw = String(value || '').trim();
+    if(!raw || !/^https?:\/\//i.test(raw)) return '';
+    try { var u = new URL(raw); return (u.hostname && (u.protocol === 'http:' || u.protocol === 'https:')) ? u.href : ''; } catch(e){ return ''; }
   }
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }

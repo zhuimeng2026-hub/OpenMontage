@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -34,7 +35,7 @@ func (h *Handlers) refreshJobStatuses(sid string, jobs []*mcp.RenderJob) {
 		if refreshed >= maxRefresh {
 			break
 		}
-		if j.Status != "渲染中" && j.Status != "排队" {
+		if j.Status != "渲染中" && j.Status != "排队" && !(j.Status == "已完成" && j.ShareURL == "") {
 			continue
 		}
 		refreshed++
@@ -49,17 +50,29 @@ func (h *Handlers) refreshJobStatuses(sid string, jobs []*mcp.RenderJob) {
 		if err != nil {
 			continue
 		}
-		if mapped := mapUpstreamStatus(digString(res, "status")); mapped != "" && mapped != j.Status {
-			h.Store.UpdateJobStatus(sid, j.JobID, mapped)
+		if mapped := mapUpstreamStatus(digString(res, "status")); mapped != "" {
+			shareURL := digString(res, "share_url")
+			if mapped == "已完成" && !validHTTPURL(shareURL) {
+				h.Store.UpdateJobResult(sid, j.JobID, "失败", "")
+				continue
+			}
+			if mapped != j.Status || shareURL != "" {
+				h.Store.UpdateJobResult(sid, j.JobID, mapped, shareURL)
+			}
 		}
 	}
+}
+
+func validHTTPURL(value string) bool {
+	u, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && u.Scheme != "" && (strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https")) && u.Host != ""
 }
 
 // mapUpstreamStatus normalises the upstream render-status vocabulary to the
 // Chinese labels the frontend renders.
 func mapUpstreamStatus(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "published", "done", "success", "completed", "finished":
+	case "published", "done", "success", "succeeded", "completed", "finished":
 		return "已完成"
 	case "failed", "error":
 		return "失败"

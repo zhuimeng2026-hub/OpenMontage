@@ -352,7 +352,7 @@ func (h *TemplateHandler) pollRender(sid, renderJobID string) (string, error) {
 			return "", err
 		}
 		switch strings.ToLower(strings.TrimSpace(digString(res, "status"))) {
-		case "published", "done", "success", "completed", "finished":
+		case "published", "done", "success", "succeeded", "completed", "finished":
 			return digString(res, "share_url"), nil
 		case "failed", "error":
 			return "", fmt.Errorf("render failed at stage %s", digString(res, "stage"))

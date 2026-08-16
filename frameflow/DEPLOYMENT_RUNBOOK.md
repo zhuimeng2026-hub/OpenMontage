@@ -86,6 +86,36 @@ MCP_PROGRESS_URL=http://127.0.0.1:8900/render-progress
 
 MCP 的 Uvicorn keep-alive 默认配置为30秒，避免与前端/BFF默认5秒状态轮询形成 TCP 关闭竞态。需要覆盖时在 MCP 服务环境设置 `MCP_HTTP_KEEP_ALIVE_SECONDS=30`（允许10–300秒），修改后重启 MCP。
 
+### 腾讯微云发布配置
+
+合并部署时，渲染完成后的发布链路由 `openmontage-mcp` 在本机执行：
+
+```text
+Remotion render
+  → Tencent Weiyun upload
+  → file_id
+  → Weiyun share_url
+  → BFF 按 render_job_id / batch_id 落库
+  → 当前用户队列显示下载/打开链接
+```
+
+`openmontage-mcp` 的 systemd `EnvironmentFile`（或等效服务环境）必须包含微云 MCP 凭据；不要把 token 写入代码、前端、nginx 配置或日志，也不要在排障命令中回显 token：
+
+```dotenv
+WEIYUN_MCP_TOKEN=生产密钥
+WEIYUN_MCP_URL=https://www.weiyun.com/api/v3/mcpserver
+# 可选：WEIYUN_ENV_ID=生产环境标识
+```
+
+`WEIYUN_MCP_URL` 默认就是 `https://www.weiyun.com/api/v3/mcpserver`，未配置时可以省略；`WEIYUN_ENV_ID` 仅在微云环境要求时设置。修改 EnvironmentFile 后必须重启并检查服务状态：
+
+```bash
+sudo systemctl restart openmontage-mcp
+sudo systemctl status openmontage-mcp --no-pager -l
+```
+
+验收时只核对脱敏后的日志事件和任务结果：同一任务应按 `render_job_id` 看到 `render_completed`、`weiyun_publish_started`、`weiyun_publish_completed`，并最终由 `get_render_status` 返回该任务的 `share_url`。使用两个用户各提交一个任务，或一个用户提交两个任务，确认两个链接均非空、互不相同，且不能出现在另一用户或另一批次的队列记录中。不要通过打印环境变量、请求头或完整服务配置来确认 token。
+
 多用户渲染由 MCP 的实际 Remotion CPU 闸门公平调度。12 核生产机建议：
 
 ```ini

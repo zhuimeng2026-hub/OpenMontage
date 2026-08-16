@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   name TEXT NOT NULL DEFAULT '',
   res TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT '',
+  share_url TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   PRIMARY KEY (session_id, job_id)
 );
@@ -86,9 +87,49 @@ CREATE TABLE IF NOT EXISTS image_batch_render_leases (
 CREATE INDEX IF NOT EXISTS idx_image_batch_render_leases_expiry ON image_batch_render_leases(expires_at);
 CREATE INDEX IF NOT EXISTS idx_image_batch_render_leases_user ON image_batch_render_leases(user_id, expires_at);
 
-`); err != nil {
+	`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("sqlite schema: %w", err)
+	}
+	// Backward-compatible migration for databases created before share URLs
+	// were persisted with render jobs.
+	var hasShareURL bool
+	rows, err := db.Query(`PRAGMA table_info(render_jobs)`)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite render_jobs schema: %w", err)
+	}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt interface{}
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			db.Close()
+			return nil, err
+		}
+		if name == "share_url" {
+			hasShareURL = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		db.Close()
+		return nil, fmt.Errorf("sqlite render_jobs schema rows: %w", err)
+	}
+	rows.Close()
+	if !hasShareURL {
+		if _, err := db.Exec(`ALTER TABLE render_jobs ADD COLUMN share_url TEXT NOT NULL DEFAULT ''`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("sqlite render_jobs share_url migration: %w", err)
+		}
+	}
+	// Backfill links for historical image-batch jobs created before render_jobs
+	// persisted share URLs.
+	if _, err := db.Exec(`UPDATE render_jobs SET share_url=(SELECT video_url FROM image_batches b WHERE b.session_id=render_jobs.session_id AND b.render_job_id=render_jobs.job_id) WHERE share_url='' AND EXISTS (SELECT 1 FROM image_batches b WHERE b.session_id=render_jobs.session_id AND b.render_job_id=render_jobs.job_id AND b.video_url<>'')`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite render_jobs share_url backfill: %w", err)
 	}
 	// A restart can leave a batch in rendering state while the upstream job is
 	// still running. Keep it recoverable; the handler lazily recreates its MCP

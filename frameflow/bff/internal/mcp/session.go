@@ -19,6 +19,7 @@ type RenderJob struct {
 	CreatedAt time.Time `json:"created_at"`
 	BatchID   string    `json:"batch_id,omitempty"`
 	ProjectID string    `json:"project_id,omitempty"`
+	ShareURL  string    `json:"share_url,omitempty"`
 }
 
 // SessionStore keeps the legacy user-scoped MCP Client for manual uploads and
@@ -164,8 +165,13 @@ func (s *SessionStore) OwnsJob(sessionID, jobID string) bool {
 // UpdateJobStatus rewrites the status of a single job (used when the upstream
 // render reaches a terminal state).
 func (s *SessionStore) UpdateJobStatus(sessionID, jobID, status string) {
+	s.UpdateJobResult(sessionID, jobID, status, "")
+}
+
+// UpdateJobResult updates terminal state and its per-job share URL atomically.
+func (s *SessionStore) UpdateJobResult(sessionID, jobID, status, shareURL string) {
 	if s.jobStore != nil {
-		if err := s.jobStore.UpdateStatus(sessionID, jobID, status); err == nil {
+		if err := s.jobStore.UpdateResult(sessionID, jobID, status, shareURL); err == nil {
 			return
 		}
 	}
@@ -174,6 +180,9 @@ func (s *SessionStore) UpdateJobStatus(sessionID, jobID, status string) {
 	for _, j := range s.renderJobs[sessionID] {
 		if j.JobID == jobID {
 			j.Status = status
+			if shareURL != "" {
+				j.ShareURL = shareURL
+			}
 			return
 		}
 	}

@@ -44,6 +44,7 @@ import os
 import random
 import struct
 import sys
+import threading
 import time
 
 try:
@@ -215,6 +216,7 @@ def calc_upload_params(file_path):
 # ========== MCP 调用 ==========
 
 _request_id = 0
+_request_id_lock = threading.Lock()
 
 
 def mcp_call(mcp_url, headers, tool_name, arguments, max_retries=3):
@@ -224,10 +226,14 @@ def mcp_call(mcp_url, headers, tool_name, arguments, max_retries=3):
     """
     global _request_id
     for attempt in range(1, max_retries + 1):
-        _request_id += 1
+        # Upload/share workers run concurrently.  Keep IDs unique even when
+        # multiple threads enter this shared transport at the same time.
+        with _request_id_lock:
+            _request_id += 1
+            request_id = _request_id
         payload = {
             "jsonrpc": "2.0",
-            "id": _request_id,
+            "id": request_id,
             "method": "tools/call",
             "params": {"name": tool_name, "arguments": arguments},
         }

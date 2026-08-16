@@ -14,3 +14,16 @@ func TestValidateImageCount(t *testing.T) {
 		}
 	}
 }
+
+func TestValidHTTPURLRejectsUnsafeOrEmptyShareLinks(t *testing.T) {
+	for _, value := range []string{"https://share.weiyun.com/a", "http://example.test/file"} {
+		if !validHTTPURL(value) {
+			t.Errorf("expected URL accepted: %q", value)
+		}
+	}
+	for _, value := range []string{"", "javascript:alert(1)", "//evil.test/file", "file:///tmp/video.mp4"} {
+		if validHTTPURL(value) {
+			t.Errorf("expected URL rejected: %q", value)
+		}
+	}
+}

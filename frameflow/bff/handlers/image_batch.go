@@ -126,11 +126,20 @@ func (h *ImageBatchHandler) Get(c *gin.Context) {
 				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "queued" })
 			case "rendering", "running", "processing", "in_progress", "progress":
 				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering" })
-			case "published", "done", "success", "completed", "finished":
-				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = digString(res, "share_url") })
-				h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
+			case "published", "done", "success", "succeeded", "completed", "finished":
+				shareURL := digString(res, "share_url")
+				if validHTTPURL(shareURL) {
+					h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = shareURL })
+					h.Sessions.UpdateJobResult(sid, b.RenderJobID, "已完成", shareURL)
+					h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
+				} else {
+					h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = "微云分享链接缺失" })
+					h.Sessions.UpdateJobResult(sid, b.RenderJobID, "失败", "")
+					h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
+				}
 			case "failed", "error":
 				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = digString(res, "error") })
+				h.Sessions.UpdateJobResult(sid, b.RenderJobID, "失败", "")
 				h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
 			}
 		}

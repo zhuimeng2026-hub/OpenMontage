@@ -166,11 +166,19 @@ class WeiyunUpload(BaseTool):
         except Exception as exc:  # noqa: BLE001 - surface any upload failure to the caller
             return ToolResult(success=False, error=f"Weiyun upload failed: {exc}")
         elapsed = round(time.time() - started, 2)
+        file_id = (result.get("file_id") or "").strip()
+        if not file_id:
+            return ToolResult(
+                success=False,
+                error="Weiyun upload completed without a file_id; refusing to publish an unbound file",
+                artifacts=[str(video_path)],
+                duration_seconds=elapsed,
+            )
 
         return ToolResult(
             success=True,
             data={
-                "file_id": result.get("file_id"),
+                "file_id": file_id,
                 "filename": result.get("filename"),
                 "mcp_url": mcp_url,
                 "target_dir": pdir_key or "",

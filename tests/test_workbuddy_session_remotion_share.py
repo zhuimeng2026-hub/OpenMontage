@@ -72,6 +72,17 @@ def _install_fakes(monkeypatch, tmp_path, *, fail_upload=False, fail_share=False
     return mcp_server
 
 
+def _capture_progress(monkeypatch, mcp_server):
+    events = []
+    monkeypatch.setattr(mcp_server, "publish", lambda job_id, event: events.append(event))
+    return events
+
+
+def _prepare_workflow(tmp_path):
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
+    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "type": "image", "sha256": "y"})
+
+
 async def _poll_until(mcp_server, job_id, timeout=30.0):
     """Poll get_render_status until the job reaches a terminal state."""
     deadline = time.monotonic() + timeout
@@ -159,6 +170,21 @@ def test_create_share_polls_to_failed_weiyun_share_and_keeps_video(monkeypatch, 
     assert state["video_path"] == final["video_path"]
 
 
+def test_weiyun_share_failure_publishes_failed_sse(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    _prepare_workflow(tmp_path)
+    mcp_server = _install_fakes(monkeypatch, tmp_path, fail_share=True)
+    events = _capture_progress(monkeypatch, mcp_server)
+    token = set_mcp_session_id("workflow")
+    try:
+        result = asyncio.run(mcp_server.create_remotion_video_share())
+        final = asyncio.run(_poll_until(mcp_server, result["render_job_id"]))
+    finally:
+        reset_mcp_session_id(token)
+    assert final["stage"] == "weiyun_share"
+    assert any(e.get("phase") == "share" and e.get("status") == "failed" for e in events)
+
+
 def test_create_share_polls_to_failed_weiyun_upload(monkeypatch, tmp_path):
     """An upload failure must report stage=weiyun_upload with its reason."""
     _state_env(monkeypatch, tmp_path)
@@ -176,6 +202,48 @@ def test_create_share_polls_to_failed_weiyun_upload(monkeypatch, tmp_path):
     assert final["status"] == "failed"
     assert final["stage"] == "weiyun_upload"
     assert final["error"] == "mock upload failure"
+
+
+def test_weiyun_upload_failure_publishes_failed_sse(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    _prepare_workflow(tmp_path)
+    mcp_server = _install_fakes(monkeypatch, tmp_path, fail_upload=True)
+    events = _capture_progress(monkeypatch, mcp_server)
+    token = set_mcp_session_id("workflow")
+    try:
+        result = asyncio.run(mcp_server.create_remotion_video_share())
+        final = asyncio.run(_poll_until(mcp_server, result["render_job_id"]))
+    finally:
+        reset_mcp_session_id(token)
+    assert final["stage"] == "weiyun_upload"
+    assert any(e.get("phase") == "upload" and e.get("status") == "failed" for e in events)
+
+
+@pytest.mark.parametrize("failure", ["missing_upload", "missing_share", "empty_file_id"])
+def test_weiyun_publish_guard_failures_publish_failed_sse(monkeypatch, tmp_path, failure):
+    _state_env(monkeypatch, tmp_path)
+    _prepare_workflow(tmp_path)
+    mcp_server = _install_fakes(monkeypatch, tmp_path)
+    original_get = mcp_server.registry.get
+    if failure == "missing_upload":
+        monkeypatch.setattr(mcp_server.registry, "get", lambda name: None if name == "weiyun_upload" else original_get(name))
+    elif failure == "missing_share":
+        monkeypatch.setattr(mcp_server.registry, "get", lambda name: None if name == "weiyun_share_link" else original_get(name))
+    else:
+        class EmptyUpload:
+            def execute(self, inputs):
+                return ToolResult(True, {"file_id": ""})
+        monkeypatch.setattr(mcp_server.registry, "get", lambda name: EmptyUpload() if name == "weiyun_upload" else original_get(name))
+    events = _capture_progress(monkeypatch, mcp_server)
+    token = set_mcp_session_id("workflow")
+    try:
+        result = asyncio.run(mcp_server.create_remotion_video_share())
+        final = asyncio.run(_poll_until(mcp_server, result["render_job_id"]))
+    finally:
+        reset_mcp_session_id(token)
+    assert final["status"] == "failed"
+    assert final["stage"] == ("weiyun_upload" if failure == "missing_upload" else "weiyun_share")
+    assert any(e.get("status") == "failed" for e in events)
 
 
 def test_get_render_status_unknown_job(monkeypatch, tmp_path):

@@ -828,6 +828,7 @@ def _run_render_job(
         if upload_tool is None:
             error = "weiyun_upload tool is not registered"
             update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path, error=error)
+            _publish_progress({"phase": "upload", "status": "failed", "error": error})
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         _event("weiyun_publish_started", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="uploading")
@@ -836,6 +837,7 @@ def _run_render_job(
             uploaded = await _run_tool_sync(upload_tool, {"video_path": video_path, "target_dir": "", "overwrite": False})
         except Exception as exc:
             update_session(sid, status="failed", failure_stage="weiyun_upload", video_path=video_path, error=str(exc))
+            _publish_progress({"phase": "upload", "status": "failed", "error": str(exc)})
             _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_upload", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
             return
         if not uploaded.success:
@@ -853,8 +855,9 @@ def _run_render_job(
         # weiyun_gen_share_link MCP tool uses.
         share_tool = registry.get("weiyun_share_link")
         if share_tool is None or not file_id:
-            error = "weiyun_share_link tool is unavailable or upload returned no file_id"
+            error = "weiyun_share_link tool is unavailable" if share_tool is None else "upload returned no file_id"
             update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path, error=error)
+            _publish_progress({"phase": "share", "status": "failed", "error": error})
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         try:
@@ -875,6 +878,7 @@ def _run_render_job(
         if not share_url:
             error = "Weiyun share tool returned no share URL"
             update_session(sid, status="failed", failure_stage="weiyun_share", video_path=video_path, error=error)
+            _publish_progress({"phase": "share", "status": "failed", "error": error})
             _event("workflow_failed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="failed", stage="weiyun_share", duration_ms=round((time.monotonic() - started) * 1000), error=error)
             return
         update_session(sid, status="published", share_url=share_url, video_path=video_path, error=None)
