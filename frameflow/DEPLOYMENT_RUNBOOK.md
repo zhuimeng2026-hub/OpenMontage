@@ -106,7 +106,7 @@ python3 scripts/frameflow_perf_monitor.py \
   | tee perf/frameflow-live.log
 ```
 
-终端会实时输出 CPU、内存、swap、load、磁盘、网络，以及 Remotion/Chrome/FFmpeg/MCP/BFF/Node 进程组资源；JSONL 用于压测后计算峰值和持续吞吐。若需要从另一台机器实时读取，必须额外提供 SSH，或通过受保护的只读 HTTP/日志通道暴露 `perf/frameflow-live.log`；脚本本身不会主动上传监控数据。
+终端会实时输出 CPU、内存、swap、load、磁盘、网络，以及 Remotion/Chrome/FFmpeg/MCP/BFF/Node 进程组资源；JSONL 用于压测后计算峰值和持续吞吐。跨机器实时读取请部署带令牌鉴权、来源地址限制和日志脱敏的 `scripts/frameflow_observer.py`，完整步骤见 `frameflow/REMOTE_OBSERVABILITY_HANDOFF.md`。不要在生产环境使用无鉴权的 `python -m http.server` 暴露日志目录。
 
 压测按 1、2、4、5、6 个并发逐级增加，每一级均需等待所有任务结束。任一级出现失败、swap 持续增长、内存超过 85%、磁盘持续接近 100% busy，或单任务耗时超过单并发基线两倍，即停止加压。最终生产并发取稳定级别的约 80%，为 nginx、BFF、MCP 和突发负载留余量。
 

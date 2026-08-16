@@ -13,6 +13,8 @@ frameflow/
 │   ├── web/              # 前端静态资源（index.html / config.js / mcp-client.js）
 │   ├── .env.example      # 配置模板（真实 .env 含密钥，勿入库）
 │   └── README.md         # BFF 运行与部署细节
+├── DEPLOYMENT_RUNBOOK.md # 本机/生产部署与验收步骤
+├── REMOTE_OBSERVABILITY_HANDOFF.md # 远端观测、日志与压测交接单
 ├── README.md             # 本文件
 └── .gitignore            # 排除编译产物与本地密钥
 ```
@@ -72,3 +74,7 @@ go run .                   # 默认 :8080，同源托管前端 → http://localh
 
 独立域名部署时，把 `frameflow/` 交给构建流水线（Docker / 静态托管 + BFF 服务），
 前端走 CDN/对象存储或仍由 BFF 同源托管均可。
+
+生产合并部署、远端只读性能指标与脱敏日志接口分别参见
+[`DEPLOYMENT_RUNBOOK.md`](./DEPLOYMENT_RUNBOOK.md) 和
+[`REMOTE_OBSERVABILITY_HANDOFF.md`](./REMOTE_OBSERVABILITY_HANDOFF.md)。
