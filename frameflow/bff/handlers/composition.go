@@ -96,9 +96,9 @@ func (h *CompositionHandler) Render(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Title             string `json:"title"`
-		AspectRatio       string `json:"aspect_ratio"`
-		DurationPerImage  int    `json:"duration_per_image"`
+		Title            string `json:"title"`
+		AspectRatio      string `json:"aspect_ratio"`
+		DurationPerImage int    `json:"duration_per_image"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if req.AspectRatio == "" {
@@ -124,6 +124,7 @@ func (h *CompositionHandler) Render(c *gin.Context) {
 		"aspect_ratio":       req.AspectRatio,
 		"duration_per_image": req.DurationPerImage,
 		"code":               comp.Code, // forward-compatible; ignored by upstream until supported
+		"queue_owner_id":     renderQueueOwnerID(sid),
 	}
 	res, err := h.Sessions.Call(sid, "create_remotion_video_share", args)
 	if err != nil {
@@ -136,11 +137,15 @@ func (h *CompositionHandler) Render(c *gin.Context) {
 		if name == "" {
 			name = comp.Name
 		}
+		jobStatus := "渲染中"
+		if mapUpstreamStatus(digString(res, "status")) == "排队" {
+			jobStatus = "排队"
+		}
 		h.Sessions.RecordJob(sid, mcp.RenderJob{
 			JobID:     jobID,
 			Name:      name,
 			Res:       req.AspectRatio,
-			Status:    "渲染中",
+			Status:    jobStatus,
 			CreatedAt: time.Now(),
 		})
 	}

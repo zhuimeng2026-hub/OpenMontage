@@ -25,8 +25,8 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -63,9 +63,6 @@ def _get_remotion_concurrency():
     return str(min(cores, 8))
 
 
-_REMOTION_RENDER_SLOTS = None  # 惰性创建的进程级 BoundedSemaphore
-
-
 def _get_remotion_max_parallel() -> int:
     """并发 Remotion render 进程上限。
 
@@ -84,17 +81,27 @@ def _get_remotion_max_parallel() -> int:
     return 2
 
 
-def _get_remotion_render_semaphore() -> threading.BoundedSemaphore:
-    """返回进程级 Remotion 渲染闸门。
+def _get_remotion_max_parallel_per_user() -> int:
+    """Return the maximum simultaneous Remotion processes for one user."""
+    env_val = os.environ.get("REMOTION_MAX_PARALLEL_PER_USER")
+    if env_val:
+        try:
+            val = int(env_val)
+            if val >= 1:
+                return min(val, _get_remotion_max_parallel())
+        except ValueError:
+            pass
+    return 1
 
-    video_compose.execute() 是同步方法，经 asyncio.to_thread 在 worker 线程
-    执行，因此必须用 threading 信号量而非 asyncio.Semaphore。Bounded 额外能
-    抓「释放次数 > 获取次数」的实现 bug。
-    """
-    global _REMOTION_RENDER_SLOTS
-    if _REMOTION_RENDER_SLOTS is None:
-        _REMOTION_RENDER_SLOTS = threading.BoundedSemaphore(_get_remotion_max_parallel())
-    return _REMOTION_RENDER_SLOTS
+
+def _get_remotion_render_gate():
+    """Return the process-wide user-fair Remotion render gate."""
+    from lib.render_queue import get_fair_render_gate
+
+    return get_fair_render_gate(
+        _get_remotion_max_parallel(),
+        _get_remotion_max_parallel_per_user(),
+    )
 
 
 class VideoCompose(BaseTool):
@@ -1608,20 +1615,24 @@ class VideoCompose(BaseTool):
         # 闸门：限制并发 Remotion 进程数，防止多用户无界扇出打爆宿主。
         # 排队/拿到槽位的状态经 progress_callback 上行，SSE 借此显示「排队→渲染」，
         # 并由 mcp_server._run_render_job 写入 session 的 render_phase + 排队位。
-        # 这里用 RenderQueue 记账等待集并返回排队位（position/depth）。
-        sem = _get_remotion_render_semaphore()
-        job_id = inputs.get("_job_id")
+        # FairRenderGate 在实际 CPU 闸门处按用户轮转；RenderQueue 继续提供
+        # 兼容的等待集快照，供状态清理与旧诊断代码使用。
+        gate = _get_remotion_render_gate()
+        # Pipeline/direct tool calls predate MCP job ids. Give those renders a
+        # private local identity so they keep the same global safety gate
+        # without requiring callers to know FrameFlow internals.
+        job_id = inputs.get("_job_id") or f"local-{uuid.uuid4().hex}"
+        queue_owner_id = str(inputs.get("_queue_owner_id") or job_id or "anonymous")
         try:
             from lib.render_queue import get_render_queue
             _rq = get_render_queue()
         except Exception:  # noqa: BLE001 - 队列模块不可用时退化为无记账
             _rq = None
-        if _rq is not None and job_id:
-            pos, depth = _rq.enter(job_id)
-            _queued_msg = f"排队中，第 {pos}/{depth} 位，等待可用渲染槽位"
-        else:
-            pos = depth = None
-            _queued_msg = "等待可用的 Remotion 渲染槽位"
+        ticket = None
+        ticket, pos, depth = gate.enter(job_id, queue_owner_id)
+        if _rq is not None:
+            _rq.enter(job_id)
+        _queued_msg = f"排队中，第 {pos}/{depth} 位，等待可用渲染槽位"
         if progress_callback:
             try:
                 _ev = {"phase": "render", "status": "queued", "slot_waiting": True,
@@ -1632,7 +1643,10 @@ class VideoCompose(BaseTool):
                 progress_callback(_ev)
             except Exception:  # noqa: BLE001
                 pass
-        with sem:
+        acquired = False
+        try:
+            gate.acquire(ticket)
+            acquired = True
             if _rq is not None and job_id:
                 _rq.leave(job_id)
             if progress_callback:
@@ -1687,6 +1701,9 @@ class VideoCompose(BaseTool):
                     shutil.rmtree(staged_dir, ignore_errors=True)
                 except OSError:
                     pass
+        finally:
+            if acquired:
+                gate.release(queue_owner_id)
 
         if not output_path.exists():
             return ToolResult(

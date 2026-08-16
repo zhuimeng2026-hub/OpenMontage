@@ -283,6 +283,7 @@ func (h *TemplateHandler) runBatch(sid string, t *template.Template, scenarios [
 			"duration_per_image": t.DurationPerImage,
 			"aspect_ratio":       t.AspectRatio,
 			"title":              title,
+			"queue_owner_id":     renderQueueOwnerID(sid),
 		})
 		if rerr != nil {
 			h.Templates.SetScenarioStatus(sid, sc.ID, "failed", "render submit: "+rerr.Error())
@@ -299,11 +300,15 @@ func (h *TemplateHandler) runBatch(sid string, t *template.Template, scenarios [
 
 		// Each batch-rendered scenario is also an entry in the caller's own
 		// render queue (scoped by the BFF session, so never cross-visible).
+		jobStatus := "渲染中"
+		if mapUpstreamStatus(digString(res, "status")) == "排队" {
+			jobStatus = "排队"
+		}
 		h.Sessions.RecordJob(sid, mcp.RenderJob{
 			JobID:     renderJobID,
 			Name:      title,
 			Res:       t.AspectRatio,
-			Status:    "渲染中",
+			Status:    jobStatus,
 			CreatedAt: time.Now(),
 		})
 

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"sync"
@@ -84,6 +85,22 @@ func randHex(n int) string {
 		return "fallback"
 	}
 	return hex.EncodeToString(b)
+}
+
+// renderQueueOwnerID returns an opaque, stable fairness key. A WeChat user
+// keeps the same key across browser sessions; anonymous/dev flows fall back to
+// the BFF session. The raw openid/session cookie is never sent upstream.
+func renderQueueOwnerID(sid string) string {
+	identity := "session:" + sid
+	userStore.RLock()
+	if user := userStore.m[sid]; user != nil {
+		if openid, ok := user["openid"].(string); ok && openid != "" {
+			identity = "wechat:" + openid
+		}
+	}
+	userStore.RUnlock()
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])
 }
 
 // in-memory user store (swap for Redis in multi-instance deploys)

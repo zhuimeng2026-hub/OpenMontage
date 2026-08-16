@@ -71,6 +71,14 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 			}
 		}
 	}
+	if req.Tool == "create_remotion_video_share" {
+		// Never trust a browser-supplied fairness key. Bind scheduling to the
+		// authenticated WeChat identity (or this BFF session when anonymous).
+		if req.Args == nil {
+			req.Args = make(map[string]interface{})
+		}
+		req.Args["queue_owner_id"] = renderQueueOwnerID(sid)
+	}
 
 	res, err := h.Store.Call(sid, req.Tool, req.Args)
 	if err != nil {
@@ -95,11 +103,15 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 			if resLabel == "" {
 				resLabel = "9:16"
 			}
+			jobStatus := "渲染中"
+			if mapUpstreamStatus(digString(res, "status")) == "排队" {
+				jobStatus = "排队"
+			}
 			h.Store.RecordJob(sid, mcp.RenderJob{
 				JobID:     jobID,
 				Name:      name,
 				Res:       resLabel,
-				Status:    "渲染中",
+				Status:    jobStatus,
 				CreatedAt: time.Now(),
 			})
 		}

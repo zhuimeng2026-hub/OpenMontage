@@ -143,7 +143,7 @@ def find_session_by_job_id(job_id: str) -> dict[str, Any] | None:
 
 
 # Statuses that mean a render was in-flight when the process died.
-_ORPHAN_STATUSES = frozenset({"rendering", "queued"})
+_ORPHAN_STATUSES = frozenset({"rendering", "queued", "rendered", "uploading", "sharing"})
 
 # render_phase value meaning "claimed a slot but still waiting for a Remotion
 # render slot (blocked on the semaphore)". Such jobs have NOT started
@@ -159,7 +159,7 @@ _JOBS_FILENAME = ".render_jobs.json"
 def recover_orphans_and_rebuild_index() -> dict[str, int]:
     """Startup maintenance: re-enqueue waiting jobs, fail active ones, rebuild index.
 
-    A session left ``rendering``/``queued`` was interrupted by a server
+    A session left in an active render/publish status was interrupted by a server
     crash/restart — the daemon thread that would finish it is gone. Two cases:
 
     * ``render_phase == 'queued_for_slot'`` — the job was *waiting for a render
@@ -194,6 +194,14 @@ def recover_orphans_and_rebuild_index() -> dict[str, int]:
                 data["status"] = "failed"
                 data["failure_stage"] = "orphaned"
                 data["error"] = "interrupted by server restart; please retry the render"
+                # Do not leave stale queue metadata on an orphaned job.  A
+                # worker that had already acquired a slot (or was in the
+                # upload/share phase) can no longer be in the live queue after
+                # a process restart, so exposing its old phase/position would
+                # make the status endpoint report contradictory state.
+                data["render_phase"] = None
+                data["queue_position"] = None
+                data["queue_depth"] = None
                 try:
                     _write(path, data)
                 except OSError:

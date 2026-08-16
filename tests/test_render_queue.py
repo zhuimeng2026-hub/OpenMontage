@@ -66,6 +66,68 @@ def test_render_queue_threaded_concurrent_enter(tmp_state):
     assert len(snap) == len(set(snap))  # no duplicates
 
 
+def test_fair_gate_splits_two_slots_between_two_users():
+    gate = render_queue.FairRenderGate(capacity=2, max_per_owner=1)
+    a1, _, _ = gate.enter("a1", "alice")
+    gate.acquire(a1)
+
+    a2, _, _ = gate.enter("a2", "alice")
+    b1, _, _ = gate.enter("b1", "bob")
+    a2_acquired = threading.Event()
+    b1_acquired = threading.Event()
+
+    def wait_for(ticket, acquired):
+        gate.acquire(ticket)
+        acquired.set()
+
+    ta = threading.Thread(target=wait_for, args=(a2, a2_acquired), daemon=True)
+    tb = threading.Thread(target=wait_for, args=(b1, b1_acquired), daemon=True)
+    ta.start()
+    tb.start()
+
+    assert b1_acquired.wait(1), "the second user should receive the free global slot"
+    assert not a2_acquired.is_set(), "one user must not occupy both slots"
+    assert gate.active() == 2
+    assert gate.active_for("alice") == 1
+    assert gate.active_for("bob") == 1
+
+    gate.release("alice")
+    assert a2_acquired.wait(1), "the queued Alice job should start after Alice releases"
+    gate.release("bob")
+    gate.release("alice")
+    ta.join(1)
+    tb.join(1)
+
+
+def test_fair_gate_preserves_fifo_within_each_user():
+    gate = render_queue.FairRenderGate(capacity=1, max_per_owner=1)
+    blocker, _, _ = gate.enter("blocker", "busy")
+    gate.acquire(blocker)
+    a1, _, _ = gate.enter("a1", "alice")
+    a2, _, _ = gate.enter("a2", "alice")
+    b1, _, _ = gate.enter("b1", "bob")
+
+    assert gate.position("a1") == 1
+    assert gate.position("b1") == 2
+    assert gate.position("a2") == 3
+    assert gate.depth() == 3
+
+    gate.release("busy")
+    gate.acquire(a1)
+    gate.release("alice")
+    gate.acquire(b1)
+    gate.release("bob")
+    gate.acquire(a2)
+    gate.release("alice")
+    assert gate.depth() == 0
+
+
+def test_fair_gate_rejects_unbalanced_release():
+    gate = render_queue.FairRenderGate(capacity=2, max_per_owner=1)
+    with pytest.raises(RuntimeError, match="unbalanced"):
+        gate.release("alice")
+
+
 def test_job_record_save_load_delete_roundtrip(tmp_state):
     rec = {
         "sid": "abc", "job_id": "j1", "safe_assets": [{"id": "x", "path": "/p"}],

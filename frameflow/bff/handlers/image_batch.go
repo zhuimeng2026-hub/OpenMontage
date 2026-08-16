@@ -11,7 +11,6 @@ import (
 
 	"frameflow-bff/internal/config"
 	"frameflow-bff/internal/imagebatch"
-	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
 )
 
@@ -31,10 +30,9 @@ func validateImageCount(count int) error {
 }
 
 type ImageBatchHandler struct {
-	Batches   *imagebatch.Store
-	Sessions  *mcp.SessionStore
-	Cfg       *config.Config
-	Semaphore *limits.Semaphore
+	Batches  *imagebatch.Store
+	Sessions *mcp.SessionStore
+	Cfg      *config.Config
 }
 
 // ensureBatchSession restores the dedicated upstream MCP session after a BFF
@@ -43,12 +41,8 @@ func (h *ImageBatchHandler) ensureBatchSession(sid string, b *imagebatch.Batch) 
 	return h.Sessions.CreateBatch(sid, b.ID, b.ProjectID)
 }
 
-func NewImageBatchHandler(cfg *config.Config, batches *imagebatch.Store, sessions *mcp.SessionStore, semaphores ...*limits.Semaphore) *ImageBatchHandler {
-	var semaphore *limits.Semaphore
-	if len(semaphores) > 0 {
-		semaphore = semaphores[0]
-	}
-	return &ImageBatchHandler{Cfg: cfg, Batches: batches, Sessions: sessions, Semaphore: semaphore}
+func NewImageBatchHandler(cfg *config.Config, batches *imagebatch.Store, sessions *mcp.SessionStore) *ImageBatchHandler {
+	return &ImageBatchHandler{Cfg: cfg, Batches: batches, Sessions: sessions}
 }
 
 func (h *ImageBatchHandler) ensureSession(c *gin.Context) string {
@@ -120,7 +114,7 @@ func (h *ImageBatchHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "image batch not found"})
 		return
 	}
-	if b.RenderJobID != "" && (b.Status == "rendering" || b.Status == "collecting") {
+	if b.RenderJobID != "" && (b.Status == "queued" || b.Status == "rendering" || b.Status == "collecting") {
 		if err := h.ensureBatchSession(sid, b); err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
@@ -128,16 +122,14 @@ func (h *ImageBatchHandler) Get(c *gin.Context) {
 		if res, err := h.Sessions.CallBatch(sid, b.ID, b.ProjectID, "get_render_status", map[string]interface{}{"render_job_id": b.RenderJobID}); err == nil {
 			status := strings.ToLower(strings.TrimSpace(digString(res, "status")))
 			switch status {
+			case "queued", "queue", "pending", "waiting":
+				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "queued" })
+			case "rendering", "running", "processing", "in_progress", "progress":
+				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering" })
 			case "published", "done", "success", "completed", "finished":
-				if b.Status == "rendering" && h.Semaphore != nil {
-					h.Semaphore.ReleaseBatch(b.ID)
-				}
 				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = digString(res, "share_url") })
 				h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
 			case "failed", "error":
-				if b.Status == "rendering" && h.Semaphore != nil {
-					h.Semaphore.ReleaseBatch(b.ID)
-				}
 				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = digString(res, "error") })
 				h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
 			}
@@ -174,10 +166,6 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	if h.Semaphore != nil && !h.Semaphore.TryAcquireBatch(sid, b.ID) {
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "render capacity is full; retry shortly"})
-		return
-	}
 	aspectRatio := "9:16"
 	if b.ScriptID == "ecommerce-product-demo" {
 		aspectRatio = "16:9"
@@ -185,34 +173,26 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 	res, err := h.Sessions.CallBatch(sid, b.ID, b.ProjectID, "create_remotion_video_share", map[string]interface{}{
 		"project_id": b.ProjectID, "script_id": b.ScriptID, "title": "帧流作品 " + b.ID,
 		"duration_per_image": 60.0 / float64(b.AssetCount), "aspect_ratio": aspectRatio,
+		"queue_owner_id": renderQueueOwnerID(sid),
 	})
 	if err != nil {
 		log.Printf("[image-batch] render_submit_failed batch_id=%s project_id=%s script_id=%s sid_hash=%s err=%v", b.ID, b.ProjectID, b.ScriptID, mcp.ShortHashForLog(sid), err)
-		if h.Semaphore != nil {
-			h.Semaphore.ReleaseBatch(b.ID)
-		}
 		h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = err.Error() })
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	jobID := digString(res, "render_job_id")
 	if jobID == "" || res["success"] == false {
-		if h.Semaphore != nil {
-			h.Semaphore.ReleaseBatch(b.ID)
-		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream render submission failed", "result": res})
 		return
 	}
-	if _, updateErr := h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering"; x.RenderJobID = jobID }); updateErr != nil {
-		if h.Semaphore != nil {
-			h.Semaphore.ReleaseBatch(b.ID)
-		}
+	if _, updateErr := h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "queued"; x.RenderJobID = jobID }); updateErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": updateErr.Error()})
 		return
 	}
-	h.Sessions.RecordJob(sid, mcp.RenderJob{JobID: jobID, BatchID: b.ID, ProjectID: b.ProjectID, Name: "帧流作品 " + b.ID, Res: aspectRatio, Status: "渲染中", CreatedAt: time.Now()})
+	h.Sessions.RecordJob(sid, mcp.RenderJob{JobID: jobID, BatchID: b.ID, ProjectID: b.ProjectID, Name: "帧流作品 " + b.ID, Res: aspectRatio, Status: "排队", CreatedAt: time.Now()})
 	// This batch has been closed by a successful render submission. Reset the
 	// per-submission counter so a later batch starts with its own tier quota.
 	h.Sessions.ResetAsset(sid)
-	c.JSON(http.StatusAccepted, gin.H{"batch_id": b.ID, "render_job_id": jobID, "status": "rendering"})
+	c.JSON(http.StatusAccepted, gin.H{"batch_id": b.ID, "render_job_id": jobID, "status": "queued"})
 }

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -38,18 +37,10 @@ func main() {
 	tierLimits := limits.NewResolver(cfg.DefaultTier, cfg.TierOverrides)
 	usage := limits.NewUsage()
 	imageBatches := imagebatch.NewStore(db)
-	batchSemaphore, err := limits.NewSQLiteSemaphore(db, limits.SemaphoreConfig{
-		GlobalCapacity:  cfg.ImageBatchMaxParallel,
-		PerUserCapacity: cfg.ImageBatchMaxPerUser,
-		LeaseTTL:        time.Duration(cfg.ImageBatchLeaseTTLMin) * time.Minute,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
 	h := handlers.New(cfg, store, tierLimits, imageBatches)
 	comps := composition.NewStore()
 	ch := handlers.NewCompositionHandler(cfg, comps, store)
-	ibh := handlers.NewImageBatchHandler(cfg, imageBatches, store, batchSemaphore)
+	ibh := handlers.NewImageBatchHandler(cfg, imageBatches, store)
 
 	tpls := template.NewStore()
 	var fetcher business.Fetcher

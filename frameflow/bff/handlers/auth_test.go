@@ -23,3 +23,28 @@ func TestRequireAuthFailsClosedWhenWechatMissing(t *testing.T) {
 		t.Fatalf("status=%d, want %d", res.Code, http.StatusServiceUnavailable)
 	}
 }
+
+func TestRenderQueueOwnerUsesStableWechatIdentity(t *testing.T) {
+	h := &Handlers{}
+	h.saveUser("session-a", map[string]interface{}{"openid": "wx-user-1"})
+	h.saveUser("session-b", map[string]interface{}{"openid": "wx-user-1"})
+	t.Cleanup(func() {
+		h.dropUser("session-a")
+		h.dropUser("session-b")
+	})
+
+	a := renderQueueOwnerID("session-a")
+	b := renderQueueOwnerID("session-b")
+	if a != b {
+		t.Fatalf("same WeChat user received different queue owners: %q != %q", a, b)
+	}
+	if a == "wx-user-1" || len(a) != 64 {
+		t.Fatalf("queue owner must be an opaque SHA-256 key, got %q", a)
+	}
+}
+
+func TestRenderQueueOwnerSeparatesAnonymousSessions(t *testing.T) {
+	if renderQueueOwnerID("session-a") == renderQueueOwnerID("session-b") {
+		t.Fatal("different anonymous sessions must not share a queue owner")
+	}
+}

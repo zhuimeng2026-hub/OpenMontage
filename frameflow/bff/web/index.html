@@ -1418,7 +1418,8 @@
           v = await jsonRequest(bffBase() + '/api/image-batches/' + encodeURIComponent(currentImageBatch.id) + '/render', {method:'POST'});
         }
         var jobId = v && (v.render_job_id || (v.data && v.data.render_job_id));
-        setCreateProgress(true, 0, '已提交，任务号 ' + jobId + ' · 渲染中…');
+        var submittedQueued = v && v.status === 'queued';
+        setCreateProgress(true, 0, '已提交，任务号 ' + jobId + (submittedQueued ? ' · 排队中…' : ' · 渲染中…'));
         showToast('已提交渲染任务 ' + jobId);
         loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
         // 本轮提交已结束：后端会话计数已被 ResetAsset 清零，前端同步重置展示态，
@@ -1434,6 +1435,9 @@
             setCreateProgress(true, 100, '渲染完成 · 分享链接：' + (ev.share_url || '(见控制台)'));
             showToast('渲染完成！');
             renderBtn.disabled = false;
+          } else if (ev && ev.status === 'queued') {
+            var queuePosition = ev.position || ev.queue_position;
+            setCreateProgress(true, pct, '排队中' + (queuePosition ? ' · 第 ' + queuePosition + ' 位' : '') + '…');
           } else {
             setCreateProgress(true, pct, '渲染中 ' + pct + '%');
           }

@@ -86,6 +86,16 @@ MCP_PROGRESS_URL=http://127.0.0.1:8900/render-progress
 
 MCP 的 Uvicorn keep-alive 默认配置为30秒，避免与前端/BFF默认5秒状态轮询形成 TCP 关闭竞态。需要覆盖时在 MCP 服务环境设置 `MCP_HTTP_KEEP_ALIVE_SECONDS=30`（允许10–300秒），修改后重启 MCP。
 
+多用户渲染由 MCP 的实际 Remotion CPU 闸门公平调度。12 核生产机建议：
+
+```ini
+REMOTION_CONCURRENCY=5
+REMOTION_MAX_PARALLEL=2
+REMOTION_MAX_PARALLEL_PER_USER=1
+```
+
+该配置允许两个不同微信用户各运行一个任务；同一用户的后续任务返回成功并进入队列，不再由 BFF 返回 429。队列按用户轮转、用户内部保持 FIFO，等待中的任务由 MCP 持久化记录在服务重启后恢复。
+
 修改后重启 BFF，并先完成一个最小上传。若 `upload_asset_chunk` 连小文件也无法在数秒内返回，先查 MCP 日志，不要开始并发压测：
 
 ```bash

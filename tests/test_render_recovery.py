@@ -34,10 +34,12 @@ def test_recover_requeues_waiting_renders_fails_active(tmp_state):
     _write_session(tmp_state, "actdigest", "rendering", job_id="act1")
     # A stale queued (legacy) session without render_phase -> failed (safe).
     _write_session(tmp_state, "legdigest", "queued", job_id="leg1")
+    # A process that died after render but before publish must not stay stuck.
+    _write_session(tmp_state, "pubdigest", "rendered", job_id="pub1")
 
     stats = wbs.recover_orphans_and_rebuild_index()
 
-    assert stats["orphaned"] == 2  # act1 + leg1
+    assert stats["orphaned"] == 3  # act1 + leg1 + pub1
     assert stats["requeued"] == 1
     assert stats["_requeued_ids"] == ["wait1"]
 
@@ -50,6 +52,12 @@ def test_recover_requeues_waiting_renders_fails_active(tmp_state):
     act = json.loads((tmp_state / "actdigest.json").read_text())
     assert act["status"] == "failed"
     assert act["failure_stage"] == "orphaned"
+    assert act["render_phase"] is None
+    assert act["queue_position"] is None
+    assert act["queue_depth"] is None
+    interrupted_publish = json.loads((tmp_state / "pubdigest.json").read_text())
+    assert interrupted_publish["status"] == "failed"
+    assert interrupted_publish["failure_stage"] == "orphaned"
 
     # Index rebuilt for the surviving job id.
     assert wbs.find_session_by_job_id("wait1")["batch_id"] == "b"
