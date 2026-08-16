@@ -186,6 +186,7 @@ def main() -> int:
             record = {
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "elapsed_seconds": round(now - started, 3),
+                "machine": {"cpu_count": cpu_count},
                 "cpu_percent": round(cpu_percent, 1),
                 "memory": {key: round(value, 2) for key, value in mem.items()},
                 "load": {"1m": round(load1, 2), "5m": round(load5, 2), "15m": round(load15, 2)},

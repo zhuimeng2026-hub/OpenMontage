@@ -199,6 +199,15 @@ unset FRAMEFLOW_OBSERVER_TOKEN
 
 完成这些项目后不要自行开始 4–6 并发压测。开发端会先跑 1 个基线任务，再按 2、4、5、6 并发递增，同时从观测接口记录 CPU、内存、swap、load、磁盘 busy、网络和进程组资源。
 
+每一级的 E2E JSON 报告与同期监控 JSONL 可用以下命令生成机器判定；退出码 `0` 表示该级稳定、`2` 表示停止加压并诊断：
+
+```bash
+python3 scripts/frameflow_capacity_analyzer.py \
+  --report perf/e2e-jobs-N.json \
+  --metrics perf/metrics-jobs-N.jsonl \
+  --output perf/assessment-jobs-N.json
+```
+
 ## 9. 故障与回滚
 
 观测服务异常时只需：
