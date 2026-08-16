@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scripts.frameflow_capacity_analyzer import analyze, percentile
+from scripts.frameflow_capacity_analyzer import analyze, percentile, sample_epoch
 
 
 def sample(timestamp: str, cpu: float, memory: float, disk: float, swap: float = 0) -> dict:
@@ -38,6 +38,11 @@ def report(render_ok: bool = True) -> dict:
 def test_percentile_interpolates():
     assert percentile([0, 10], 95) == 9.5
     assert percentile([], 95) is None
+
+
+def test_sample_epoch_prefers_collector_receipt_time():
+    value = {"timestamp": "2026-01-01T00:00:00+00:00", "_collector_received_at": 123.5}
+    assert sample_epoch(value) == 123.5
 
 
 def test_analyze_stable_case():

@@ -17,9 +17,9 @@ from typing import Any
 import requests
 
 if __package__:
-    from scripts.frameflow_capacity_analyzer import analyze, sample_epoch
+    from scripts.frameflow_capacity_analyzer import analyze, metric_timestamp_epoch
 else:
-    from frameflow_capacity_analyzer import analyze, sample_epoch
+    from frameflow_capacity_analyzer import analyze, metric_timestamp_epoch
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -39,10 +39,12 @@ class MetricsCollector:
 
     def fetch(self) -> dict[str, Any]:
         response = requests.get(self.url, headers=self.headers, timeout=5)
+        received_at = time.time()
         response.raise_for_status()
         value = response.json()
         if not isinstance(value, dict) or not value.get("timestamp"):
             raise RuntimeError("observer returned no timestamped metric sample")
+        value["_collector_received_at"] = received_at
         return value
 
     def _poll(self) -> None:
@@ -113,7 +115,7 @@ def e2e_environment() -> dict[str, str]:
 def run_stage(args: argparse.Namespace, jobs: int, output_dir: Path, token: str) -> dict[str, Any]:
     collector = MetricsCollector(args.observer, token, args.metrics_interval)
     first = collector.start()
-    first_epoch = sample_epoch(first)
+    first_epoch = metric_timestamp_epoch(first)
     clock_skew = abs(time.time() - first_epoch) if first_epoch is not None else None
     command = e2e_command(args, jobs)
     started = time.time()
@@ -172,10 +174,14 @@ def run_stage(args: argparse.Namespace, jobs: int, output_dir: Path, token: str)
         "e2e_exit_code": result.returncode if result is not None else None,
         "e2e_stderr": result.stderr[-2000:] if result is not None else None,
     }
-    if clock_skew is None or clock_skew > 10:
+    if clock_skew is None:
         assessment["assessment"] = "unstable"
         assessment["suggested_action"] = "stop_and_fix_clock_sync"
         assessment.setdefault("bottlenecks", []).append("clock_skew")
+    elif clock_skew > 10:
+        assessment.setdefault("warnings", []).append(
+            f"remote clock differs by {clock_skew:.2f}s; metric correlation used collector receipt time"
+        )
     if len(collector.samples) < 3:
         assessment["assessment"] = "unstable"
         assessment["suggested_action"] = "stop_and_fix_observer"

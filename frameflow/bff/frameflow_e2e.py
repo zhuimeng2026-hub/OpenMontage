@@ -33,6 +33,14 @@ from PIL import Image, ImageDraw
 TERMINAL = {"published", "done", "success", "completed", "finished", "failed", "error"}
 
 
+def retryable_poll_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(signature in message for signature in (
+        "transport failed", "http 502", "http 503", "http 504",
+        "connection reset", "remote end closed connection", "eof",
+    ))
+
+
 def png_bytes(index: int, label: str) -> bytes:
     image = Image.new("RGB", (540, 960), ((index * 67) % 256, (index * 97 + 31) % 256, (index * 131 + 83) % 256))
     draw = ImageDraw.Draw(image)
@@ -151,9 +159,18 @@ class BFF:
         render_completed_at = None
         final = None
         stage = "poll_render"
+        consecutive_poll_errors = 0
         try:
             while time.time() - started < overall_timeout:
-                status = self.mcp("get_render_status", {"render_job_id": job_id})
+                try:
+                    status = self.mcp("get_render_status", {"render_job_id": job_id})
+                    consecutive_poll_errors = 0
+                except RuntimeError as exc:
+                    consecutive_poll_errors += 1
+                    if retryable_poll_error(exc) and consecutive_poll_errors <= 3:
+                        time.sleep(poll)
+                        continue
+                    raise
                 if rendering_started_at is None and status.get("render_phase") == "rendering":
                     rendering_started_at = time.time()
                 if render_completed_at is None and status.get("video_path"):

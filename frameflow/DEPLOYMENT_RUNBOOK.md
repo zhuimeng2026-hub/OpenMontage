@@ -84,6 +84,8 @@ MCP_BASE_URL=http://127.0.0.1:8900/mcp
 MCP_PROGRESS_URL=http://127.0.0.1:8900/render-progress
 ```
 
+MCP 的 Uvicorn keep-alive 默认配置为30秒，避免与前端/BFF默认5秒状态轮询形成 TCP 关闭竞态。需要覆盖时在 MCP 服务环境设置 `MCP_HTTP_KEEP_ALIVE_SECONDS=30`（允许10–300秒），修改后重启 MCP。
+
 修改后重启 BFF，并先完成一个最小上传。若 `upload_asset_chunk` 连小文件也无法在数秒内返回，先查 MCP 日志，不要开始并发压测：
 
 ```bash

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import requests
 
-from frameflow.bff.frameflow_e2e import BFF, peak_render_overlap
+from frameflow.bff.frameflow_e2e import BFF, peak_render_overlap, retryable_poll_error
 
 
 class FailingSession:
@@ -60,3 +60,9 @@ def test_peak_render_overlap_counts_only_render_intervals():
         {"rendering_started_at": None, "render_completed_at": None},
     ]
     assert peak_render_overlap(records) == 3
+
+
+def test_retryable_poll_error_is_strict_to_transient_transport_failures():
+    assert retryable_poll_error(RuntimeError("POST /api/mcp: HTTP 502: connection reset by peer"))
+    assert retryable_poll_error(RuntimeError("transport failed: EOF"))
+    assert not retryable_poll_error(RuntimeError("POST /api/mcp: HTTP 401: unauthorized"))

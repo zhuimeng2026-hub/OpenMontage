@@ -1508,6 +1508,22 @@ def _drain_queued_jobs(requeued_ids: list[str]) -> int:
     return drained
 
 
+def _http_keep_alive_seconds() -> int:
+    """Keep Streamable HTTP connections alive beyond normal status polling.
+
+    Uvicorn defaults to five seconds, exactly matching FrameFlow's polling
+    interval. Under CPU load this creates a race where the server closes an
+    idle connection just as Go reuses it for a POST, which surfaces as
+    ``connection reset by peer`` even though the render continues normally.
+    """
+    raw = os.environ.get("MCP_HTTP_KEEP_ALIVE_SECONDS", "30")
+    try:
+        return min(300, max(10, int(raw)))
+    except ValueError:
+        _log.warning("Invalid MCP_HTTP_KEEP_ALIVE_SECONDS=%r; using 30", raw)
+        return 30
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -1553,6 +1569,8 @@ if __name__ == "__main__":
 
     if transport == "streamable-http":
         import uvicorn
+        keep_alive_seconds = _http_keep_alive_seconds()
+        _log.info("Streamable HTTP keep-alive timeout: %ds", keep_alive_seconds)
         app = mcp.streamable_http_app()
         # Web login is mounted on the same origin as MCP so a reverse proxy
         # only needs one upstream. Its routes enforce the browser session
@@ -1568,7 +1586,10 @@ if __name__ == "__main__":
         if sys.platform == "win32":
             # Windows lacks AF_UNIX; uvicorn's socket.fromfd(fd, AF_UNIX)
             # crashes there. Let uvicorn bind directly via host/port.
-            config = uvicorn.Config(app, host="0.0.0.0", port=8900)
+            config = uvicorn.Config(
+                app, host="0.0.0.0", port=8900,
+                timeout_keep_alive=keep_alive_seconds,
+            )
         else:
             import socket
             # Dual-stack socket: IPv6 + IPv4 via IPV6_V6ONLY=0
@@ -1577,7 +1598,9 @@ if __name__ == "__main__":
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("::", 8900))
             sock.listen(2048)
-            config = uvicorn.Config(app, fd=sock.fileno())
+            config = uvicorn.Config(
+                app, fd=sock.fileno(), timeout_keep_alive=keep_alive_seconds,
+            )
         server = uvicorn.Server(config)
         asyncio.run(server.serve())
     else:

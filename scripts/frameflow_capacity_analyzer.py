@@ -37,7 +37,7 @@ def nested(sample: dict[str, Any], *keys: str) -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
 
 
-def sample_epoch(sample: dict[str, Any]) -> float | None:
+def metric_timestamp_epoch(sample: dict[str, Any]) -> float | None:
     raw = sample.get("timestamp")
     if not isinstance(raw, str):
         return None
@@ -45,6 +45,13 @@ def sample_epoch(sample: dict[str, Any]) -> float | None:
         return datetime.fromisoformat(raw).timestamp()
     except ValueError:
         return None
+
+
+def sample_epoch(sample: dict[str, Any]) -> float | None:
+    received = sample.get("_collector_received_at")
+    if isinstance(received, (int, float)):
+        return float(received)
+    return metric_timestamp_epoch(sample)
 
 
 def load_metrics(path: Path) -> list[dict[str, Any]]:
