@@ -26,6 +26,11 @@ def test_gallery_uses_real_queue_data_without_static_demo_cards():
     assert "window.open(url, '_blank', 'noopener,noreferrer')" in html
     assert "打开微云 / 播放下载" in html
     assert "e.target.closest('.qdownload')" in html
+    assert "生成微云链接" in html
+    assert "尝试恢复微云链接" in html
+    assert "function republishRender" in html
+    assert "'/api/render-queue/' + encodeURIComponent(jobID) + '/republish'" in html
+    assert "e.target.closest('.qrepublish')" in html
     assert "JOB-DEMO" not in html
     assert "javascript:" not in gallery
 

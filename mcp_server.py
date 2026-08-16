@@ -27,6 +27,7 @@ import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 # Ensure OpenMontage project root is on sys.path so tools/ and lib/ resolve.
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -87,6 +88,7 @@ from lib.workbuddy_session import (
     session_hash,
     update as update_session,
     find_session_by_job_id,
+    update_session_by_job_id,
     recover_orphans_and_rebuild_index,
     fail_job_by_id,
 )
@@ -905,6 +907,112 @@ def _run_render_job(
 def _find_session_by_job(render_job_id: str) -> dict[str, Any] | None:
     """Back-compat alias for ``find_session_by_job_id`` (O(1) index lookup)."""
     return find_session_by_job_id(render_job_id)
+
+
+def _valid_weiyun_share_url(value: Any) -> bool:
+    parsed = urlparse(str(value or ""))
+    return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+_retry_publish_locks: dict[str, threading.Lock] = {}
+_retry_publish_locks_guard = threading.Lock()
+
+
+def _retry_publish_lock(job_id: str) -> threading.Lock:
+    with _retry_publish_locks_guard:
+        return _retry_publish_locks.setdefault(job_id, threading.Lock())
+
+
+@mcp.tool()
+async def retry_render_publish(render_job_id: str) -> dict[str, Any]:
+    """Serialize publish retries for one job to prevent duplicate uploads."""
+    job_id = (render_job_id or "").strip()
+    state = find_session_by_job_id(job_id)
+    if state and state.get("status") == "published" and _valid_weiyun_share_url(state.get("share_url")):
+        return {"success": True, "render_job_id": job_id, "status": "published", "stage": None, "share_url": state.get("share_url"), "error": None}
+    lock = _retry_publish_lock(job_id)
+    if not lock.acquire(blocking=False):
+        state = find_session_by_job_id(job_id) or {}
+        return {"success": False, "render_job_id": job_id, "status": state.get("status", "uploading"), "stage": "in_progress", "share_url": state.get("share_url"), "error": "A publish retry is already in progress for this render job"}
+    try:
+        return await _retry_render_publish_impl(job_id)
+    finally:
+        lock.release()
+
+
+async def _retry_render_publish_impl(job_id: str) -> dict[str, Any]:
+    """Retry only the Weiyun upload/share stages for an existing render.
+
+    This never invokes the renderer.  It is safe to call repeatedly: an
+    already published job returns its existing share URL without another
+    upload.  A failed retry keeps the persisted local video path intact.
+    """
+    request_id = get_mcp_request_id() or uuid.uuid4().hex
+    state = find_session_by_job_id(job_id)
+    if not state:
+        error = f"No render job found for render_job_id '{job_id}'"
+        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": "lookup", "share_url": None, "error": error}
+
+    existing_url = state.get("share_url")
+    if state.get("status") == "published" and _valid_weiyun_share_url(existing_url):
+        return {"success": True, "render_job_id": job_id, "status": "published", "stage": None, "share_url": existing_url, "error": None}
+
+    video_path = Path(str(state.get("video_path") or "")).expanduser()
+    if not video_path.is_file():
+        error = f"Persisted video_path does not exist: {video_path}"
+        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage="validation", error=error)
+        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": "validation", "share_url": existing_url, "error": error}
+
+    project = state.get("project_id") or "openmontage"
+    batch_id = state.get("batch_id") or job_id
+    update_session_by_job_id(job_id, status="uploading", failure_stage=None, error=None, video_path=str(video_path))
+    _event("weiyun_publish_retry_started", request_id=request_id, session_hash="job-index", project_id=project, batch_id=batch_id, render_job_id=job_id, status="uploading")
+
+    upload_tool = registry.get("weiyun_upload")
+    if upload_tool is None:
+        stage, error = "weiyun_upload", "weiyun_upload tool is not registered"
+        update_session_by_job_id(job_id, status="failed", failure_stage=stage, error=error, video_path=str(video_path))
+        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage=stage, error=error)
+        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": stage, "share_url": existing_url, "error": error}
+    try:
+        uploaded = await _run_tool_sync(upload_tool, {"video_path": str(video_path), "target_dir": "", "overwrite": False})
+    except Exception as exc:  # noqa: BLE001
+        stage, error = "weiyun_upload", str(exc)
+        update_session_by_job_id(job_id, status="failed", failure_stage=stage, error=error, video_path=str(video_path))
+        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage=stage, error=error)
+        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": stage, "share_url": existing_url, "error": error}
+    if not uploaded.success:
+        stage, error = "weiyun_upload", uploaded.error or "Weiyun upload failed"
+        update_session_by_job_id(job_id, status="failed", failure_stage=stage, error=error, video_path=str(video_path))
+        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage=stage, error=error)
+        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": stage, "share_url": existing_url, "error": error}
+
+    file_id = (uploaded.data or {}).get("file_id")
+    share_tool = registry.get("weiyun_share_link")
+    if share_tool is None or not file_id:
+        stage = "weiyun_share"
+        error = "weiyun_share_link tool is unavailable" if share_tool is None else "upload returned no file_id"
+        update_session_by_job_id(job_id, status="failed", failure_stage=stage, error=error, video_path=str(video_path))
+        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage=stage, error=error)
+        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": stage, "share_url": existing_url, "error": error}
+    update_session_by_job_id(job_id, status="sharing", failure_stage=None, error=None, video_path=str(video_path))
+    try:
+        shared = await _run_tool_sync(share_tool, {"file_list": [file_id], "share_name": f"{project}-{batch_id}"})
+    except Exception as exc:  # noqa: BLE001
+        stage, error = "weiyun_share", str(exc)
+        update_session_by_job_id(job_id, status="failed", failure_stage=stage, error=error, video_path=str(video_path))
+        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage=stage, error=error)
+        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": stage, "share_url": existing_url, "error": error}
+    share_url = (shared.data or {}).get("short_url") or (shared.data or {}).get("share_url") if shared.success else None
+    if not shared.success or not _valid_weiyun_share_url(share_url):
+        stage = "weiyun_share"
+        error = (shared.error if not shared.success else None) or "Weiyun share tool returned no valid share URL"
+        update_session_by_job_id(job_id, status="failed", failure_stage=stage, error=error, video_path=str(video_path))
+        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage=stage, error=error)
+        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": stage, "share_url": existing_url, "error": error}
+    update_session_by_job_id(job_id, status="published", failure_stage=None, error=None, share_url=share_url, video_path=str(video_path))
+    _event("weiyun_publish_retry_completed", request_id=request_id, session_hash="job-index", project_id=project, batch_id=batch_id, render_job_id=job_id, status="published")
+    return {"success": True, "render_job_id": job_id, "status": "published", "stage": None, "share_url": share_url, "error": None}
 
 
 @mcp.tool()

@@ -39,6 +39,18 @@ def test_find_session_by_job_id_locates_without_scan(monkeypatch, tmp_path):
     assert sessions.find_session_by_job_id("") is None
 
 
+def test_update_session_by_job_id_updates_atomically(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    asset = {"id": "a", "path": str(_image(tmp_path)), "type": "image", "sha256": "a"}
+    sessions.register_image("update-job", "demo", asset)
+    _, state = sessions.begin_render("update-job")
+    updated = sessions.update_session_by_job_id(state["render_job_id"], status="failed", error="publish failed")
+    assert updated["status"] == "failed"
+    assert updated["error"] == "publish failed"
+    assert sessions.find_session_by_job_id(state["render_job_id"])["status"] == "failed"
+    assert sessions.update_session_by_job_id("missing-job", status="failed") is None
+
+
 def test_begin_render_overwrites_stale_index_entry(monkeypatch, tmp_path):
     """A retried batch must drop the previous job_id from the index, not leak it."""
     _state_env(monkeypatch, tmp_path)

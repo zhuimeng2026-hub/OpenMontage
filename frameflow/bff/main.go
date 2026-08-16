@@ -78,6 +78,7 @@ func main() {
 		api.POST("/image-batches/:id/render", h.RequireAuth(), ibh.Render)
 		// Render queue: returns ONLY the caller's own jobs (scoped by ff_sid).
 		api.GET("/render-queue", h.RequireAuth(), h.RenderQueue)
+		api.POST("/render-queue/:jobId/republish", h.RequireAuth(), h.RepublishRender)
 		// Public: WeChat OAuth entry, session probe, logout.
 		api.GET("/wechat/login", h.WechatLogin)
 		api.GET("/wechat/callback", h.WechatCallback)

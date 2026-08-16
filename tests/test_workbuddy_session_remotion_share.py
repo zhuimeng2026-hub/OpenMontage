@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -253,3 +254,114 @@ def test_get_render_status_unknown_job(monkeypatch, tmp_path):
     status = mcp_server.get_render_status("does-not-exist")
     assert status["success"] is False
     assert "render job" in status["error"]
+
+
+def _prepare_published_job(tmp_path):
+    video = tmp_path / "projects" / "demo" / "renders" / "job.mp4"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"mp4")
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
+    _, state = sessions.begin_render("workflow")
+    sessions.update("workflow", status="failed", failure_stage="weiyun_upload", video_path=str(video), error="old")
+    return state["render_job_id"], video
+
+
+def test_retry_render_publish_reuses_existing_share_url(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    import mcp_server
+    job_id, video = _prepare_published_job(tmp_path)
+    sessions.update("workflow", status="published", video_path=str(video), share_url="https://share.weiyun.com/already")
+    result = asyncio.run(mcp_server.retry_render_publish(job_id))
+    assert result == {"success": True, "render_job_id": job_id, "status": "published", "stage": None, "share_url": "https://share.weiyun.com/already", "error": None}
+
+
+def test_retry_render_publish_uploads_and_shares_without_render(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    import mcp_server
+    job_id, video = _prepare_published_job(tmp_path)
+    calls = []
+
+    class FakeUpload:
+        def execute(self, inputs):
+            calls.append(("upload", inputs))
+            return ToolResult(True, {"file_id": "retry-file"})
+
+    class FakeShare:
+        def execute(self, inputs):
+            calls.append(("share", inputs))
+            return ToolResult(True, {"short_url": "https://share.weiyun.com/retried"})
+
+    monkeypatch.setattr(mcp_server.registry, "get", lambda name: {"weiyun_upload": FakeUpload(), "weiyun_share_link": FakeShare()}.get(name))
+    result = asyncio.run(mcp_server.retry_render_publish(job_id))
+    assert result["success"] is True
+    assert result["share_url"] == "https://share.weiyun.com/retried"
+    assert [kind for kind, _ in calls] == ["upload", "share"]
+    final = mcp_server.get_render_status(job_id)
+    assert final["status"] == "published"
+    assert final["video_path"] == str(video)
+
+
+def test_retry_render_publish_failure_keeps_video_path(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    import mcp_server
+    job_id, video = _prepare_published_job(tmp_path)
+
+    class FakeUpload:
+        def execute(self, inputs):
+            return ToolResult(False, error="mock retry upload failure")
+
+    monkeypatch.setattr(mcp_server.registry, "get", lambda name: FakeUpload() if name == "weiyun_upload" else None)
+    result = asyncio.run(mcp_server.retry_render_publish(job_id))
+    assert result["success"] is False
+    assert result["stage"] == "weiyun_upload"
+    assert result["error"] == "mock retry upload failure"
+    final = mcp_server.get_render_status(job_id)
+    assert final["video_path"] == str(video)
+    assert final["status"] == "failed"
+
+
+def test_retry_render_publish_serializes_same_job(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    import mcp_server
+    job_id, _ = _prepare_published_job(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    class FakeUpload:
+        def execute(self, inputs):
+            calls.append("upload")
+            started.set()
+            release.wait(timeout=5)
+            return ToolResult(True, {"file_id": "one-file"})
+
+    class FakeShare:
+        def execute(self, inputs):
+            calls.append("share")
+            return ToolResult(True, {"short_url": "https://share.weiyun.com/serialized"})
+
+    monkeypatch.setattr(mcp_server.registry, "get", lambda name: {"weiyun_upload": FakeUpload(), "weiyun_share_link": FakeShare()}.get(name))
+
+    async def run_both():
+        first = asyncio.create_task(mcp_server.retry_render_publish(job_id))
+        await asyncio.to_thread(started.wait, 5)
+        second = await mcp_server.retry_render_publish(job_id)
+        release.set()
+        return await first, second
+
+    first, second = asyncio.run(run_both())
+    assert first["success"] is True
+    assert second["success"] is False
+    assert second["stage"] == "in_progress"
+    assert calls == ["upload", "share"]
+
+
+def test_retry_render_publish_rejects_missing_video(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    import mcp_server
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
+    _, state = sessions.begin_render("workflow")
+    sessions.update("workflow", status="failed", video_path=str(tmp_path / "missing.mp4"), error="old")
+    result = asyncio.run(mcp_server.retry_render_publish(state["render_job_id"]))
+    assert result["success"] is False
+    assert result["stage"] == "validation"

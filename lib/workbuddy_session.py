@@ -142,6 +142,28 @@ def find_session_by_job_id(job_id: str) -> dict[str, Any] | None:
     return _read(digest)
 
 
+def update_session_by_job_id(job_id: str, **changes: Any) -> dict[str, Any] | None:
+    """Atomically update a persisted session resolved by its render job id.
+
+    Publish retry callers only have the opaque job id, not the raw MCP session
+    id.  Resolve it through the durable index and reuse the per-session lock
+    and atomic writer used by the normal session APIs.
+    """
+    if not job_id:
+        return None
+    with _index_lock:
+        digest = _read_index().get(job_id)
+    if not digest:
+        return None
+    with _lock_for(digest):
+        state = _read(digest)
+        if not state:
+            return None
+        state.update(changes)
+        _write(_state_path(digest), state)
+        return state
+
+
 # Statuses that mean a render was in-flight when the process died.
 _ORPHAN_STATUSES = frozenset({"rendering", "queued", "rendered", "uploading", "sharing"})
 
