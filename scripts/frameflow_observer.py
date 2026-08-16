@@ -73,6 +73,19 @@ def journal_lines(unit: str, limit: int) -> list[str]:
     return output.splitlines()[-limit:]
 
 
+def metric_samples(path: Path, limit: int) -> list[dict[str, object]]:
+    """Return real samples only, ignoring monitor summary/control records."""
+    samples: list[dict[str, object]] = []
+    for line in tail_lines(path, max(limit * 2, 50)):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value.get("type") != "summary" and "timestamp" in value:
+            samples.append(value)
+    return samples[-limit:]
+
+
 class ObserverConfig:
     def __init__(self, args: argparse.Namespace, token: str) -> None:
         self.token = token
@@ -149,24 +162,14 @@ class ObserverHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         limit = self.requested_limit(query)
         if parsed.path == "/v1/metrics/latest":
-            lines = tail_lines(self.config.metrics_file, 1)
-            if not lines or lines[0].startswith("unavailable:"):
-                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": lines[0] if lines else "empty"})
+            samples = metric_samples(self.config.metrics_file, 1)
+            if not samples:
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no valid metric sample"})
                 return
-            try:
-                sample = json.loads(lines[-1])
-            except json.JSONDecodeError as exc:
-                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": f"invalid metrics JSON: {exc}"})
-                return
-            self.send_json(HTTPStatus.OK, sample)
+            self.send_json(HTTPStatus.OK, samples[-1])
             return
         if parsed.path == "/v1/metrics/tail":
-            samples = []
-            for line in tail_lines(self.config.metrics_file, limit):
-                try:
-                    samples.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+            samples = metric_samples(self.config.metrics_file, limit)
             self.send_json(HTTPStatus.OK, {"count": len(samples), "samples": samples})
             return
         if parsed.path == "/v1/logs":

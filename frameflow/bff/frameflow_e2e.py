@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """Environment-driven FrameFlow BFF diagnostic.
 
-Exercises the production-facing BFF contract (batch create, chunk upload,
-render submission, status polling) without ever handling MCP_API_TOKEN.  The
+Exercises the production-facing BFF contract (chunk upload, render submission,
+status polling) without ever handling MCP_API_TOKEN.  The
 token belongs to the BFF and must not be sent by this client.
 
 Examples:
@@ -54,16 +54,31 @@ def dig(value, *keys):
 
 
 class BFF:
-    def __init__(self, base: str, timeout: float):
+    def __init__(self, base: str, request_timeout: float):
         self.base = base.rstrip("/")
-        self.timeout = timeout
+        self.request_timeout = request_timeout
         self.http = requests.Session()  # cookie ff_sid is deliberately per worker
 
     def request(self, method: str, path: str, **kwargs):
-        response = self.http.request(method, self.base + path, timeout=self.timeout, **kwargs)
+        started = time.monotonic()
+        try:
+            response = self.http.request(
+                method, self.base + path, timeout=self.request_timeout, **kwargs
+            )
+        except requests.RequestException as exc:
+            elapsed = time.monotonic() - started
+            raise RuntimeError(
+                f"{method} {path}: transport failed after {elapsed:.1f}s: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
         if response.status_code >= 400:
             raise RuntimeError(f"{method} {path}: HTTP {response.status_code}: {response.text[:500]}")
-        return response.json()
+        try:
+            return response.json()
+        except requests.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"{method} {path}: non-JSON HTTP {response.status_code}: {response.text[:500]}"
+            ) from exc
 
     def mcp(self, tool: str, args: dict):
         # Never add Authorization here. MCP_API_TOKEN stays inside the BFF.
@@ -95,48 +110,77 @@ class BFF:
         if result.get("success") is False:
             raise RuntimeError(f"complete failed for {filename}: {result}")
 
-    def run_one(self, script: str, images: int, duration: float, label: str, chunk_size: int, poll: float, output_root: Path):
+    def run_one(self, script: str, images: int, duration: float, label: str,
+                chunk_size: int, poll: float, output_root: Path, overall_timeout: float):
         started = time.time()
         project = f"frameflow-e2e-{label}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
-        for index in range(images):
-            self.upload(project, index, label, chunk_size)
-        render = self.mcp("create_remotion_video_share", {
-            "project_id": project, "script_id": script,
-            "duration_per_image": duration, "aspect_ratio": "9:16",
-            "title": f"FrameFlow E2E {label}",
-        })
-        job_id = render.get("render_job_id")
-        if not job_id:
-            raise RuntimeError(f"render response lacks render_job_id: {render}")
-        submitted_at = time.time()
+        record = {
+            "label": label, "script_id": script, "project_id": project,
+            "started_at": started, "render_job_id": None, "status": None,
+            "failure_stage": None, "error": None,
+        }
+        stage = "upload"
+        try:
+            for index in range(images):
+                stage = f"upload_image_{index + 1}"
+                self.upload(project, index, label, chunk_size)
+            stage = "submit_render"
+            render = self.mcp("create_remotion_video_share", {
+                "project_id": project, "script_id": script,
+                "duration_per_image": duration, "aspect_ratio": "9:16",
+                "title": f"FrameFlow E2E {label}",
+            })
+            job_id = render.get("render_job_id")
+            if not job_id:
+                raise RuntimeError(f"render response lacks render_job_id: {render}")
+            record["render_job_id"] = job_id
+            submitted_at = time.time()
+        except Exception as exc:  # keep the rest of a load stage observable
+            ended = time.time()
+            record.update({
+                "ended_at": ended,
+                "elapsed_seconds": round(ended - started, 3),
+                "failure_stage": stage,
+                "error": f"{type(exc).__name__}: {exc}",
+                "outputs": [],
+                "duration_ok": False,
+            })
+            return record
+
         rendering_started_at = None
         render_completed_at = None
         final = None
-        while time.time() - started < self.timeout:
-            status = self.mcp("get_render_status", {"render_job_id": job_id})
-            if rendering_started_at is None and status.get("render_phase") == "rendering":
-                rendering_started_at = time.time()
-            if render_completed_at is None and status.get("video_path"):
-                render_completed_at = time.time()
-            state = str(status.get("status", "")).lower()
-            if state in TERMINAL:
-                final = status
-                break
-            time.sleep(poll)
+        stage = "poll_render"
+        try:
+            while time.time() - started < overall_timeout:
+                status = self.mcp("get_render_status", {"render_job_id": job_id})
+                if rendering_started_at is None and status.get("render_phase") == "rendering":
+                    rendering_started_at = time.time()
+                if render_completed_at is None and status.get("video_path"):
+                    render_completed_at = time.time()
+                state = str(status.get("status", "")).lower()
+                if state in TERMINAL:
+                    final = status
+                    break
+                time.sleep(poll)
+            if final is None:
+                raise TimeoutError(f"workflow exceeded {overall_timeout:.0f}s overall timeout")
+        except Exception as exc:
+            record["failure_stage"] = stage
+            record["error"] = f"{type(exc).__name__}: {exc}"
         ended = time.time()
         files = find_outputs(output_root, project, job_id)
         probes = [probe(path) for path in files]
-        return {"label": label, "script_id": script, "project_id": project,
-                "render_job_id": job_id, "started_at": started, "ended_at": ended,
-                "submitted_at": submitted_at,
-                "rendering_started_at": rendering_started_at,
-                "render_completed_at": render_completed_at,
-                "queue_wait_seconds": round(rendering_started_at - submitted_at, 3) if rendering_started_at else None,
-                "render_seconds": round(render_completed_at - rendering_started_at, 3) if rendering_started_at and render_completed_at else None,
-                "elapsed_seconds": round(ended - started, 3), "status": final,
-                "outputs": probes,
-                "target_duration_seconds": round(duration * images, 3),
-                "duration_ok": duration_matches_target(probes, duration * images)}
+        record.update({"ended_at": ended, "submitted_at": submitted_at,
+                       "rendering_started_at": rendering_started_at,
+                       "render_completed_at": render_completed_at,
+                       "queue_wait_seconds": round(rendering_started_at - submitted_at, 3) if rendering_started_at else None,
+                       "render_seconds": round(render_completed_at - rendering_started_at, 3) if rendering_started_at and render_completed_at else None,
+                       "elapsed_seconds": round(ended - started, 3), "status": final,
+                       "outputs": probes,
+                       "target_duration_seconds": round(duration * images, 3),
+                       "duration_ok": duration_matches_target(probes, duration * images)})
+        return record
 
 
 def find_outputs(root: Path, project: str, job_id: str):
@@ -204,7 +248,12 @@ def main():
     parser.add_argument("--script-b", default=os.getenv("FRAMEFLOW_SCRIPT_B", "cinematic-montage"))
     parser.add_argument("--chunk-size", type=int, default=400_000)
     parser.add_argument("--poll-seconds", type=float, default=5)
-    parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("FRAMEFLOW_TIMEOUT_SECONDS", "900")))
+    parser.add_argument("--request-timeout-seconds", type=float,
+                        default=float(os.getenv("FRAMEFLOW_REQUEST_TIMEOUT_SECONDS", "150")),
+                        help="timeout for one BFF HTTP request")
+    parser.add_argument("--timeout-seconds", type=float,
+                        default=float(os.getenv("FRAMEFLOW_TIMEOUT_SECONDS", "1800")),
+                        help="overall timeout for one upload+render workflow")
     parser.add_argument("--output-root", type=Path, default=Path(os.getenv("FRAMEFLOW_OUTPUT_ROOT", "projects")))
     parser.add_argument("--require-publish", action="store_true",
                         help="also fail unless the upstream publish/share stage succeeds")
@@ -222,10 +271,14 @@ def main():
         parser.error("BFF URL is required")
     if not 1 <= args.jobs <= 12:
         parser.error("--jobs must be between 1 and 12")
+    if args.request_timeout_seconds <= 0 or args.timeout_seconds <= 0:
+        parser.error("timeouts must be positive")
 
     def worker(script, label):
-        return BFF(args.bff, args.timeout_seconds).run_one(script, args.images, args.duration,
-                                                            label, args.chunk_size, args.poll_seconds, args.output_root)
+        return BFF(args.bff, args.request_timeout_seconds).run_one(
+            script, args.images, args.duration, label, args.chunk_size,
+            args.poll_seconds, args.output_root, args.timeout_seconds,
+        )
 
     if args.mode == "single":
         records = [worker(args.script_a, "single")]

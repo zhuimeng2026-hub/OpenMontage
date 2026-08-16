@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import hmac
 import json
 import logging
@@ -526,18 +527,49 @@ async def upload_asset_chunk(
     tool = registry.get("upload_asset_chunk")
     if tool is None:
         return {"success": False, "error": "upload_asset_chunk is not registered"}
-    result = await _run_tool_sync(tool, {
-        "operation": operation,
-        "project_id": project_id,
-        "filename": filename,
-        "total_bytes": total_bytes,
-        "mime_type": mime_type,
-        "sha256": sha256,
-        "upload_id": upload_id,
-        "offset": offset,
-        "chunk_base64": chunk_base64,
-        "mcp_session_id": get_mcp_session_id(),
-    })
+    started = time.monotonic()
+    request_id = get_mcp_request_id() or uuid.uuid4().hex
+    sid_digest = session_hash(get_mcp_session_id())
+    upload_digest = hashlib.sha256(upload_id.encode()).hexdigest()[:12] if upload_id else None
+    request_log = re.sub(r"[^A-Za-z0-9._-]", "_", str(request_id))[:128]
+    operation_log = re.sub(r"[^A-Za-z0-9._-]", "_", str(operation))[:32]
+    project_log = re.sub(r"[^A-Za-z0-9._-]", "_", str(project_id))[:128]
+    _log.info(
+        "upload_asset_chunk dispatch operation=%s request_id=%s session_hash=%s project_id=%s "
+        "upload_hash=%s total_bytes=%s offset=%s chunk_b64_chars=%s",
+        operation_log, request_log, sid_digest, project_log, upload_digest, total_bytes, offset,
+        len(chunk_base64) if isinstance(chunk_base64, str) else 0,
+    )
+    try:
+        result = await _run_tool_sync(tool, {
+            "operation": operation,
+            "project_id": project_id,
+            "filename": filename,
+            "total_bytes": total_bytes,
+            "mime_type": mime_type,
+            "sha256": sha256,
+            "upload_id": upload_id,
+            "offset": offset,
+            "chunk_base64": chunk_base64,
+            "mcp_session_id": get_mcp_session_id(),
+        })
+    except Exception:
+        _log.exception(
+            "upload_asset_chunk crashed operation=%s request_id=%s session_hash=%s elapsed_ms=%d",
+            operation_log, request_log, sid_digest, round((time.monotonic() - started) * 1000),
+        )
+        raise
+    error_log = (
+        _safe_inputs(result.error[:200]).replace("\r", "\\r").replace("\n", "\\n")
+        if result.error else None
+    )
+    _log.info(
+        "upload_asset_chunk completed operation=%s request_id=%s session_hash=%s success=%s "
+        "elapsed_ms=%d error=%s",
+        operation_log, request_log, sid_digest, result.success,
+        round((time.monotonic() - started) * 1000),
+        error_log,
+    )
     data = result.data or {}
     batch = data.get("batch") or {}
     count = len(batch.get("assets", []))
