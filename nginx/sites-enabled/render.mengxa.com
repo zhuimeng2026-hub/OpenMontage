@@ -34,8 +34,8 @@ server {
     http2 on;
     server_name render.mengxa.com;
 
-    ssl_certificate     C:/Users/Admin/OpenMontage/nginx/ssl/render.mengxa.com/fullchain.pem;
-    ssl_certificate_key C:/Users/Admin/OpenMontage/nginx/ssl/render.mengxa.com/privkey.pem;
+    ssl_certificate     /etc/nginx/ssl/render.mengxa.com/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/render.mengxa.com/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
@@ -84,6 +84,6 @@ server {
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-XSS-Protection "1; mode=block" always;
 
-    access_log C:/Users/Admin/OpenMontage/nginx/logs/render.mengxa.com.access.log main;
-    error_log  C:/Users/Admin/OpenMontage/nginx/logs/render.mengxa.com.error.log;
+    access_log ./logs/render.mengxa.com.access.log main;
+    error_log  ./logs/render.mengxa.com.error.log;
 }
