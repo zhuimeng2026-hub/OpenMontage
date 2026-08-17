@@ -665,10 +665,16 @@ def main(argv=None):
     p_cc.add_argument("--headers", default="", help="curl -D 抓包头文件；缺省读 qr-wait 生成的 om_mcp_setcookie.txt")
     p_lf = sub.add_parser("login-flow", help="完整链路：创建票据→扫码→授权→校验 me")
     p_lf.add_argument("--timeout", type=int, default=300)
-    sub.add_parser("instances",
-                   help="多实例健康检查 + 微信配置一致性（--bff 用逗号分隔多个实例地址）")
+    p_inst = sub.add_parser("instances",
+                            help="多实例健康检查 + 微信配置一致性（--bff 用逗号分隔多个实例地址）")
+    p_inst.add_argument("--bff", default=os.environ.get("OM_BFF_URL", "https://render.mengxa.com"),
+                        help="BFF 实例地址，逗号分隔多个；例如 --bff \"https://bff1,https://bff2\"")
     p_qx = sub.add_parser("qr-cross-instance",
                           help="多实例扫码票据可见性校验：A 建票、B 查状态（验证 qrTickets 跨实例共享）")
+    p_qx.add_argument("--bff", default=os.environ.get("OM_BFF_URL", "https://render.mengxa.com"),
+                      help="第一实例（创建票据）地址")
+    p_qx.add_argument("--bff-b", default=os.environ.get("OM_BFF_B_URL", ""),
+                      help="第二实例（查询票据状态）地址")
     p_qx.add_argument("--wait", action="store_true",
                       help="额外轮询第二实例 B 直到手机授权（需真实扫码）")
     p_qx.add_argument("--timeout", type=int, default=120)
@@ -679,10 +685,10 @@ def main(argv=None):
                 "cookie-check", "login-flow", "instances", "qr-cross-instance"}
     if args.cmd in BFF_CMDS:
         if args.cmd == "instances":
-            bffs = [BFFClient(u.strip()) for u in args.bff.split(",") if u.strip()]
-            if not bffs:
+            urls = [u.strip() for u in args.bff.split(",") if u.strip()]
+            if not urls:
                 ap.error("instances 需要 --bff 提供至少一个实例地址（逗号分隔）")
-            return cmd_bff_instances(bffs)
+            return cmd_bff_instances(urls)
         if args.cmd == "qr-cross-instance":
             if not args.bff_b:
                 ap.error("qr-cross-instance 需要 --bff-b 指定第二实例地址")
