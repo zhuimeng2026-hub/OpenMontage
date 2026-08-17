@@ -9,8 +9,10 @@ import (
 )
 
 // RenderJob is one entry in a user's render queue. It is recorded by the BFF
-// when a render is submitted and is scoped to the BFF session (ff_sid), so the
-// queue endpoint inherently returns only the caller's own jobs.
+// when a render is submitted and is scoped to the stable owner identity (the
+// WeChat account, or the device session when anonymous), so the queue endpoint
+// inherently returns only the caller's own jobs and the same account sees the
+// same queue across machines.
 type RenderJob struct {
 	JobID     string    `json:"job_id"`
 	Name      string    `json:"name"`
@@ -22,14 +24,18 @@ type RenderJob struct {
 	ShareURL  string    `json:"share_url,omitempty"`
 }
 
-// SessionStore keeps the legacy user-scoped MCP Client for manual uploads and
-// one independent MCP Client per image batch. Batch clients are addressable by
-// both batch_id and project_id so every part of a batch uses one upstream MCP
-// session without changing the old user-level flow.
+// SessionStore keeps the per-owner MCP Client for manual uploads and one
+// independent MCP Client per image batch. The owner key is the stable identity
+// returned by handlers.renderQueueOwnerID — a WeChat account keeps one upstream
+// MCP session across all of its browser sessions and machines, so uploaded
+// assets and rendered videos live in the same upstream namespace everywhere the
+// account logs in (anonymous/dev flows fall back to the device session).
+// Batch clients are addressable by both batch_id and project_id so every part
+// of a batch uses one upstream MCP session without changing the old flow.
 //
-// For multi-instance deploys, swap the in-memory map for Redis keyed by the BFF
-// session id (the MCP SID would then need to be persisted alongside, or the
-// upstream must support session resumption).
+// For multi-instance deploys, swap the in-memory map for Redis keyed by the same
+// owner identity (the MCP SID is persisted alongside in mcp_user_sessions /
+// mcp_batch_sessions, or the upstream must support session resumption).
 type SessionStore struct {
 	mu         sync.RWMutex
 	clients    map[string]*Client
@@ -307,8 +313,9 @@ func (s *SessionStore) DropBatch(sessionID, batchID, projectID string) {
 }
 
 // persistUserSession / findPersistedUserSession / deletePersistedUserSession
-// keep a durable record of each ff_sid's upstream Mcp-Session-Id so another
-// BFF instance (or a restarted one) can resume the SAME upstream session.
+// keep a durable record of each owner identity's upstream Mcp-Session-Id so
+// another BFF instance (or a restarted one) — and another machine logged in as
+// the same account — can resume the SAME upstream session.
 
 func (s *SessionStore) persistUserSession(sessionID, upstreamID string) error {
 	if s.db == nil {
@@ -344,11 +351,12 @@ func (s *SessionStore) findPersistedUserSession(sessionID string) (string, error
 	return up, nil
 }
 
-// getOrCreate returns the long-lived MCP client for a BFF session. On a cold
-// start (no in-memory client) it first tries to RESUME a previously persisted
-// upstream session id, so the same ff_sid keeps one upstream Mcp-Session-Id
-// across BFF instances/restarts. If none is persisted, it opens a fresh
-// upstream session via initialize and persists the new id.
+// getOrCreate returns the long-lived MCP client for an owner identity. On a
+// cold start (no in-memory client) it first tries to RESUME a previously
+// persisted upstream session id, so the same owner identity keeps one upstream
+// Mcp-Session-Id across BFF instances/restarts (and therefore across the
+// account's machines). If none is persisted, it opens a fresh upstream session
+// via initialize and persists the new id.
 func (s *SessionStore) getOrCreate(sessionID string) (*Client, error) {
 	s.mu.RLock()
 	c, ok := s.clients[sessionID]

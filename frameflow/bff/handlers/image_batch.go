@@ -37,8 +37,8 @@ type ImageBatchHandler struct {
 
 // ensureBatchSession restores the dedicated upstream MCP session after a BFF
 // restart. Durable batch metadata is enough to recreate the client lazily.
-func (h *ImageBatchHandler) ensureBatchSession(sid string, b *imagebatch.Batch) error {
-	return h.Sessions.CreateBatch(sid, b.ID, b.ProjectID)
+func (h *ImageBatchHandler) ensureBatchSession(scope string, b *imagebatch.Batch) error {
+	return h.Sessions.CreateBatch(scope, b.ID, b.ProjectID)
 }
 
 func NewImageBatchHandler(cfg *config.Config, batches *imagebatch.Store, sessions *mcp.SessionStore) *ImageBatchHandler {
@@ -65,6 +65,10 @@ func (h *ImageBatchHandler) Scripts(c *gin.Context) {
 
 func (h *ImageBatchHandler) Create(c *gin.Context) {
 	sid := h.ensureSession(c)
+	// Scope the upstream session + batch metadata by the stable WeChat identity
+	// (or device session when anonymous) so a user's image batches are consistent
+	// across machines.
+	scope := renderQueueOwnerID(sid)
 	var req struct {
 		ScriptID string `json:"script_id"`
 	}
@@ -79,14 +83,14 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 
 	id := "batch-" + randHex(12)
 	projectID := "frameflow-batch-" + id
-	if err := h.Sessions.CreateBatch(sid, id, projectID); err != nil {
+	if err := h.Sessions.CreateBatch(scope, id, projectID); err != nil {
 		log.Printf("[image-batch] create_session_failed batch_id=%s project_id=%s sid_hash=%s err=%v", id, projectID, mcp.ShortHashForLog(sid), err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	b, err := h.Batches.Create(sid, id, projectID, req.ScriptID)
+	b, err := h.Batches.Create(scope, id, projectID, req.ScriptID)
 	if err != nil {
-		h.Sessions.DropBatch(sid, id, projectID)
+		h.Sessions.DropBatch(scope, id, projectID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -95,7 +99,8 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 
 func (h *ImageBatchHandler) List(c *gin.Context) {
 	sid := h.ensureSession(c)
-	batches, err := h.Batches.List(sid)
+	scope := renderQueueOwnerID(sid)
+	batches, err := h.Batches.List(scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -105,7 +110,8 @@ func (h *ImageBatchHandler) List(c *gin.Context) {
 
 func (h *ImageBatchHandler) Get(c *gin.Context) {
 	sid := h.ensureSession(c)
-	b, err := h.Batches.Get(sid, c.Param("id"))
+	scope := renderQueueOwnerID(sid)
+	b, err := h.Batches.Get(scope, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -115,36 +121,36 @@ func (h *ImageBatchHandler) Get(c *gin.Context) {
 		return
 	}
 	if b.RenderJobID != "" && (b.Status == "queued" || b.Status == "rendering" || b.Status == "collecting") {
-		if err := h.ensureBatchSession(sid, b); err != nil {
+		if err := h.ensureBatchSession(scope, b); err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
 		}
-		if res, err := h.Sessions.CallBatch(sid, b.ID, b.ProjectID, "get_render_status", map[string]interface{}{"render_job_id": b.RenderJobID}); err == nil {
+		if res, err := h.Sessions.CallBatch(scope, b.ID, b.ProjectID, "get_render_status", map[string]interface{}{"render_job_id": b.RenderJobID}); err == nil {
 			status := strings.ToLower(strings.TrimSpace(digString(res, "status")))
 			switch status {
 			case "queued", "queue", "pending", "waiting":
-				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "queued" })
+				h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "queued" })
 			case "rendering", "running", "processing", "in_progress", "progress":
-				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering" })
+				h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering" })
 			case "published", "done", "success", "succeeded", "completed", "finished":
 				shareURL := digString(res, "share_url")
 				if validHTTPURL(shareURL) {
-					h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = shareURL })
-					h.Sessions.UpdateJobResult(sid, b.RenderJobID, "已完成", shareURL)
-					h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
+					h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = shareURL })
+					h.Sessions.UpdateJobResult(scope, b.RenderJobID, "已完成", shareURL)
+					h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
 				} else {
-					h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = "微云分享链接缺失" })
-					h.Sessions.UpdateJobResult(sid, b.RenderJobID, "失败", "")
-					h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
+					h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = "微云分享链接缺失" })
+					h.Sessions.UpdateJobResult(scope, b.RenderJobID, "失败", "")
+					h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
 				}
 			case "failed", "error":
-				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = digString(res, "error") })
-				h.Sessions.UpdateJobResult(sid, b.RenderJobID, "失败", "")
-				h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
+				h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = digString(res, "error") })
+				h.Sessions.UpdateJobResult(scope, b.RenderJobID, "失败", "")
+				h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
 			}
 		}
 	}
-	current, err := h.Batches.Get(sid, b.ID)
+	current, err := h.Batches.Get(scope, b.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -154,7 +160,11 @@ func (h *ImageBatchHandler) Get(c *gin.Context) {
 
 func (h *ImageBatchHandler) Render(c *gin.Context) {
 	sid := h.ensureSession(c)
-	b, err := h.Batches.Get(sid, c.Param("id"))
+	// Scope the upstream session + batch metadata by the stable WeChat identity
+	// (or device session when anonymous) so a user's image batches and their
+	// rendered videos are consistent across machines.
+	scope := renderQueueOwnerID(sid)
+	b, err := h.Batches.Get(scope, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -171,7 +181,7 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "asset_count": b.AssetCount, "min": 5, "max": 10})
 		return
 	}
-	if err := h.ensureBatchSession(sid, b); err != nil {
+	if err := h.ensureBatchSession(scope, b); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -179,14 +189,14 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 	if b.ScriptID == "ecommerce-product-demo" {
 		aspectRatio = "16:9"
 	}
-	res, err := h.Sessions.CallBatch(sid, b.ID, b.ProjectID, "create_remotion_video_share", map[string]interface{}{
+	res, err := h.Sessions.CallBatch(scope, b.ID, b.ProjectID, "create_remotion_video_share", map[string]interface{}{
 		"project_id": b.ProjectID, "script_id": b.ScriptID, "title": "帧流作品 " + b.ID,
 		"duration_per_image": 60.0 / float64(b.AssetCount), "aspect_ratio": aspectRatio,
-		"queue_owner_id": renderQueueOwnerID(sid),
+		"queue_owner_id": scope,
 	})
 	if err != nil {
 		log.Printf("[image-batch] render_submit_failed batch_id=%s project_id=%s script_id=%s sid_hash=%s err=%v", b.ID, b.ProjectID, b.ScriptID, mcp.ShortHashForLog(sid), err)
-		h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = err.Error() })
+		h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = err.Error() })
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -195,13 +205,13 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream render submission failed", "result": res})
 		return
 	}
-	if _, updateErr := h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "queued"; x.RenderJobID = jobID }); updateErr != nil {
+	if _, updateErr := h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "queued"; x.RenderJobID = jobID }); updateErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": updateErr.Error()})
 		return
 	}
-	h.Sessions.RecordJob(sid, mcp.RenderJob{JobID: jobID, BatchID: b.ID, ProjectID: b.ProjectID, Name: "帧流作品 " + b.ID, Res: aspectRatio, Status: "排队", CreatedAt: time.Now()})
+	h.Sessions.RecordJob(scope, mcp.RenderJob{JobID: jobID, BatchID: b.ID, ProjectID: b.ProjectID, Name: "帧流作品 " + b.ID, Res: aspectRatio, Status: "排队", CreatedAt: time.Now()})
 	// This batch has been closed by a successful render submission. Reset the
 	// per-submission counter so a later batch starts with its own tier quota.
-	h.Sessions.ResetAsset(sid)
+	h.Sessions.ResetAsset(scope)
 	c.JSON(http.StatusAccepted, gin.H{"batch_id": b.ID, "render_job_id": jobID, "status": "queued"})
 }

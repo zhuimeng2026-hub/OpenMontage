@@ -48,23 +48,29 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 		return
 	}
 	sid := h.ensureSession(c)
+	// Key the upstream MCP session mapping by the stable WeChat identity (or the
+	// device session when anonymous) so the same account maps to the SAME upstream
+	// Mcp-Session-Id across machines — that is what makes uploaded assets and the
+	// generated video consistent cross-device (like email). See plan:
+	// cosmic-pulse-babbage.
+	scope := renderQueueOwnerID(sid)
 	operation, _ := req.Args["operation"].(string)
 	projectID, _ := req.Args["project_id"].(string)
-	log.Printf("[bff-mcp] start tool=%s operation=%s sid_hash=%s project_id=%s", req.Tool, operation, mcp.ShortHashForLog(sid), projectID)
+	log.Printf("[bff-mcp] start tool=%s operation=%s sid_hash=%s scope_hash=%s project_id=%s", req.Tool, operation, mcp.ShortHashForLog(sid), mcp.ShortHashForLog(scope), projectID)
 
 	// Pre-check the per-submission file cap on a new upload. Rejecting at the
 	// "start" step prevents any bytes from being sent upstream once the cap is
 	// reached. (upload_asset_chunk's operation lives in req.Args.)
 	if req.Tool == "upload_asset_chunk" {
 		if op, _ := req.Args["operation"].(string); op == "start" {
-			tier := h.Limits.Resolve(sid)
+			tier := h.Limits.Resolve(scope)
 			lim := limits.ForTier(tier)
-			if h.Store.AssetCount(sid) >= lim.MaxFilesPerSubmission {
+			if h.Store.AssetCount(scope) >= lim.MaxFilesPerSubmission {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
 					"error": fmt.Sprintf(
 						"your %q tier allows at most %d images per submission; this submission has already reached the limit",
 						tier, lim.MaxFilesPerSubmission),
-					"files": h.Store.AssetCount(sid),
+					"files": h.Store.AssetCount(scope),
 					"max":   lim.MaxFilesPerSubmission,
 				})
 				return
@@ -80,7 +86,7 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 		req.Args["queue_owner_id"] = renderQueueOwnerID(sid)
 	}
 
-	res, err := h.Store.Call(sid, req.Tool, req.Args)
+	res, err := h.Store.Call(scope, req.Tool, req.Args)
 	if err != nil {
 		log.Printf("[bff-mcp] upstream_failed tool=%s operation=%s sid_hash=%s project_id=%s err=%v", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -91,8 +97,9 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	}
 
 	// A successful render submission enters the caller's own render queue. The
-	// queue is keyed by the BFF session, so each user only ever sees their own
-	// jobs — never another caller's (owner isolation is structural, not a filter).
+	// queue is keyed by the stable owner identity (scope), so each user only ever
+	// sees their own jobs — never another caller's (owner isolation is structural,
+	// not a filter) and the same account sees the same queue across machines.
 	if req.Tool == "create_remotion_video_share" {
 		if jobID := digString(res, "render_job_id"); jobID != "" {
 			name, _ := req.Args["title"].(string)
@@ -107,7 +114,7 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 			if mapUpstreamStatus(digString(res, "status")) == "排队" {
 				jobStatus = "排队"
 			}
-			h.Store.RecordJob(sid, mcp.RenderJob{
+			h.Store.RecordJob(scope, mcp.RenderJob{
 				JobID:     jobID,
 				Name:      name,
 				Res:       resLabel,
@@ -122,15 +129,15 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	//   - creating a video closes the submission and resets it for the next one
 	if req.Tool == "upload_asset_chunk" {
 		if op, _ := req.Args["operation"].(string); op == "complete" {
-			h.Store.IncAsset(sid)
+			h.Store.IncAsset(scope)
 			if h.ImageBatches != nil {
 				if projectID, _ := req.Args["project_id"].(string); projectID != "" {
-					h.ImageBatches.IncAsset(sid, projectID)
+					h.ImageBatches.IncAsset(scope, projectID)
 				}
 			}
 		}
 	} else if req.Tool == "create_remotion_video_share" {
-		h.Store.ResetAsset(sid)
+		h.Store.ResetAsset(scope)
 	}
 
 	c.JSON(http.StatusOK, res)

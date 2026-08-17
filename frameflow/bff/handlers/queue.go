@@ -11,24 +11,29 @@ import (
 )
 
 // RenderQueue returns the caller's own render jobs. Scoping is structural: the
-// jobs are stored per BFF session (ff_sid), so a user can only ever see the
-// renders they submitted — never another user's. The route is auth-gated in
-// main.go so an unauthenticated caller is rejected before reaching here.
+// jobs are stored under the stable owner identity (WeChat account or, when
+// anonymous, the device session), so a user can only ever see the renders they
+// submitted — never another user's — and the same account sees the same queue
+// on any machine. The route is auth-gated in main.go so an unauthenticated
+// caller is rejected before reaching here.
 //
 // In-flight jobs (渲染中/排队) are refreshed asynchronously against the upstream
 // get_render_status so terminal states (已完成/失败) land in the store without
 // blocking this response; the frontend's poll + SSE then surface them shortly.
 func (h *Handlers) RenderQueue(c *gin.Context) {
 	sid := h.ensureSession(c)
-	jobs := h.Store.ListJobs(sid)
-	go h.refreshJobStatuses(sid, jobs)
+	// Scope by the stable WeChat identity (or device session when anonymous) so a
+	// user's render queue is consistent across machines.
+	scope := renderQueueOwnerID(sid)
+	jobs := h.Store.ListJobs(scope)
+	go h.refreshJobStatuses(scope, jobs)
 	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
 }
 
 // refreshJobStatuses backfills terminal states for in-flight jobs. It runs
 // best-effort in the background and never fails the request; the frontend's
 // 5s poll (and the SSE stream) will pick up the update on the next cycle.
-func (h *Handlers) refreshJobStatuses(sid string, jobs []*mcp.RenderJob) {
+func (h *Handlers) refreshJobStatuses(scope string, jobs []*mcp.RenderJob) {
 	const maxRefresh = 5 // cap upstream calls per cycle to keep the store light
 	refreshed := 0
 	for _, j := range jobs {
@@ -43,9 +48,9 @@ func (h *Handlers) refreshJobStatuses(sid string, jobs []*mcp.RenderJob) {
 		var res map[string]interface{}
 		var err error
 		if j.BatchID != "" || j.ProjectID != "" {
-			res, err = h.Store.CallBatch(sid, j.BatchID, j.ProjectID, "get_render_status", args)
+			res, err = h.Store.CallBatch(scope, j.BatchID, j.ProjectID, "get_render_status", args)
 		} else {
-			res, err = h.Store.Call(sid, "get_render_status", args)
+			res, err = h.Store.Call(scope, "get_render_status", args)
 		}
 		if err != nil {
 			continue
@@ -53,11 +58,11 @@ func (h *Handlers) refreshJobStatuses(sid string, jobs []*mcp.RenderJob) {
 		if mapped := mapUpstreamStatus(digString(res, "status")); mapped != "" {
 			shareURL := digString(res, "share_url")
 			if mapped == "已完成" && !validHTTPURL(shareURL) {
-				h.Store.UpdateJobResult(sid, j.JobID, "失败", "")
+				h.Store.UpdateJobResult(scope, j.JobID, "失败", "")
 				continue
 			}
 			if mapped != j.Status || shareURL != "" {
-				h.Store.UpdateJobResult(sid, j.JobID, mapped, shareURL)
+				h.Store.UpdateJobResult(scope, j.JobID, mapped, shareURL)
 			}
 		}
 	}

@@ -51,7 +51,8 @@ func (h *CompositionHandler) Create(c *gin.Context) {
 		return
 	}
 	sid := h.ensureSession(c)
-	comp := h.Comps.Save(sid, req.Name, req.Code)
+	scope := renderQueueOwnerID(sid)
+	comp := h.Comps.Save(scope, req.Name, req.Code)
 	c.JSON(http.StatusOK, gin.H{
 		"id":         comp.ID,
 		"name":       comp.Name,
@@ -63,14 +64,16 @@ func (h *CompositionHandler) Create(c *gin.Context) {
 // List returns the session's compositions.
 func (h *CompositionHandler) List(c *gin.Context) {
 	sid := h.ensureSession(c)
-	c.JSON(http.StatusOK, gin.H{"compositions": h.Comps.List(sid)})
+	scope := renderQueueOwnerID(sid)
+	c.JSON(http.StatusOK, gin.H{"compositions": h.Comps.List(scope)})
 }
 
 // Get returns one composition by id (owned by the session).
 func (h *CompositionHandler) Get(c *gin.Context) {
 	sid := h.ensureSession(c)
+	scope := renderQueueOwnerID(sid)
 	id := c.Param("id")
-	comp := h.Comps.Get(sid, id)
+	comp := h.Comps.Get(scope, id)
 	if comp == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "composition not found"})
 		return
@@ -89,8 +92,9 @@ func (h *CompositionHandler) Get(c *gin.Context) {
 // already holds the uploaded assets.
 func (h *CompositionHandler) Render(c *gin.Context) {
 	sid := h.ensureSession(c)
+	scope := renderQueueOwnerID(sid)
 	id := c.Param("id")
-	comp := h.Comps.Get(sid, id)
+	comp := h.Comps.Get(scope, id)
 	if comp == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "composition not found"})
 		return
@@ -124,9 +128,9 @@ func (h *CompositionHandler) Render(c *gin.Context) {
 		"aspect_ratio":       req.AspectRatio,
 		"duration_per_image": req.DurationPerImage,
 		"code":               comp.Code, // forward-compatible; ignored by upstream until supported
-		"queue_owner_id":     renderQueueOwnerID(sid),
+		"queue_owner_id":     scope,
 	}
-	res, err := h.Sessions.Call(sid, "create_remotion_video_share", args)
+	res, err := h.Sessions.Call(scope, "create_remotion_video_share", args)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -141,7 +145,7 @@ func (h *CompositionHandler) Render(c *gin.Context) {
 		if mapUpstreamStatus(digString(res, "status")) == "排队" {
 			jobStatus = "排队"
 		}
-		h.Sessions.RecordJob(sid, mcp.RenderJob{
+		h.Sessions.RecordJob(scope, mcp.RenderJob{
 			JobID:     jobID,
 			Name:      name,
 			Res:       req.AspectRatio,

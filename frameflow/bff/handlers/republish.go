@@ -15,8 +15,11 @@ import (
 // than from the browser request.
 func (h *Handlers) RepublishRender(c *gin.Context) {
 	sid := h.ensureSession(c)
+	// Scope by the stable WeChat identity (or device session when anonymous) so a
+	// render job created on one machine is republishable after login on another.
+	scope := renderQueueOwnerID(sid)
 	jobID := strings.TrimSpace(c.Param("jobId"))
-	job := ownedRenderJob(h.Store, sid, jobID)
+	job := ownedRenderJob(h.Store, scope, jobID)
 	if job == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "render job not found"})
 		return
@@ -29,9 +32,9 @@ func (h *Handlers) RepublishRender(c *gin.Context) {
 	var result map[string]interface{}
 	var err error
 	if job.BatchID != "" || job.ProjectID != "" {
-		result, err = h.Store.CallBatch(sid, job.BatchID, job.ProjectID, "retry_render_publish", args)
+		result, err = h.Store.CallBatch(scope, job.BatchID, job.ProjectID, "retry_render_publish", args)
 	} else {
-		result, err = h.Store.Call(sid, "retry_render_publish", args)
+		result, err = h.Store.Call(scope, "retry_render_publish", args)
 	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -41,7 +44,7 @@ func (h *Handlers) RepublishRender(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": msg})
 		return
 	}
-	shareURL, err := finishRepublish(h.Store, sid, job, result)
+	shareURL, err := finishRepublish(h.Store, scope, job, result)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -53,8 +56,8 @@ func republishEligibleStatus(status string) bool {
 	return status == "已完成" || status == "失败"
 }
 
-func ownedRenderJob(store *mcp.SessionStore, sid, jobID string) *mcp.RenderJob {
-	for _, job := range store.ListJobs(sid) {
+func ownedRenderJob(store *mcp.SessionStore, scope, jobID string) *mcp.RenderJob {
+	for _, job := range store.ListJobs(scope) {
 		if job != nil && job.JobID == jobID {
 			return job
 		}
@@ -62,7 +65,7 @@ func ownedRenderJob(store *mcp.SessionStore, sid, jobID string) *mcp.RenderJob {
 	return nil
 }
 
-func finishRepublish(store *mcp.SessionStore, sid string, job *mcp.RenderJob, result map[string]interface{}) (string, error) {
+func finishRepublish(store *mcp.SessionStore, scope string, job *mcp.RenderJob, result map[string]interface{}) (string, error) {
 	if msg := digString(result, "error"); msg != "" {
 		return "", fmt.Errorf("%s", msg)
 	}
@@ -70,6 +73,6 @@ func finishRepublish(store *mcp.SessionStore, sid string, job *mcp.RenderJob, re
 	if !validHTTPURL(shareURL) {
 		return "", fmt.Errorf("upstream returned an invalid share_url")
 	}
-	store.UpdateJobResult(sid, job.JobID, "已完成", shareURL)
+	store.UpdateJobResult(scope, job.JobID, "已完成", shareURL)
 	return shareURL, nil
 }
