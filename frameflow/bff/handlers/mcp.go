@@ -65,11 +65,15 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	operation, _ := req.Args["operation"].(string)
 	projectID, _ := req.Args["project_id"].(string)
 	uploadDiag := ""
+	originalFilename := ""
+	storedFilename := ""
 	if req.Tool == "upload_asset_chunk" {
 		// The upstream MCP requires a strict ASCII basename. Normalize at the
 		// BFF boundary so old browsers and old MCP workers cannot reject a user
 		// upload merely because its local filename contains Chinese or spaces.
+		originalFilename, _ = req.Args["filename"].(string)
 		sanitizeUploadFilename(req.Args)
+		storedFilename, _ = req.Args["filename"].(string)
 		uploadDiag = " " + uploadArgsSummary(req.Args)
 	}
 	log.Printf("[bff-mcp] start tool=%s operation=%s sid_hash=%s scope_hash=%s project_id=%s%s", req.Tool, operation, mcp.ShortHashForLog(sid), mcp.ShortHashForLog(scope), projectID, uploadDiag)
@@ -120,6 +124,13 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	if failure, ok := res["error"].(string); ok && failure != "" {
 		resultErr = fmt.Errorf("%s", failure)
 		log.Printf("[bff-mcp] tool_error tool=%s operation=%s sid_hash=%s project_id=%s error=%q%s", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, failure, uploadDiag)
+	}
+	if req.Tool == "upload_asset_chunk" && originalFilename != "" && storedFilename != "" && res != nil {
+		// Keep the user-facing name available while the upstream receives only
+		// the safe basename. The frontend can display the original name and use
+		// stored_filename for any later asset lookup.
+		res["original_filename"] = originalFilename
+		res["stored_filename"] = storedFilename
 	}
 
 	// A successful render submission enters the caller's own render queue. The
@@ -195,8 +206,35 @@ func safeUploadFilename(filename string) (string, bool) {
 		}
 	}
 	hash := sha256.Sum256([]byte(filename))
-	safe := fmt.Sprintf("upload-%x%s", hash[:4], ext)
+	stem := readableUploadStem(base, ext)
+	safe := fmt.Sprintf("upload-%x-%s%s", hash[:4], stem, ext)
 	return safe, true
+}
+
+func readableUploadStem(base, ext string) string {
+	stem := strings.TrimSuffix(base, ext)
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range stem {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+			lastUnderscore = false
+		case r == ' ' || r == '.' || r == '(' || r == ')' || r == '[' || r == ']':
+			if !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	readable := strings.Trim(b.String(), "_-.")
+	if readable == "" {
+		return "image"
+	}
+	if len(readable) > 80 {
+		readable = readable[:80]
+	}
+	return readable
 }
 
 // uploadArgsSummary emits only non-content diagnostics. The original filename

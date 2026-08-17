@@ -66,3 +66,13 @@ func TestSafeUploadFilenameIsStableAcrossChunks(t *testing.T) {
 		t.Fatalf("expected normalized extension: %q", first)
 	}
 }
+
+func TestSafeUploadFilenameRetainsReadableASCIIStem(t *testing.T) {
+	safe, renamed := safeUploadFilename("Product 01 商品.png")
+	if !renamed || !strings.Contains(safe, "Product_01") {
+		t.Fatalf("expected readable ASCII stem, got %q", safe)
+	}
+	if !uploadFilenamePattern.MatchString(safe) {
+		t.Fatalf("renamed filename is not safe: %q", safe)
+	}
+}
