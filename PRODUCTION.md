@@ -24,6 +24,87 @@
 
 ---
 
+## 0.5 数据流拓扑（代码复核结论，2026-08-17）
+
+> 上一轮仅做了规划，本轮逐行读了 `frameflow/bff/handlers/*`、`main.go`、`internal/config/config.go` 与 `OpenMontage-mcp-proxy/main.go`、`.env` / `.env.example` / `VERIFY.md`，修正一处与原规划的偏差：**OpenMontage-mcp-proxy 不是 BFF 的下游，二者是到同一上游渲染后端的并列网关。**
+
+### 0.5.1 图片 / 图生视频任务的真实流向（已核对代码）
+
+```
+浏览器 / 外部客户端
+   │
+   ├─(前端主路径)──> render.mengxa.com (nginx) ──> frameflow-bff:8080
+   │                    │ RequireAuth 校验 ff_sid（AUTH_REQUIRED=true 时）
+   │                    │ 转发到 MCP_BASE_URL        ← frameflow/bff/.env
+   │                    ▼
+   │             上游 MCP（图片上传 + 图生视频渲染后端，lanes.ymxt.top:8900）
+   │
+   └─(独立网关)────> OpenMontage-mcp-proxy:8080      ← 需 PROXY_CLIENT_TOKEN
+                        │ 转发到 UPSTREAM_MCP_URL     ← OpenMontage-mcp-proxy/.env
+                        ▼
+                  同一上游 MCP
+```
+
+**已验证事实：**
+
+1. **frameflow-bff 是前端任务实际经过的组件**，它直接把 `/api/mcp`、`/api/render-progress`、`/api/image-batches/:id/render` 等转发到自己的 `MCP_BASE_URL`（`mcp.NewSessionStore(cfg.MCPBaseURL, …)`，见 `main.go:36`；转发逻辑在 `handlers/mcp.go`）。BFF 当前 `.env` 是 `MCP_BASE_URL=http://localhost:8900/mcp`（本地 Python 渲染服务），**并未指向 OpenMontage-mcp-proxy**。
+2. **OpenMontage-mcp-proxy 是另一道独立网关**：监听 `:8080`，仅转发 `/mcp` 与 `/render-progress` 到自己的 `UPSTREAM_MCP_URL`，鉴权用 `PROXY_CLIENT_TOKEN`（与上游 `mcp_key`/`UPSTREAM_MCP_TOKEN` 分离，专门用于"藏上游 token + 加客户端鉴权"）。它当前 `.env` 指向 `https://dw.aixifs.com/mcp`（一个中继），`lanes.ymxt.top:8900/mcp` 仅出现在 `.env.example` 与 `VERIFY.md` 的目标值中。
+3. **参数来源不同，不可混淆：**
+   - BFF：`MCP_BASE_URL` + `MCP_API_TOKEN`
+   - proxy：`UPSTREAM_MCP_URL` + `UPSTREAM_MCP_TOKEN`(或 `mcp_key`) + `PROXY_CLIENT_TOKEN`
+
+### 0.5.2 生产拓扑两选一（取决于 BFF 部署机是否有 IPv6 出口）
+
+`lanes.ymxt.top` 仅 IPv6。因此：
+
+- **路径 A（BFF 直连，推荐当 BFF 机有 IPv6）**：`frameflow/bff/.env` 设 `MCP_BASE_URL=http://lanes.ymxt.top:8900/mcp`。最少一跳，proxy 可不用。部署前用 `curl -6 … http://lanes.ymxt.top:8900/mcp` 探活。
+- **路径 B（经 proxy 桥接，当 BFF 机仅 IPv4）**：BFF 的 `MCP_BASE_URL` 改为 **proxy 的地址**（如 `https://dw.aixifs.com/mcp`），由 proxy（具备 IPv6 出口）桥到 `lanes`。此时 proxy 的 `UPSTREAM_MCP_URL` 必须为 `http://lanes.ymxt.top:8900/mcp`。这正对应"proxy 把任务转发到 lanes"——**但前提是 BFF 当前指向 `localhost:8900` 的那行要先改成指向 proxy**，否则二者仍是并列而非串联。
+
+> 切生产时按所选路径改 `.env`（见 1.1 / 2.1）。**当前运行中的 `.env` 不要现在改**，否则会把正在用的测试页指到生产上游而中断。
+
+### 0.5.4 切生产 `.env` 速查（选定路径后直接覆盖）
+
+**路径 A — BFF 直连 lanes（BFF 部署机有 IPv6 出口）**
+
+`frameflow/bff/.env`：
+```ini
+SESSION_SECURE=true
+AUTH_REQUIRED=true
+FRONTEND_ORIGIN=https://render.mengxa.com
+WECHAT_APP_ID=<正式服务号AppID>
+WECHAT_APP_SECRET=<正式服务号Secret>
+WECHAT_REDIRECT_URI=https://render.mengxa.com/api/wechat/callback
+WECHAT_SCOPE=snsapi_userinfo
+MCP_BASE_URL=http://lanes.ymxt.top:8900/mcp
+MCP_PROGRESS_URL=http://lanes.ymxt.top:8900/render-progress
+MCP_API_TOKEN=<上游token>
+RATE_LIMIT_PER_MIN=30
+DEV_LOGIN_ALLOWED=false
+STATE_DB_PATH=./data/frameflow.db
+```
+proxy 可不部署（或保留做独立网关，其 `UPSTREAM_MCP_URL` 同样设 `http://lanes.ymxt.top:8900/mcp`）。
+
+**路径 B — BFF 经 proxy 桥接 lanes（BFF 部署机仅 IPv4）**
+
+`frameflow/bff/.env`（仅改上游两行，其余同路径 A）：
+```ini
+MCP_BASE_URL=https://dw.aixifs.com/mcp            # 或自建 proxy 的公网地址
+MCP_PROGRESS_URL=https://dw.aixifs.com/render-progress
+```
+`OpenMontage-mcp-proxy/.env`：
+```ini
+UPSTREAM_MCP_URL=http://lanes.ymxt.top:8900/mcp
+UPSTREAM_MCP_TOKEN=<上游token>          # 或 legacy mcp_key
+PROXY_CLIENT_TOKEN=<独立客户端token>     # 必须与上游 token 不同
+PORT=8080
+```
+
+### 0.5.3 仍需关注的生产缺口（与 4.2-B 对应）
+
+- **扫码票据 `qrTickets` 仍是进程内内存**（`wechat.go:58`）。多实例 BFF 下：实例 1 建 ticket，手机回调落到实例 2 找不到 ticket → 扫码卡 pending。登录态本身已持久化 SQLite（不受影响），但**扫码登录链路需多实例粘性会话或把 ticket 也共享到 DB/Redis**。单实例 + 健康检查部署无碍。
+
+---
+
 ## 1. 任务一：`render.mengxa.com` 迁到正式外网服务器
 
 **前提**：用户称"测试环境已重新配置好"。本任务把该域名最终指向**正式外网服务器**并切换为生产级配置。
@@ -70,7 +151,7 @@
 | `frameflow/bff/web/config.js` | `FF_CONFIG.remotion.bffBaseUrl` | 测试时可能写死 `http://localhost:8080` 或测试机 IPv4 | **`https://render.mengxa.com`** 或保持 `window.location.origin`（BFF 同源托管时） | 必须同源或填 BFF 公网域名，否则 cookie 跨域带不上 |
 | `frameflow/bff/.env` | `MCP_BASE_URL` | 测试机内网 `http://127.0.0.1:8900/mcp` | `http://lanes.ymxt.top:8900/mcp` | **部署机需 IPv6 出口** |
 | 同上 | `MCP_PROGRESS_URL` | `http://127.0.0.1:8900/render-progress` | `http://lanes.ymxt.top:8900/render-progress` | 同上 |
-| `OpenMontage-mcp-proxy/.env` | `UPSTREAM_MCP_URL` | 开发机无 IPv6 时 `https://dw.aixifs.com/mcp` | **删除/禁用**（生产直连上游，中转仅本地权宜） | 仅本机无 IPv6 开发机需要 |
+| `OpenMontage-mcp-proxy/.env` | `UPSTREAM_MCP_URL` | 开发机无 IPv6 时 `https://dw.aixifs.com/mcp` | `http://lanes.ymxt.top:8900/mcp`（若 BFF 经 proxy 桥接，保持/改用 proxy 公网地址；见 0.5.2） | proxy 是 BFF 的**并列网关而非下游**；仅当 BFF 机无 IPv6 时经 proxy 桥接 IPv6 上游 |
 | `nginx/...conf` | `server_name` / `proxy_pass` | 测试机 | 生产服务器 | 见任务一 |
 | `frameflow/bff/.env` | `WECHAT_REDIRECT_URI` / `FRONTEND_ORIGIN` / `SESSION_SECURE` / `AUTH_REQUIRED` | 测试宽松 | 生产严格（见任务一） | — |
 
