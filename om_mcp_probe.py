@@ -36,6 +36,16 @@ OpenMontage MCP 探测 / 复测工具
   instances      多实例健康检查 + 微信配置一致性（--bff 用逗号分隔多个实例地址）
   qr-cross-instance 多实例扫码票据可见性校验：A 建票、B 查状态（验证 qrTickets 跨实例共享）
 
+BFF 日志检查（复现“上传卡第一张”类问题时，在 BFF 主机上跑）
+------------------------------------------------------------
+  log-check       解析 frameflow-bff 的运行日志，定位上传链路的可疑点：
+                  会话冷启动(cold_init)耗时/失败、MCP 调用(done)耗时/错误、
+                  图片批次创建耗时，以及“有 start 无 done”的疑似卡死请求。
+                  默认读 /var/log/frameflow-bff.log；也可用 `--log-path -`
+                  从管道读取（如 `journalctl -u frameflow-bff | ...`）。
+                  需配合 BFF 侧新增的 [bff-session]/[bff-mcp] done/[image-batch]
+                  结构化日志（见 frameflow/bff 的 log-check 相关提交）。
+
 环境变量
 --------
   OM_MCP_URL     端点（默认 https://dw.aixifs.com/mcp）
@@ -597,6 +607,185 @@ def cmd_bff_qr_cross_instance(bff_a, bff_b, poll=False, timeout=120):
     return 0 if ok else 1
 
 
+# ---------------------------------------------------------------------------
+# BFF 日志检查：复现“上传卡第一张”时，在 BFF 主机上解析运行日志定位可疑点
+# ---------------------------------------------------------------------------
+
+_LOG_TAG_RE = re.compile(r"\[(bff-mcp|bff-session|image-batch)\]")
+_KV_RE = re.compile(r"(\w+)=(\S+)")
+
+
+def _read_log_lines(path: str, tail: int):
+    """读取日志文件的末尾 N 行；path 为 '-' 时从 stdin 读取（便于 journalctl 管道）。"""
+    if path == "-":
+        data = sys.stdin.read().splitlines()
+    else:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                data = f.readlines()
+        except OSError as e:
+            print("LOG_OPEN_FAILED path=%s err=%s" % (path, e))
+            return []
+    return data[-tail:] if tail > 0 else data
+
+
+def _parse_log_ts(head: str):
+    # Go log 前缀形如 "2026/08/17 12:00:00"
+    parts = head.strip().split()
+    if len(parts) < 2:
+        return None
+    try:
+        return time.strptime(" ".join(parts[:2]), "%Y/%m/%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def cmd_log_check(args):
+    """解析 frameflow-bff 日志，定位上传链路的可疑点。"""
+    from collections import defaultdict
+    lines = _read_log_lines(args.log_path, args.tail)
+    if not lines:
+        return 1
+
+    since = time.time() - args.since * 60
+    events = []  # (ts_obj, tag, kind, fields, raw)
+    for ln in lines:
+        m = _LOG_TAG_RE.search(ln)
+        if not m:
+            continue
+        tag = m.group(1)
+        after = ln[m.end():].strip()
+        kind = after.split()[0] if after.split() else ""
+        fields = {k: v for k, v in _KV_RE.findall(ln)}
+        # err 字段可能含空格（如 "err=dial tcp: i/o timeout"），用行尾完整内容覆盖
+        merr = re.search(r"\berr=(.*)$", ln)
+        if merr:
+            fields["err"] = merr.group(1).strip()
+        ts = _parse_log_ts(ln[:m.start()])
+        if ts is not None and time.mktime(ts) < since:
+            continue
+        events.append((ts, tag, kind, fields, ln.rstrip("\n")))
+
+    # ---- [1] 会话初始化：cold_init(联网) / resumed(命中持久化) / 失败 ----
+    init_kinds = {"cold_init", "batch_cold_init", "batch_reinit"}
+    resume_kinds = {"resumed", "batch_resumed"}
+    init_elapsed = []          # 联网初始化的耗时列表
+    resume_count = 0
+    sess_errs = []
+    for _, tag, kind, f, raw in events:
+        if tag != "bff-session":
+            continue
+        em = f.get("elapsed_ms", "")
+        if kind in init_kinds and em.isdigit():
+            init_elapsed.append(int(em))
+        elif kind in resume_kinds:
+            resume_count += 1
+        if kind.endswith("_failed") and f.get("err") and f["err"] not in ("<nil>", "", "nil"):
+            sess_errs.append((ts_iso(ts), kind, f["err"]))
+
+    # ---- [2] MCP 调用：done 耗时 + 错误 + start/done 配对(卡死检测) ----
+    done_by_tool = defaultdict(list)
+    done_errs = []
+    pending = defaultdict(int)
+    pending_ts = {}
+    for ts, tag, kind, f, raw in events:
+        if tag != "bff-mcp":
+            continue
+        if kind == "start":
+            key = (f.get("scope_hash"), f.get("tool"), f.get("operation"))
+            pending[key] += 1
+            if key not in pending_ts:
+                pending_ts[key] = ts
+        elif kind == "done":
+            key = (f.get("scope_hash"), f.get("tool"), f.get("operation"))
+            pending[key] = max(0, pending[key] - 1)
+            em = f.get("elapsed_ms", "")
+            if em.isdigit():
+                done_by_tool[f.get("tool")].append(int(em))
+            err = f.get("err")
+            if err and err not in ("<nil>", "", "nil"):
+                done_errs.append((ts_iso(ts), f.get("tool"), f.get("operation"), err))
+
+    # ---- [3] 图片批次创建耗时 + 错误 ----
+    ib_elapsed = []
+    ib_errs = []
+    for ts, tag, kind, f, raw in events:
+        if tag == "image-batch" and "create_session" in kind:
+            em = f.get("elapsed_ms", "")
+            if em.isdigit():
+                ib_elapsed.append(int(em))
+            if kind.endswith("_failed") and f.get("err") and f["err"] not in ("<nil>", "", "nil"):
+                ib_errs.append((ts_iso(ts), f["err"]))
+
+    # ---- [4] 疑似卡死：start 后超过 stall_sec 仍无 done ----
+    now = time.time()
+    stalls = []
+    for key, cnt in pending.items():
+        if cnt <= 0:
+            continue
+        age = (now - time.mktime(pending_ts[key])) if pending_ts.get(key) else 0
+        if age >= args.stall_sec:
+            stalls.append((key, cnt, age))
+
+    # ---- 报告 ----
+    print("=== frameflow-bff 上传链路日志检查 (log-check) ===")
+    print("LOG = %s" % args.log_path)
+    print("WINDOW = 最近 %d 分钟, tail=%d 行, 解析事件=%d" % (args.since, args.tail, len(events)))
+    print("SLOW_THRESHOLD_MS = %d   STALL_SEC = %d" % (args.slow_ms, args.stall_sec))
+    print()
+    print("[1] 会话初始化 (bff-session)")
+    if init_elapsed:
+        mx, avg = max(init_elapsed), sum(init_elapsed) // len(init_elapsed)
+        print("  %-14s count=%-4d max_ms=%-7d avg_ms=%-7d%s" % (
+            "cold_init(联网)", len(init_elapsed), mx, avg, " [WARN 慢]" if mx >= args.slow_ms else ""))
+    else:
+        print("  cold_init(联网): 窗口内无记录（通常正常：首个身份初始化后走 resumed）")
+    print("  resumed(命中持久化): %d  次" % resume_count)
+    for t, kind, err in sess_errs:
+        print("  [ERR] %s %s err=%s" % (t, kind, err))
+    print()
+    print("[2] MCP 调用耗时 (bff-mcp done)")
+    if done_by_tool:
+        for tool, vals in sorted(done_by_tool.items()):
+            mx, avg = max(vals), sum(vals) // len(vals)
+            print("  %-22s count=%-4d max_ms=%-7d avg_ms=%-7d%s" % (
+                tool, len(vals), mx, avg, " [WARN 慢]" if mx >= args.slow_ms else ""))
+    else:
+        print("  (窗口内无 mcp done 记录)")
+    for t, tool, op, err in done_errs:
+        print("  [ERR] %s tool=%s operation=%s err=%s" % (t, tool, op, err))
+    print()
+    print("[3] 图片批次创建 (image-batch create_session)")
+    if ib_elapsed:
+        mx, avg = max(ib_elapsed), sum(ib_elapsed) // len(ib_elapsed)
+        print("  count=%-4d max_ms=%-7d avg_ms=%-7d%s" % (
+            len(ib_elapsed), mx, avg, " [WARN 慢]" if mx >= args.slow_ms else ""))
+    else:
+        print("  (窗口内无 create_session 记录)")
+    for t, err in ib_errs:
+        print("  [ERR] %s create_session_failed err=%s" % (t, err))
+    print()
+    print("[4] 疑似卡死 (start 后 %d 秒仍无 done)" % args.stall_sec)
+    if not stalls:
+        print("  OK: 所有 start 均有 done 配对")
+    else:
+        for (scope, tool, op), cnt, age in stalls:
+            print("  [STALL] scope=%s tool=%s operation=%s pending=%d age=%.0fs" % (scope, tool, op, cnt, age))
+    print()
+    problems = bool(
+        sess_errs or done_errs or ib_errs or stalls
+        or (init_elapsed and max(init_elapsed) >= args.slow_ms)
+        or any(max(v) >= args.slow_ms for v in done_by_tool.values())
+        or (ib_elapsed and max(ib_elapsed) >= args.slow_ms)
+    )
+    print("VERDICT = %s" % ("PROBLEMS_FOUND" if problems else "NO_PROBLEMS_DETECTED"))
+    return 1 if problems else 0
+
+
+def ts_iso(ts):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", ts) if ts else "?"
+
+
 def run_bff(args, bff: BFFClient):
     if args.cmd == "wechat-config":
         return cmd_bff_wechat_config(bff)
@@ -679,8 +868,20 @@ def main(argv=None):
                       help="额外轮询第二实例 B 直到手机授权（需真实扫码）")
     p_qx.add_argument("--timeout", type=int, default=120)
 
+    # ---- BFF 日志检查子命令 ----
+    p_lc = sub.add_parser("log-check",
+                          help="解析 frameflow-bff 日志，定位上传链路可疑点（卡第一张等）；默认读 /var/log/frameflow-bff.log，--log-path - 表示从 stdin 读取")
+    p_lc.add_argument("--log-path", default="/var/log/frameflow-bff.log",
+                     help="BFF 日志文件路径；'-' 表示从 stdin 读取（如 journalctl 管道）")
+    p_lc.add_argument("--since", type=int, default=60, help="仅分析最近 N 分钟的日志（默认 60）")
+    p_lc.add_argument("--tail", type=int, default=5000, help="最多读取日志末尾 N 行（默认 5000）")
+    p_lc.add_argument("--slow-ms", type=int, default=3000, help="耗时超过该毫秒数标记为慢（默认 3000）")
+    p_lc.add_argument("--stall-sec", type=int, default=10, help="start 后超过该秒数仍无 done 视为疑似卡死（默认 10）")
+
     args = ap.parse_args(argv)
     setup_logging(args.log, args.quiet)
+    if args.cmd == "log-check":
+        return cmd_log_check(args)
     BFF_CMDS = {"wechat-config", "me", "qr-create", "qr-status", "qr-wait",
                 "cookie-check", "login-flow", "instances", "qr-cross-instance"}
     if args.cmd in BFF_CMDS:

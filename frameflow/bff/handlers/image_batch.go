@@ -83,11 +83,13 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 
 	id := "batch-" + randHex(12)
 	projectID := "frameflow-batch-" + id
+	t0 := time.Now()
 	if err := h.Sessions.CreateBatch(scope, id, projectID); err != nil {
-		log.Printf("[image-batch] create_session_failed batch_id=%s project_id=%s sid_hash=%s err=%v", id, projectID, mcp.ShortHashForLog(sid), err)
+		log.Printf("[image-batch] create_session_failed batch_id=%s project_id=%s sid_hash=%s elapsed_ms=%d err=%v", id, projectID, mcp.ShortHashForLog(sid), time.Since(t0).Milliseconds(), err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	log.Printf("[image-batch] create_session_ok batch_id=%s project_id=%s sid_hash=%s elapsed_ms=%d", id, projectID, mcp.ShortHashForLog(sid), time.Since(t0).Milliseconds())
 	b, err := h.Batches.Create(scope, id, projectID, req.ScriptID)
 	if err != nil {
 		h.Sessions.DropBatch(scope, id, projectID)

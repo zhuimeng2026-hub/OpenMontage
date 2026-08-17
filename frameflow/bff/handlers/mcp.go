@@ -57,6 +57,12 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	operation, _ := req.Args["operation"].(string)
 	projectID, _ := req.Args["project_id"].(string)
 	log.Printf("[bff-mcp] start tool=%s operation=%s sid_hash=%s scope_hash=%s project_id=%s", req.Tool, operation, mcp.ShortHashForLog(sid), mcp.ShortHashForLog(scope), projectID)
+	start := time.Now()
+	var resultErr error
+	defer func() {
+		log.Printf("[bff-mcp] done tool=%s operation=%s scope_hash=%s project_id=%s elapsed_ms=%d err=%v",
+			req.Tool, operation, mcp.ShortHashForLog(scope), projectID, time.Since(start).Milliseconds(), resultErr)
+	}()
 
 	// Pre-check the per-submission file cap on a new upload. Rejecting at the
 	// "start" step prevents any bytes from being sent upstream once the cap is
@@ -88,11 +94,13 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 
 	res, err := h.Store.Call(scope, req.Tool, req.Args)
 	if err != nil {
+		resultErr = err
 		log.Printf("[bff-mcp] upstream_failed tool=%s operation=%s sid_hash=%s project_id=%s err=%v", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	if failure, ok := res["error"].(string); ok && failure != "" {
+		resultErr = fmt.Errorf("%s", failure)
 		log.Printf("[bff-mcp] tool_error tool=%s operation=%s sid_hash=%s project_id=%s error=%q", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, failure)
 	}
 

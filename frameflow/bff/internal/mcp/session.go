@@ -272,8 +272,14 @@ func (s *SessionStore) CreateBatch(sessionID, batchID, projectID string) error {
 		return fmt.Errorf("lookup persisted mcp batch %q: %w", batchID, err)
 	} else if persisted != nil && persisted.UpstreamSessionID != "" {
 		c.SetSessionID(persisted.UpstreamSessionID)
-	} else if err := c.Initialize(); err != nil {
-		return fmt.Errorf("mcp initialize image batch %q: %w", batchID, err)
+		log.Printf("[bff-session] batch_resumed scope_hash=%s batch_id=%s upstream_sid_hash=%s", shortHash(sessionID), batchID, shortHash(persisted.UpstreamSessionID))
+	} else {
+		t0 := time.Now()
+		if err := c.Initialize(); err != nil {
+			log.Printf("[bff-session] batch_init_failed scope_hash=%s batch_id=%s elapsed_ms=%d err=%v", shortHash(sessionID), batchID, time.Since(t0).Milliseconds(), err)
+			return fmt.Errorf("mcp initialize image batch %q: %w", batchID, err)
+		}
+		log.Printf("[bff-session] batch_cold_init scope_hash=%s batch_id=%s upstream_sid_hash=%s elapsed_ms=%d", shortHash(sessionID), batchID, shortHash(c.SessionID()), time.Since(t0).Milliseconds())
 	}
 	entry := &batchClient{client: c, batchID: batchID, projectID: projectID}
 	s.mu.Lock()
@@ -373,18 +379,22 @@ func (s *SessionStore) getOrCreate(sessionID string) (*Client, error) {
 	// upstream accepts a valid existing Mcp-Session-Id on a fresh connection,
 	// so we skip initialize and just pin the id.
 	if up, err := s.findPersistedUserSession(sessionID); err == nil && up != "" {
+		t0 := time.Now()
 		c := NewClient(s.baseURL, s.token)
 		c.SetSessionID(up)
 		s.clients[sessionID] = c
-		log.Printf("[mcp-route] user_session_resumed sid_hash=%s upstream_sid_hash=%s", shortHash(sessionID), shortHash(up))
+		log.Printf("[bff-session] resumed scope_hash=%s upstream_sid_hash=%s elapsed_ms=%d", shortHash(sessionID), shortHash(up), time.Since(t0).Milliseconds())
 		return c, nil
 	}
 	c = NewClient(s.baseURL, s.token)
+	t0 := time.Now()
 	if err := c.Initialize(); err != nil {
+		log.Printf("[bff-session] cold_init_failed scope_hash=%s elapsed_ms=%d err=%v", shortHash(sessionID), time.Since(t0).Milliseconds(), err)
 		return nil, fmt.Errorf("mcp initialize: %w", err)
 	}
 	s.clients[sessionID] = c
 	_ = s.persistUserSession(sessionID, c.SessionID())
+	log.Printf("[bff-session] cold_init scope_hash=%s upstream_sid_hash=%s elapsed_ms=%d", shortHash(sessionID), shortHash(c.SessionID()), time.Since(t0).Milliseconds())
 	return c, nil
 }
 
@@ -407,9 +417,12 @@ func (s *SessionStore) recreateBatch(sessionID, batchID, projectID string, expec
 	s.removeBatchLocked(sessionID, expected)
 
 	c := NewClient(s.baseURL, s.token)
+	t0 := time.Now()
 	if err := c.Initialize(); err != nil {
+		log.Printf("[bff-session] batch_reinit_failed scope_hash=%s batch_id=%s elapsed_ms=%d err=%v", shortHash(sessionID), batchID, time.Since(t0).Milliseconds(), err)
 		return nil, fmt.Errorf("mcp reinitialize image batch %q: %w", batchID, err)
 	}
+	log.Printf("[bff-session] batch_reinit scope_hash=%s batch_id=%s upstream_sid_hash=%s elapsed_ms=%d", shortHash(sessionID), batchID, shortHash(c.SessionID()), time.Since(t0).Milliseconds())
 	entry := &batchClient{client: c, batchID: batchID, projectID: projectID}
 	s.batchIDs[batchScope(sessionID, batchID)] = entry
 	s.projects[batchScope(sessionID, projectID)] = entry
