@@ -39,3 +39,30 @@ func TestUploadArgsSummaryRecognizesSafeFilename(t *testing.T) {
 		t.Fatalf("expected absent numeric fields to be marked unknown: %s", summary)
 	}
 }
+
+func TestSafeUploadFilenameRenamesUnsafeNameAndPreservesExtension(t *testing.T) {
+	safe, renamed := safeUploadFilename("商品主图.png")
+	if !renamed {
+		t.Fatal("expected unsafe filename to be renamed")
+	}
+	if !uploadFilenamePattern.MatchString(safe) {
+		t.Fatalf("renamed filename is not safe: %q", safe)
+	}
+	if !strings.HasSuffix(safe, ".png") {
+		t.Fatalf("expected extension to be preserved: %q", safe)
+	}
+	if safe == "商品主图.png" {
+		t.Fatalf("filename was not changed: %q", safe)
+	}
+}
+
+func TestSafeUploadFilenameIsStableAcrossChunks(t *testing.T) {
+	first, firstRenamed := safeUploadFilename(`C:\\用户资料\\商品 主图.PNG`)
+	second, secondRenamed := safeUploadFilename(`C:\\用户资料\\商品 主图.PNG`)
+	if !firstRenamed || !secondRenamed || first != second {
+		t.Fatalf("expected deterministic filename, got %q/%q", first, second)
+	}
+	if !strings.HasSuffix(first, ".png") {
+		t.Fatalf("expected normalized extension: %q", first)
+	}
+}

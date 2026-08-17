@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 const maxMCPBodyBytes = 2 << 20
 
 var uploadFilenamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
+var uploadExtensionPattern = regexp.MustCompile(`^\.[A-Za-z0-9]{1,10}$`)
 
 var allowedMCPTools = map[string]bool{
 	"upload_asset_chunk":          true,
@@ -64,6 +66,10 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	projectID, _ := req.Args["project_id"].(string)
 	uploadDiag := ""
 	if req.Tool == "upload_asset_chunk" {
+		// The upstream MCP requires a strict ASCII basename. Normalize at the
+		// BFF boundary so old browsers and old MCP workers cannot reject a user
+		// upload merely because its local filename contains Chinese or spaces.
+		sanitizeUploadFilename(req.Args)
 		uploadDiag = " " + uploadArgsSummary(req.Args)
 	}
 	log.Printf("[bff-mcp] start tool=%s operation=%s sid_hash=%s scope_hash=%s project_id=%s%s", req.Tool, operation, mcp.ShortHashForLog(sid), mcp.ShortHashForLog(scope), projectID, uploadDiag)
@@ -161,6 +167,36 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, res)
+}
+
+func sanitizeUploadFilename(args map[string]interface{}) {
+	filename, ok := args["filename"].(string)
+	if !ok || filename == "" {
+		return
+	}
+	if safe, renamed := safeUploadFilename(filename); renamed {
+		args["filename"] = safe
+	}
+}
+
+func safeUploadFilename(filename string) (string, bool) {
+	if uploadFilenamePattern.MatchString(filename) {
+		return filename, false
+	}
+	// Treat both slash styles as path separators, then retain only a safe
+	// extension. A short hash prevents two different user filenames from
+	// colliding in the same MCP session after normalization.
+	base := path.Base(strings.ReplaceAll(filename, "\\", "/"))
+	ext := ""
+	if dot := strings.LastIndex(base, "."); dot >= 0 && dot+1 < len(base) {
+		candidate := base[dot:]
+		if uploadExtensionPattern.MatchString(candidate) {
+			ext = strings.ToLower(candidate)
+		}
+	}
+	hash := sha256.Sum256([]byte(filename))
+	safe := fmt.Sprintf("upload-%x%s", hash[:4], ext)
+	return safe, true
 }
 
 // uploadArgsSummary emits only non-content diagnostics. The original filename
