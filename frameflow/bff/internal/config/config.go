@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -69,10 +71,15 @@ func Load() *Config {
 		}
 		return def
 	}
+	mcpBaseURL := firstNonEmpty(os.Getenv("MCP_BASE_URL"), os.Getenv("UPSTREAM_MCP_URL"), "http://127.0.0.1:8900/mcp")
+	mcpProgressURL := strings.TrimSpace(os.Getenv("MCP_PROGRESS_URL"))
+	if mcpProgressURL == "" {
+		mcpProgressURL = deriveProgressURL(mcpBaseURL)
+	}
 	return &Config{
-		MCPBaseURL:               get("MCP_BASE_URL", "http://127.0.0.1:8900/mcp"),
+		MCPBaseURL:               mcpBaseURL,
 		MCPAPIToken:              os.Getenv("MCP_API_TOKEN"),
-		MCPProgressURL:           get("MCP_PROGRESS_URL", "http://127.0.0.1:8900/render-progress"),
+		MCPProgressURL:           mcpProgressURL,
 		WechatAppID:              os.Getenv("WECHAT_APP_ID"),
 		WechatAppSecret:          os.Getenv("WECHAT_APP_SECRET"),
 		WechatRedirectURI:        os.Getenv("WECHAT_REDIRECT_URI"),
@@ -92,6 +99,49 @@ func Load() *Config {
 		DefaultTier:              get("DEFAULT_TIER", "free"),
 		TierOverrides:            os.Getenv("TIER_OVERRIDES"),
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// deriveProgressURL keeps the progress endpoint on the same upstream host as
+// the MCP endpoint. The optional /mcp suffix is removed before appending the
+// progress path; any query or fragment is deliberately discarded.
+func deriveProgressURL(mcpBaseURL string) string {
+	u, err := url.Parse(strings.TrimSpace(mcpBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "http://127.0.0.1:8900/render-progress"
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	if path == "/mcp" {
+		path = ""
+	} else if strings.HasSuffix(path, "/mcp") {
+		path = strings.TrimSuffix(path, "/mcp")
+	}
+	u.Path = path + "/render-progress"
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.User = nil
+	return u.String()
+}
+
+// SafeEndpoint returns only non-sensitive URL components for startup logs.
+func SafeEndpoint(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "<invalid>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 // getInt reads an env var as int, falling back to def when unset/invalid.

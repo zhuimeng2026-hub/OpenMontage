@@ -25,6 +25,7 @@ func main() {
 	if err := config.Validate(cfg); err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("[mcp] endpoint=%s progress_endpoint=%s", config.SafeEndpoint(cfg.MCPBaseURL), config.SafeEndpoint(cfg.MCPProgressURL))
 	if err := os.MkdirAll(filepath.Dir(cfg.StateDBPath), 0750); err != nil {
 		log.Fatal(err)
 	}
