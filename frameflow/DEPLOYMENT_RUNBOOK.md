@@ -187,7 +187,7 @@ python3 scripts/frameflow_perf_monitor.py \
 - `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 仅写在 BFF `.env`。
 - 推荐显式设置 `WECHAT_REDIRECT_URI=https://render.mengxa.com/api/wechat/callback`，避免代理头配置错误导致回调协议变成 HTTP。
 - 生产必须 `AUTH_REQUIRED=true`、`SESSION_SECURE=true`，并确认微信参数已填；当前代码会对缺失微信配置执行 fail-closed，并拒绝启动。
-- 桌面二维码登录依赖 BFF 进程内票据；单实例联调可用，多实例/滚动发布前需迁移到共享存储。
+- 桌面二维码登录的扫码票据 `qrTickets` 已持久化到 SQLite（`wechat_qr_tickets` 表，与 `wechat_users` 同款写穿内存+DB，dev 无 DB 时回退内存），多实例下手机授权与 PC 轮询落在不同实例也能共享，**前提是多实例共用同一 DB 卷**（或加粘性会话）。单实例联调同样可用。
 
 ## 验收顺序
 

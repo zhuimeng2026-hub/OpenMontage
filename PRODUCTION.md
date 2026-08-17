@@ -300,3 +300,134 @@ PR-2（任务四，后端登录态持久化）与 PR-3（任务三，监控脚�
 - 生产 `.env`：`AUTH_REQUIRED=true`、`SESSION_SECURE=true`、`WECHAT_APP_ID/SECRET`、`WECHAT_REDIRECT_URI=https://render.mengxa.com/api/wechat/callback`、`FRONTEND_ORIGIN`、`MCP_BASE_URL=http://lanes.ymxt.top:8900/mcp`（需部署机 IPv6 出口）。
 - 注意：生产 nginx 模板（第 1.3 节）仅放行 `/.well-known/acme-challenge/`，微信「网页授权域名」校验文件 `MP_verify_*.txt` 需确认在 80 端口根路径可访问，否则微信后台配置会失败。
 - 前端登录失效提示（PR-4）为可选增强。
+
+---
+
+## 9. 分机部署指令（BFF ↔ OpenMontage 独立部署）
+
+> 机器 A（render.mengxa.com）只跑 Web + BFF + nginx；机器 B（lanes.ymxt.top:8900）只跑 OpenMontage MCP + Remotion 渲染。两机部署完全独立，仅 2 个跨机耦合点必须对齐（见下）。
+
+### 9.0 跨机耦合点（先对齐，否则必错）
+
+| 项 | 约束 |
+|---|---|
+| 共享密令 | 机器 A 的 `McpApiToken` == 机器 B 根 `.env` 的 `MCP_API_TOKEN`（Bearer 鉴权，不符则 BFF 调 MCP 直接 401） |
+| 上游地址 | 机器 A 的 `MCP_BASE_URL=http://lanes.ymxt.top:8900/mcp` 指向机器 B 公网地址 |
+| IPv6 前提 | `lanes.ymxt.top` 仅解析 IPv6 → 机器 A 必须有 IPv6 出口；若无，把 A 的 `MCP_BASE_URL` 改为 `OpenMontage-mcp-proxy` 的地址（proxy 用其 IPv6 出口桥接） |
+
+> 两个 `.env` 均已被 `.gitignore` 忽略，部署时手工写入，不要提交。
+
+### 9.1 机器 A：render.mengxa.com（BFF + nginx + 前端 SPA）
+
+**1) 构建 Go 二进制**
+```bash
+cd /opt/OpenMontage/frameflow/bff
+go mod tidy
+go build -o frameflow-bff .          # 产出 ./frameflow-bff
+```
+
+**2) 写 `frameflow/bff/.env`（生产值）**
+```dotenv
+BFF_PORT=8080
+STATIC_DIR=./web
+MCP_BASE_URL=http://lanes.ymxt.top:8900/mcp
+MCP_PROGRESS_URL=http://lanes.ymxt.top:8900/render-progress
+MCP_API_TOKEN=<与机器 B 完全一致的生产密钥>
+FRONTEND_ORIGIN=https://render.mengxa.com
+SESSION_SECURE=true
+AUTH_REQUIRED=true
+WECHAT_APP_ID=<生产服务号 AppID>
+WECHAT_APP_SECRET=<生产服务号 AppSecret>
+WECHAT_REDIRECT_URI=https://render.mengxa.com/api/wechat/callback
+WECHAT_SCOPE=snsapi_userinfo
+RATE_LIMIT_PER_MIN=30
+STATE_DB_PATH=./data/frameflow.db
+CUSTOM_COMPOSITION_ENABLED=false
+# WEIYUN_API_KEY=<若启用微云发布才填>
+```
+⚠️ `AUTH_REQUIRED=true` 且缺微信凭据时 BFF 会 `log.Fatal` 拒绝启动（fail-closed 安全闸）。
+
+**3) 运行**（二进制直跑，或 systemd）
+```bash
+cd /opt/OpenMontage/frameflow/bff && ./frameflow-bff
+```
+示例 `/etc/systemd/system/frameflow-bff.service`：
+```ini
+[Unit]
+Description=FrameFlow BFF
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/OpenMontage/frameflow/bff
+ExecStart=/opt/OpenMontage/frameflow/bff/frameflow-bff
+EnvironmentFile=/opt/OpenMontage/frameflow/bff/.env
+Restart=always
+User=www-data
+
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now frameflow-bff
+```
+
+**4) nginx 生产模板**
+```bash
+cp nginx/frameflow-render-production.conf.template /etc/nginx/sites-enabled/render.mengxa.com.conf
+# 把模板里的证书路径换成真实 Let's Encrypt 路径（证书不入库）
+nginx -t && systemctl reload nginx
+```
+> 注意：生产模板第 1 节仅放行 `/.well-known/acme-challenge/`；微信「网页授权域名」校验文件 `MP_verify_*.txt` 需确认在 80 端口根路径可访问，否则微信后台配置会失败。
+
+**5) 防火墙**：BFF 监听 `0.0.0.0:8080`，外部应**只放行 443/80**，用防火墙把 `8080` 限制为 localhost（仅 nginx 访问）。
+
+### 9.2 机器 B：lanes.ymxt.top:8900（OpenMontage MCP + Remotion 渲染）
+
+**1) 环境与依赖**
+```bash
+cd /opt/OpenMontage
+make setup        # 建 venv、装 requirements.txt、npm install remotion-composer、缓存 hyperframes
+# 等价最小步骤： python -m venv .venv && .venv/bin/activate && pip install -r requirements.txt
+```
+
+**2) 写根目录 `.env`（机器 B）**
+```dotenv
+MCP_API_TOKEN=<与机器 A 完全一致的生产密钥>
+MCP_HTTP_KEEP_ALIVE_SECONDS=30          # 与前端/BFF 5s 轮询错开，避免 TCP 关闭竞态
+REMOTION_CONCURRENCY=5
+REMOTION_MAX_PARALLEL=2
+REMOTION_MAX_PARALLEL_PER_USER=1         # 12 核机器建议值；64 核见 DEPLOYMENT_RUNBOOK 压测档位
+# WEIYUN_MCP_TOKEN=<微云发布密钥，可选>
+# REMOTION_CHROME_EXECUTABLE=<Windows 才需要显式指定 chrome-headless-shell 路径>
+```
+`mcp_server.py` 启动时会自动 `load_dotenv()` 加载根 `.env`，无需手动 `export`。
+
+**3) 运行**
+```bash
+# Linux：双栈绑定 ::8900，仅对机器 A IP 放行
+python mcp_server.py
+# Windows 调试可用现成脚本（已注入 chrome 路径、清掉回收站 shim 变量）
+start_mcp_server.sh
+```
+
+**4) 防火墙**：`8900` 只对机器 A 固定来源 IP 放行，其余拒绝；`MCP_API_TOKEN` 不进前端/日志。
+
+### 9.3 部署后验证（两侧各一遍）
+
+```bash
+# 机器 A — BFF 与微信配置
+curl -i https://render.mengxa.com/api/me
+python om_mcp_probe.py wechat-config --bff https://render.mengxa.com
+python om_mcp_probe.py instances --bff https://render.mengxa.com
+
+# 机器 B — MCP 自身可达 + 鉴权生效
+curl -i -X POST http://127.0.0.1:8900/mcp \
+  -H 'Authorization: Bearer <MCP_API_TOKEN>' \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+
+# 跨机端到端（BFF → MCP 真实工具调用）
+cd frameflow/bff && python frameflow_e2e.py single --images 8
+```
+
+**回归重点**：登录后**重启 BFF**，`/api/me` 仍 `authenticated:true`（验证登录态持久化修复）；多实例时跑 `qr-cross-instance --bff <A> --bff-b <B> --wait` 验证扫码票据跨实例共享（`qrTickets` 已落 SQLite）。
