@@ -199,6 +199,30 @@
   .topbar .icon-btn{width:28px;height:28px;border-radius:14px;background:var(--bg-surface);flex:none;display:flex;align-items:center;justify-content:center;}
   .topbar .icon-btn svg{width:15px;height:15px;color:var(--text-secondary);}
   .topbar .avatar{width:36px;height:36px;border-radius:18px;}
+  /* 右上角头像下拉菜单 */
+  .avatar-menu{position:relative;display:flex;align-items:center;}
+  .avatar-menu .avatar{cursor:pointer;transition:transform .15s ease,box-shadow .15s ease;}
+  .avatar-menu .avatar:hover{transform:scale(1.05);box-shadow:0 0 0 2px rgba(124,92,255,0.5);}
+  .avatar-menu.guest .avatar{cursor:default;}
+  .avatar-menu.guest .avatar:hover{transform:none;box-shadow:none;}
+  .avatar-dropdown{
+    position:absolute;top:46px;right:0;min-width:184px;
+    background:var(--bg-surface);border:1px solid var(--border-soft);
+    border-radius:12px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,0.5);
+    opacity:0;transform:translateY(-6px);pointer-events:none;
+    transition:opacity .15s ease,transform .15s ease;z-index:120;
+  }
+  .avatar-menu.open .avatar-dropdown{opacity:1;transform:translateY(0);pointer-events:auto;}
+  .avatar-menu.guest .avatar-dropdown{display:none;}
+  .avatar-dropdown .ad-head{padding:8px 10px 10px;border-bottom:1px solid var(--border-subtle);margin-bottom:6px;}
+  .avatar-dropdown .ad-name{font-size:14px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .avatar-dropdown .ad-sub{font-size:12px;color:var(--text-tertiary);margin-top:2px;}
+  .avatar-dropdown .ad-item{
+    width:100%;text-align:left;height:38px;padding:0 10px;border:none;border-radius:8px;
+    background:transparent;color:var(--text-primary);font-size:13px;font-family:inherit;cursor:pointer;
+    display:flex;align-items:center;gap:8px;
+  }
+  .avatar-dropdown .ad-item:hover{background:rgba(255,77,79,0.12);color:#ff6b6b;}
 
   .content{flex:1;overflow-y:auto;padding:28px 32px 60px;}
   .view{display:none;}
@@ -488,7 +512,16 @@
       <h2 id="topbar-title">工作台</h2>
       <div class="search">搜索视频、模板、任务…</div>
       <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg></div>
-      <div class="avatar"></div>
+      <div class="avatar-menu" id="avatar-menu">
+        <div class="avatar" id="topbar-avatar" title="账号"></div>
+        <div class="avatar-dropdown" id="avatar-dropdown">
+          <div class="ad-head">
+            <div class="ad-name" id="ad-name">未登录</div>
+            <div class="ad-sub" id="ad-sub"></div>
+          </div>
+          <button class="ad-item" id="avatar-logout" type="button">退出登录</button>
+        </div>
+      </div>
     </header>
 
     <div class="content">
@@ -735,6 +768,39 @@
     var app = document.getElementById('app-shell');
     if(app) app.classList.remove('active');
   }
+  // 右上角头像下拉：点击头像弹出菜单，选择「退出登录」使登录状态失效。
+  (function(){
+    var menu = document.getElementById('avatar-menu');
+    var avatar = document.getElementById('topbar-avatar');
+    var logoutBtn = document.getElementById('avatar-logout');
+    if(!menu || !avatar) return;
+    avatar.addEventListener('click', function(e){
+      e.stopPropagation();
+      if(menu.classList.contains('guest')) return; // 未登录不弹菜单
+      menu.classList.toggle('open');
+    });
+    document.addEventListener('click', function(e){
+      if(menu.classList.contains('open') && !menu.contains(e.target)){
+        menu.classList.remove('open');
+      }
+    });
+    if(logoutBtn){
+      logoutBtn.addEventListener('click', function(e){
+        e.stopPropagation();
+        menu.classList.remove('open');
+        fetch(bffBase() + '/api/logout', {method:'POST', credentials:'include'})
+          .catch(function(){})
+          .then(function(){
+            window.__ffUser = null;
+            renderUserInfo();
+            clearLoginExpired();
+            var lv = document.getElementById('login-view'); if(lv) lv.style.display = '';
+            var app = document.getElementById('app-shell'); if(app) app.classList.remove('active');
+            showToast('已退出登录，请重新登录');
+          });
+      });
+    }
+  })();
   // 应用运行中定时探测会话存活：已登录(__ffUser 已置)但 /api/me 返回未登录，
   // 说明会话在服务端过期/丢失（如 BFF 重启或实例漂移），主动提示并退回登录。
   function checkSessionAlive(){
@@ -1275,6 +1341,12 @@
         a.style.backgroundPosition = '';
       }
     }
+    var menu = document.getElementById('avatar-menu');
+    if(menu) menu.classList.toggle('guest', !u);
+    var adn = document.getElementById('ad-name');
+    var ads = document.getElementById('ad-sub');
+    if(adn) adn.textContent = u ? name : '未登录';
+    if(ads) ads.textContent = (u && u.openid) ? '微信登录' : (u ? '已登录' : '');
   }
   function safeDownloadURL(value){
     var raw = String(value || '').trim();

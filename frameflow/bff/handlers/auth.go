@@ -119,8 +119,12 @@ var userStore = struct {
 // it once; a nil handle degrades to in-memory-only (dev / no DB available).
 var userDB *sql.DB
 
-// wechatSessionTTL matches the ff_sid cookie lifetime (7 days).
-const wechatSessionTTL = 7 * 24 * time.Hour
+// loginStateTTL is how long a WeChat login stays valid before the user must
+// re-authenticate. 12h, independent of the ff_sid cookie lifetime, so the
+// browser session binding can outlive a single login but the login itself
+// expires and forces a fresh scan. The frontend /api/me probe (every 60s)
+// detects the flip to authenticated:false and bounces the user to re-login.
+const loginStateTTL = 12 * time.Hour
 
 // loadUserMap returns the user record for a session id. It checks the hot cache
 // first and falls back to the wechat_users table, so a login stays visible after
@@ -130,6 +134,12 @@ func loadUserMap(sid string) map[string]interface{} {
 	userStore.RLock()
 	if u, ok := userStore.m[sid]; ok {
 		userStore.RUnlock()
+		// Even a hot-cached login must honour its 12h expiry — otherwise an
+		// always-on BFF would never invalidate a session until restart.
+		if isExpired(u) {
+			dropUserMap(sid)
+			return nil
+		}
 		return u
 	}
 	userStore.RUnlock()
@@ -155,6 +165,10 @@ func loadUserMap(sid string) map[string]interface{} {
 }
 
 func (h *Handlers) saveUser(sid string, u map[string]interface{}) {
+	// Stamp the login expiry onto the record itself so the hot cache (which is
+	// checked before the DB) enforces loginStateTTL on read — otherwise an
+	// active session would dodge expiry until a cache miss.
+	u["expires_at"] = time.Now().Add(loginStateTTL).UTC().Format(time.RFC3339Nano)
 	userStore.Lock()
 	userStore.m[sid] = u
 	userStore.Unlock()
@@ -169,13 +183,20 @@ func (h *Handlers) loadUser(sid string) map[string]interface{} {
 	return loadUserMap(sid)
 }
 
-func (h *Handlers) dropUser(sid string) {
+// dropUserMap clears a login from both the hot cache and the durable table. It
+// is package-level so loadUserMap can expire sessions on read without needing a
+// *Handlers receiver.
+func dropUserMap(sid string) {
 	userStore.Lock()
 	delete(userStore.m, sid)
 	userStore.Unlock()
 	if userDB != nil {
 		_ = deletePersistedUser(userDB, sid)
 	}
+}
+
+func (h *Handlers) dropUser(sid string) {
+	dropUserMap(sid)
 }
 
 // ---- durable WeChat login persistence (wechat_users table) ----
@@ -189,7 +210,7 @@ func persistUser(db *sql.DB, sid string, u map[string]interface{}) error {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	expires := time.Now().Add(wechatSessionTTL).UTC().Format(time.RFC3339Nano)
+	expires := time.Now().Add(loginStateTTL).UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`INSERT INTO wechat_users (ff_sid, openid, nickname, scope, profile_json, created_at, expires_at)
 VALUES(?,?,?,?,?,?,?)
 ON CONFLICT(ff_sid) DO UPDATE SET

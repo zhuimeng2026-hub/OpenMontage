@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -81,5 +82,31 @@ func TestWechatSessionSurvivesInMemoryLoss(t *testing.T) {
 	}
 	if got["openid"] != "wx-persist-1" {
 		t.Fatalf("restored user openid = %v, want wx-persist-1", got["openid"])
+	}
+}
+
+// TestLoginStateExpiresAfterTTL verifies that a login is treated as logged-out
+// once its 12h window elapses — the core of the "login auto-expires" feature.
+// It exercises the hot-cache path (loadUserMap) which must honour expires_at,
+// otherwise an always-on BFF would never invalidate a session in memory.
+func TestLoginStateExpiresAfterTTL(t *testing.T) {
+	h := &Handlers{}
+	const sid = "expire-sid"
+	h.saveUser(sid, map[string]interface{}{"openid": "wx-expire-1"})
+
+	// Simulate the session having aged past loginStateTTL.
+	userStore.Lock()
+	userStore.m[sid]["expires_at"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	userStore.Unlock()
+
+	if u := h.loadUser(sid); u != nil {
+		t.Fatalf("expired login must be dropped, but loadUser returned %v", u)
+	}
+	// It must be fully removed from the hot cache, not merely reported nil once.
+	userStore.RLock()
+	_, stillCached := userStore.m[sid]
+	userStore.RUnlock()
+	if stillCached {
+		t.Fatal("expired login must be removed from the hot cache")
 	}
 }
