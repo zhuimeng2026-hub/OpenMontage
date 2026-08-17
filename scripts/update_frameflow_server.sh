@@ -130,14 +130,11 @@ sudo systemctl stop "$BFF_SERVICE"
 ROLLBACK_NEEDED=1
 sudo install -m 0755 "$TMP_DIR/frameflow-bff.new" "$BFF_BIN"
 
-# BFF and MCP are independent deployments. Restart both directly; do not
-# inspect, disable, or infer dependencies from any legacy unit.
+# Deploy and validate BFF first. Once BFF is healthy its rollback transaction
+# is complete; a later, independent MCP restart must never restore the old BFF.
 sudo systemctl restart "$BFF_SERVICE"
-sudo systemctl restart "$MCP_SERVICE"
-
-echo "Checking service health..."
+echo "Checking BFF health..."
 [[ "$(sudo systemctl is-active "$BFF_SERVICE")" == active ]] || die "$BFF_SERVICE is not active"
-[[ "$(sudo systemctl is-active "$MCP_SERVICE")" == active ]] || die "$MCP_SERVICE is not active"
 
 wait_http() {
   local url="$1" expected="$2" label="$3" code="" attempt
@@ -148,9 +145,6 @@ wait_http() {
   done
   die "$label returned HTTP ${code:-no response} (expected $expected)"
 }
-wait_http http://127.0.0.1:8080/api/me 200 "BFF /api/me"
-wait_http http://127.0.0.1:8900/mcp 401 "MCP /mcp"
-
 check_pid() {
   local service="$1" port="$2" main_pid listener_pids
   main_pid="$(sudo systemctl show "$service" -p MainPID --value)"
@@ -159,10 +153,18 @@ check_pid() {
   [[ -n "$listener_pids" ]] || die "$service has no listener on :$port"
   [[ " $listener_pids " == *" $main_pid "* ]] || die "$service MainPID $main_pid is not listening on :$port (PIDs: $listener_pids)"
 }
+wait_http http://127.0.0.1:8080/api/me 200 "BFF /api/me"
 check_pid "$BFF_SERVICE" 8080
+
+# BFF deployment is now committed. MCP is restarted and checked as a separate
+# service; any MCP failure is reported but does not roll back the new BFF.
+ROLLBACK_NEEDED=0
+echo "Restarting independent MCP service..."
+sudo systemctl restart "$MCP_SERVICE"
+[[ "$(sudo systemctl is-active "$MCP_SERVICE")" == active ]] || die "$MCP_SERVICE is not active"
+wait_http http://127.0.0.1:8900/mcp 401 "MCP /mcp"
 check_pid "$MCP_SERVICE" 8900
 
-ROLLBACK_NEEDED=0
 head="$(git rev-parse --short HEAD)"
 echo "Build metadata:"
 go version -m "$TMP_DIR/frameflow-bff.new" | grep -E 'vcs\.revision|vcs\.modified' || true

@@ -26,7 +26,7 @@ bash scripts/update_frameflow_server.sh --branch main --repo /opt/OpenMontage
 bash scripts/update_frameflow_server.sh --skip-tests
 ```
 
-Python 解释器可用 `PYTHON_BIN=/path/to/python3` 覆盖；默认优先使用 `/root/.pyenv/versions/3.11.8/bin/python3`，否则使用 `python3`。脚本会在失败时恢复 `/var/backups/frameflow/` 下带时间戳的旧 BFF 二进制并重新启动 BFF，同时输出脱敏后的相关 journal。临时构建目录由退出 trap 清理；可用 `BACKUP_DIR=/path` 覆盖备份目录。
+Python 解释器可用 `PYTHON_BIN=/path/to/python3` 覆盖；默认优先使用 `/root/.pyenv/versions/3.11.8/bin/python3`，否则使用 `python3`。BFF 在自身安装或健康检查失败时会恢复 `/var/backups/frameflow/` 下带时间戳的旧二进制；BFF 验收完成后回滚事务即结束，随后独立的 MCP 重启失败不会再回滚新 BFF。脚本会输出脱敏后的相关 journal。临时构建目录由退出 trap 清理；可用 `BACKUP_DIR=/path` 覆盖备份目录。
 
 脚本固定分别重启 `frameflow-bff.service` 与 `openmontage-mcp.service`，不检测或管理遗留 `mcp-server.service`，两者按独立服务验收：8080 `/api/me` 返回 200，8900 `/mcp` 在无 token 时返回 401。脚本不会打印环境变量或服务密钥。
 
