@@ -142,7 +142,17 @@
     var mime = file.type ||
       (/\.png$/i.test(file.name) ? 'image/png' : 'image/jpeg');
     var sha = await sha256Hex(buf);
-    var safe = file.name.replace(/[^\w.\-]/g, '_');
+    // MCP 负责将不安全的 basename 自动改名；浏览器端不要先把中文/特殊字符
+    // 替换成以下划线开头的名称，否则会在到达 MCP 前丢失原始名称并触发校验失败。
+    var filename = (file && typeof file.name === 'string' ? file.name.trim() : '');
+    if (!filename) {
+      var extMatch = /\.([A-Za-z0-9]{1,10})$/.exec(file && file.name || '');
+      var mimeExt = {
+        'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+        'image/gif': 'gif', 'image/bmp': 'bmp', 'image/tiff': 'tiff'
+      }[mime] || 'bin';
+      filename = 'upload-' + sha.slice(0, 16) + '.' + (extMatch ? extMatch[1].toLowerCase() : mimeExt);
+    }
 
     if (demoMode) {
       var sent = 0;
@@ -160,7 +170,7 @@
 
     // 1) start
     var start = await mcpCall('upload_asset_chunk', {
-      operation: 'start', project_id: projectId, filename: safe,
+      operation: 'start', project_id: projectId, filename: filename,
       total_bytes: n, mime_type: mime, sha256: sha
     });
     var uploadId = (start && start.upload_id) || (start && start.data && start.data.upload_id);
@@ -172,7 +182,7 @@
       var piece = buf.slice(offset, offset + CHUNK);
       var cb64 = b64FromArrayBuffer(piece);
       var ap = await mcpCall('upload_asset_chunk', {
-        operation: 'append', project_id: projectId, filename: safe,
+        operation: 'append', project_id: projectId, filename: filename,
         upload_id: uploadId, offset: offset, chunk_base64: cb64
       });
       if (!ap || !ap.success) {
@@ -184,7 +194,7 @@
 
     // 3) complete
     var complete = await mcpCall('upload_asset_chunk', {
-      operation: 'complete', project_id: projectId, filename: safe, upload_id: uploadId
+      operation: 'complete', project_id: projectId, filename: filename, upload_id: uploadId
     });
     if (!complete || complete.success === false || (complete.data && complete.data.success === false)) {
       throw new Error('chunk complete 失败：' + JSON.stringify(complete));

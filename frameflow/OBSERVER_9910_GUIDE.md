@@ -241,22 +241,22 @@ curl -fsS \
 | --- | --- |
 | `Address already in use` | 同一端口被另一个进程或重复 systemd 服务占用 |
 | `Session not found` | MCP transport session 已过期；新版 BFF 应重新初始化并重试一次 |
-| `filename must be a safe basename` | 文件名不符合 ASCII 安全 basename 规则，尚未发送文件内容 |
+| `filename must be a safe basename` | 旧版分块上传或其他仍执行严格校验的入口收到不安全文件名，尚未发送文件内容 |
 | `asset exceeds ... MB limit` | 超过 `OPENMONTAGE_MAX_UPLOAD_MB` |
 | `unsupported asset extension` | 文件后缀不在允许列表 |
 | `Still image ... Use operation='render'` | 旧进程错误地把图片任务送入 FFmpeg compose 路径 |
 | `failure_stage=orphaned` | 渲染/发布过程中服务重启，后台工作线程丢失 |
 | `remotion=0, chrome=0, ffmpeg=0` | 当前没有实际渲染子进程；不表示历史任务成功 |
 
-## 7. 图片文件名规则
+## 7. 图片文件名规范化规则
 
-MCP 当前接受的 basename 正则为：
+素材在服务器上的最终保存名仍必须满足：
 
 ```regex
 ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$
 ```
 
-要求：
+保存名要求：
 
 - 总长度 1–255 个字符。
 - 首字符必须是 ASCII 字母或数字。
@@ -272,7 +272,7 @@ A_20260817.png
 scene.03.webp
 ```
 
-拒绝示例：
+需要自动改名的输入示例：
 
 ```text
 商品主图.jpg
@@ -281,7 +281,9 @@ _product.jpg
 product photo.jpg
 ```
 
-当前网页会把中文和特殊字符替换为 `_`。如果原文件名以中文或特殊字符开头，转换结果可能以 `_` 开头，仍会被后端拒绝。因此用户临时解决方法是把文件改名为以英文字母或数字开头的 ASCII 文件名；代码修复应在 BFF/前端统一生成合法且不冲突的 basename，而不是放宽后端路径安全校验。
+分块上传会保留用户原始文件名作为 `original_filename` 元数据，并将不安全输入自动转换为类似 `asset_<12位哈希>.jpg` 的安全保存名。`start` 响应返回 `filename`、`safe_filename`、`original_filename` 和 `renamed`，调用方可以明确展示是否发生改名。已经安全的文件名保持不变。
+
+网页应把原始文件名交给 MCP，不应预先转换成 `_...`。缺失文件名时，网页使用内容 SHA-256 生成稳定的 ASCII fallback。后端仍执行严格的保存路径校验，因此自动改名不会放宽目录穿越防护。
 
 ### 2026-08-17 三图上传案例
 
@@ -292,6 +294,8 @@ product photo.jpg
 - 约 `389,629` 字节的图片在 `start` 阶段约 3 ms 内失败。
 - 两个失败均为 `filename must be a safe basename`。
 - 因失败发生在 `start`，这两张图片的内容没有进入分块传输；与网络带宽、文件大小和并发无关。
+
+该案例触发了 `upload_asset_chunk` 1.1.0 的自动改名修复。部署修复后，同类中文或特殊字符文件名应成功上传，并在返回元数据中记录原始名与实际保存名。
 
 ## 8. 9910 的限制
 
