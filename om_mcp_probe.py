@@ -60,7 +60,9 @@ BFF 日志检查（复现“上传卡第一张”类问题时，在 BFF 主机�
 """
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import logging
 import os
@@ -641,7 +643,22 @@ def _parse_log_ts(head: str):
 
 
 def cmd_log_check(args):
-    """解析 frameflow-bff 日志，定位上传链路的可疑点。"""
+    """解析 frameflow-bff 日志，定位上传链路的可疑点。
+
+    --serve 时作为 HTTP 服务运行：在部署机监听一个端口，远端（如本机）
+    直接 `curl http://<主机>:<端口>/` 即可拿到最新日志检查报告，无需落盘或 SSH。
+    """
+    if args.serve:
+        return _run_log_serve(args)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = _render_log_report(args)
+    sys.stdout.write(buf.getvalue())
+    return code
+
+
+def _render_log_report(args):
+    """核心分析逻辑：打印报告并返回退出码（0=无问题 / 1=发现问题）。"""
     from collections import defaultdict
     lines = _read_log_lines(args.log_path, args.tail)
     if not lines:
@@ -782,6 +799,51 @@ def cmd_log_check(args):
     return 1 if problems else 0
 
 
+def _run_log_serve(args):
+    """以 HTTP 服务形式暴露 log-check 报告（部署机侧）。
+
+    用法：om_mcp_probe.py log-check --log-path /var/log/frameflow-bff.log \\
+            --serve 0.0.0.0:9099
+    远端读取：curl http://<部署机>:9099/
+    GET / 返回纯文本报告；GET /healthz 返回 OK，便于存活探活。
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.split("?")[0] == "/healthz":
+                body = b"OK\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _render_log_report(args)
+            body = buf.getvalue().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # 静默访问日志，避免污染
+            pass
+
+    host, _, port = args.serve.partition(":")
+    port = int(port or "9099")
+    host = host or "0.0.0.0"
+    httpd = ThreadingHTTPServer((host, port), _Handler)
+    print("log-check serving on http://%s:%d/  (Ctrl-C 停止)" % (host, port))
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def ts_iso(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%S", ts) if ts else "?"
 
@@ -877,6 +939,8 @@ def main(argv=None):
     p_lc.add_argument("--tail", type=int, default=5000, help="最多读取日志末尾 N 行（默认 5000）")
     p_lc.add_argument("--slow-ms", type=int, default=3000, help="耗时超过该毫秒数标记为慢（默认 3000）")
     p_lc.add_argument("--stall-sec", type=int, default=10, help="start 后超过该秒数仍无 done 视为疑似卡死（默认 10）")
+    p_lc.add_argument("--serve", default="",
+                     help="以 HTTP 服务形式运行（部署机侧）：监听 host:port，远端 curl http://<host>:<port>/ 读取报告；如 --serve 0.0.0.0:9099")
 
     args = ap.parse_args(argv)
     setup_logging(args.log, args.quiet)
