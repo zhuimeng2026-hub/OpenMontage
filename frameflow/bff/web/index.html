@@ -475,8 +475,8 @@
     <div class="sidebar-user">
       <div class="avatar"></div>
       <div>
-        <div class="n">晓明</div>
-        <div class="r">Pro 会员</div>
+        <div class="n" id="sidebar-user-name">晓明</div>
+        <div class="r" id="sidebar-user-role">Pro 会员</div>
       </div>
     </div>
   </aside>
@@ -493,7 +493,7 @@
     <div class="content">
       <!-- DASHBOARD -->
       <section class="view active" id="view-dashboard">
-        <div class="greet">下午好，晓明</div>
+        <div class="greet" id="greet">下午好，晓明</div>
         <div class="greet-sub" id="greet-sub">正在加载任务概况…</div>
         <div class="kpi-grid">
           <div class="kpi"><div class="l">总视频数</div><div class="v" id="kpi-total-videos">0</div><div class="s" style="color:var(--success)">当前会话任务</div></div>
@@ -660,7 +660,7 @@
       <section class="view" id="view-settings">
         <div class="gsub">账号与渲染配额管理</div>
         <div class="settings-grid">
-          <div class="settings-card"><h4>账号信息</h4><div style="font-size:14px;font-weight:600">晓明</div><div style="font-size:13px;color:var(--text-secondary);margin-top:4px">you@company.com · Pro 会员</div></div>
+          <div class="settings-card"><h4>账号信息</h4><div style="font-size:14px;font-weight:600" id="settings-user-name">晓明</div><div style="font-size:13px;color:var(--text-secondary);margin-top:4px" id="settings-user-desc">you@company.com · Pro 会员</div></div>
           <div class="settings-card"><h4>渲染配额</h4><div style="font-size:30px;font-weight:700;color:var(--warning)">68%</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">本月已用 204 / 300 分钟</div></div>
           <div class="settings-card"><h4>通知偏好</h4><div style="font-size:13px;color:var(--text-secondary)">渲染完成、渲染失败、配额预警</div></div>
           <div class="settings-card"><h4>团队成员</h4><div style="font-size:13px;color:var(--text-secondary)">晓明、李雷、韩梅梅 等 3 人</div></div>
@@ -768,6 +768,7 @@
             fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
               if(u && u.authenticated && u.user){
                 window.__ffUser = u.user;
+                renderUserInfo(); // 问候语/左下角/设置页账号同步微信登录信息
                 loadQueue(); // 用真实登录身份刷新渲染队列（与微信回调路径一致）
                 showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
               }
@@ -808,6 +809,7 @@
         fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
           if(u && u.authenticated && u.user){
             window.__ffUser = u.user;
+            renderUserInfo(); // 同步工作台问候语与账号信息
             loadQueue(); // 用真实登录身份重新过滤渲染队列
             showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
           }
@@ -821,6 +823,7 @@
         fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
           if(u && u.authenticated && u.user){
             window.__ffUser = u.user;
+            renderUserInfo(); // 刷新页面后同步已登录账号信息
             enterApp();
           }
         }).catch(function(){});
@@ -1200,6 +1203,42 @@
   function ownerName(){
     // 队列数据已是本人会话的，提交人展示当前登录身份（无登录则侧边栏默认「晓明」）
     return (window.__ffUser && (window.__ffUser.nickname || window.__ffUser.openid)) || '晓明';
+  }
+  // 将微信登录返回的用户信息同步到 UI：工作台问候语、左下角账号、设置页账号信息。
+  // 未登录（演示模式）时保持原有占位「晓明」不变。
+  function renderUserInfo(){
+    var u = window.__ffUser;
+    var name = (u && (u.nickname || u.openid)) || '晓明';
+    var greet = document.getElementById('greet');
+    if(greet){
+      var h = new Date().getHours();
+      var sal = h < 6 ? '凌晨好' : h < 9 ? '早上好' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+      greet.textContent = sal + '，' + name;
+    }
+    var nn = document.getElementById('sidebar-user-name');
+    var rr = document.getElementById('sidebar-user-role');
+    if(nn) nn.textContent = name;
+    if(rr) rr.textContent = (u && u.openid) ? '微信用户' : 'Pro 会员';
+    var sn = document.getElementById('settings-user-name');
+    var sd = document.getElementById('settings-user-desc');
+    if(sn) sn.textContent = name;
+    if(sd) sd.textContent = (u && u.openid) ? ('微信登录 · ' + name) : 'you@company.com · Pro 会员';
+    // 头像：微信返回 headimgurl 时显示真实头像（升 https 避免混合内容被拦），否则保留默认渐变
+    var img = u && u.headimgurl;
+    if(img) img = String(img).replace(/^http:\/\//i, 'https://');
+    var avs = document.querySelectorAll('.avatar');
+    for(var i = 0; i < avs.length; i++){
+      var a = avs[i];
+      if(img){
+        a.style.backgroundImage = 'url("' + img + '")';
+        a.style.backgroundSize = 'cover';
+        a.style.backgroundPosition = 'center';
+      }else{
+        a.style.backgroundImage = '';
+        a.style.backgroundSize = '';
+        a.style.backgroundPosition = '';
+      }
+    }
   }
   function safeDownloadURL(value){
     var raw = String(value || '').trim();
