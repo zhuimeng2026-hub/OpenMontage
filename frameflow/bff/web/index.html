@@ -768,6 +768,7 @@
             fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
               if(u && u.authenticated && u.user){
                 window.__ffUser = u.user;
+                loadQueue(); // 用真实登录身份刷新渲染队列（与微信回调路径一致）
                 showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
               }
               enterApp();
@@ -1307,6 +1308,9 @@
     }
     try {
       var r = await fetch(base + '/api/render-queue', { credentials: 'include' });
+      // 未登录（401）是登录前的正常状态：登录视图盖着应用，不绘制失败态；
+      // 登录成功后会重新 loadQueue() 拉取真实队列（见扫码登录回调路径）。
+      if(r.status === 401){ return; }
       if(!r.ok){ paintLoadError(); return; }
       var data = await r.json();
       (data.jobs || []).forEach(function(j){ if(j.pct == null && j.status === '渲染中') j.pct = 0; });
