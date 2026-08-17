@@ -16,6 +16,7 @@ import (
 	"frameflow-bff/internal/imagebatch"
 	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
+	"frameflow-bff/internal/script"
 	"frameflow-bff/internal/state"
 	"frameflow-bff/internal/template"
 )
@@ -40,6 +41,8 @@ func main() {
 	h := handlers.New(cfg, store, tierLimits, imageBatches, db)
 	comps := composition.NewStore()
 	ch := handlers.NewCompositionHandler(cfg, comps, store)
+	scripts := script.NewStore()
+	sh := handlers.NewScriptHandler(cfg, scripts, store)
 	ibh := handlers.NewImageBatchHandler(cfg, imageBatches, store)
 
 	tpls := template.NewStore()
@@ -97,6 +100,9 @@ func main() {
 		api.POST("/compositions", ch.Create)
 		api.GET("/compositions/:id", ch.Get)
 		api.POST("/compositions/:id/render", h.RequireAuth(), ch.Render)
+		// 定义视频脚本：用户在「定义视频脚本」页保存/列出的视频生成脚本（按会话隔离）。
+		api.POST("/scripts", sh.Create)
+		api.GET("/scripts", sh.List)
 		// Batch-render surface: a reusable Template (fixed script) + Scenarios
 		// (per-scenario image sets from the business system) -> N videos.
 		api.GET("/templates", th.ListTemplates)

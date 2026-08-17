@@ -414,6 +414,32 @@
   #script-progress .track{height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden;}
   #script-progress .fill{height:100%;width:0%;background:var(--grad-primary);}
   #script-progress .st{font-size:12px;color:var(--text-secondary);margin-top:8px;}
+
+  /* ============ 定义视频脚本 ============ */
+  .nav-item.nav-logout{color:var(--text-secondary);}
+  .nav-item.nav-logout:hover{background:rgba(255,77,79,0.12);color:#ff6b6b;}
+  .ds-head h3{font-size:20px;font-weight:600;margin-bottom:8px;}
+  .ds-desc{font-size:13px;color:var(--text-secondary);line-height:1.7;max-width:760px;}
+  .ds-note{margin:18px 0 6px;padding:16px 18px;border-radius:var(--radius-sm);background:rgba(124,92,255,0.08);border:1px solid rgba(124,92,255,0.22);max-width:760px;}
+  .ds-note-title{font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:6px;}
+  .ds-note-body{font-size:13px;color:var(--text-secondary);line-height:1.7;margin-bottom:12px;}
+  .ds-section{font-size:13px;font-weight:600;color:var(--primary);margin:26px 0 12px;letter-spacing:.04em;}
+  .ds-prompt{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.7;color:var(--text-secondary);background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:16px 18px;max-width:760px;cursor:pointer;}
+  .ds-prompt:hover{border-color:var(--accent);}
+  .ds-form{max-width:760px;display:flex;flex-direction:column;gap:8px;}
+  .ds-label{font-size:13px;font-weight:600;color:var(--text-primary);margin-top:6px;}
+  .ds-input,.ds-textarea{width:100%;box-sizing:border-box;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;font-family:inherit;}
+  .ds-textarea{min-height:220px;resize:vertical;line-height:1.6;}
+  .ds-actions{display:flex;align-items:center;gap:12px;margin-top:10px;}
+  .ds-msg{font-size:13px;}
+  .ds-msg.ok{color:var(--success);}
+  .ds-msg.err{color:var(--error);}
+  .ds-list{display:flex;flex-direction:column;gap:8px;max-width:760px;}
+  .ds-empty{font-size:13px;color:var(--text-tertiary);padding:8px 0;}
+  .ds-item{padding:10px 14px;border-radius:var(--radius-sm);background:var(--bg-surface);border:1px solid var(--border-soft);cursor:pointer;transition:border-color .15s ease;}
+  .ds-item:hover{border-color:var(--accent);}
+  .ds-item-name{font-size:14px;font-weight:600;color:var(--text-primary);}
+  .ds-item-time{font-size:12px;color:var(--text-tertiary);margin-top:2px;}
 </style>
 </head>
 <body>
@@ -493,10 +519,18 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="10.5" r="2.5"/><circle cx="8.5" cy="7.5" r="2.5"/><circle cx="6.5" cy="12.5" r="2.5"/><path d="M12 22a10 10 0 1 1 0-20c4 0 7 2 7 6 0 3-2 4-4 4h-3a2 2 0 0 0 0 4h5"/></svg>
       设计系统
     </div>
-    <div class="nav-item" data-view="settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14.1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-      设置
-    </div>
+      <div class="nav-item" data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14.1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        设置
+      </div>
+      <div class="nav-item" data-view="script-def">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13l-2 2 2 2"/><path d="M15 13l2 2-2 2"/></svg>
+        定义视频脚本
+      </div>
+      <div class="nav-item nav-logout" data-view="logout">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+        退出系统
+      </div>
     <div class="sidebar-user">
       <div class="avatar"></div>
       <div>
@@ -700,6 +734,46 @@
           <div class="settings-card"><h4>团队成员</h4><div style="font-size:13px;color:var(--text-secondary)">晓明、李雷、韩梅梅 等 3 人</div></div>
         </div>
       </section>
+
+      <!-- 定义视频脚本 -->
+      <section class="view" id="view-script-def">
+        <div class="ds-head">
+          <h3>定义视频脚本</h3>
+          <p class="ds-desc">在该页面编写并保存你自己的视频生成脚本。你可以先用 DeepSeek 页面生成 Remotion 脚本，再把结果粘贴到下方「脚本内容」中。脚本保存在服务器上，供后端渲染使用。</p>
+        </div>
+
+        <div class="ds-note">
+          <div class="ds-note-title">如何获取 Remotion 脚本？</div>
+          <div class="ds-note-body">点击右侧按钮前往 DeepSeek，使用下面的「典型提示词」生成 Remotion 视频脚本，复制结果后粘贴到本页「脚本内容」输入框即可。</div>
+          <button class="btn-ghost" id="ds-open-deepseek" type="button">前往 DeepSeek 生成脚本 ↗</button>
+        </div>
+
+        <div class="ds-section">典型 DeepSeek 提示词（点击复制）</div>
+        <pre class="ds-prompt" id="ds-prompt" title="点击复制">请帮我用 Remotion（React + TypeScript）编写一个竖屏 9:16、时长约 60 秒的产品宣传视频脚本。
+
+要求：
+1. 使用图片素材数组 props.images，每张图片展示 3 秒，配合缓慢的缩放/平移运镜（Ken Burns）。
+2. 视频开头用标题文字卡片点明主题，结尾用总结卡片收束。
+3. 加入底部进度条、品牌水印占位与背景音乐占位（通过 props.music 引用）。
+4. 使用弹簧入场动画，文字与图片错落出现，整体节奏明快。
+
+请只输出可直接用于 Remotion 的 Composition 组件代码（含 &lt;Composition&gt; 默认导出），并附不超过 3 句的参数说明。</pre>
+
+        <div class="ds-section">保存你的脚本</div>
+        <div class="ds-form">
+          <label class="ds-label" for="ds-name">脚本名称</label>
+          <input id="ds-name" class="ds-input" placeholder="例如：夏日新品宣传片" maxlength="60">
+          <label class="ds-label" for="ds-content">脚本内容（真实脚本，保存到服务器）</label>
+          <textarea id="ds-content" class="ds-textarea" placeholder="在此粘贴或修改你的视频生成脚本（Remotion 代码 / 提示词 / 任意脚本内容）"></textarea>
+          <div class="ds-actions">
+            <button class="btn-primary" id="ds-save" type="button">保存到服务器</button>
+            <span id="ds-msg" class="ds-msg"></span>
+          </div>
+        </div>
+
+        <div class="ds-section">已保存脚本</div>
+        <div class="ds-list" id="ds-list"><div class="ds-empty">暂无已保存脚本</div></div>
+      </section>
     </div>
   </div>
 </div>
@@ -754,6 +828,19 @@
     clearTimeout(window.__ffToast);
     window.__ffToast = setTimeout(function(){ t.classList.remove('show'); }, 2800);
   }
+  // 退出登录：清空本地登录态并退回登录视图。右上角头像下拉与侧边栏「退出系统」共用。
+  function doLogout(){
+    fetch(bffBase() + '/api/logout', {method:'POST', credentials:'include'})
+      .catch(function(){})
+      .then(function(){
+        window.__ffUser = null;
+        renderUserInfo();
+        clearLoginExpired();
+        var lv = document.getElementById('login-view'); if(lv) lv.style.display = '';
+        var app = document.getElementById('app-shell'); if(app) app.classList.remove('active');
+        showToast('已退出登录，请重新登录');
+      });
+  }
   // 登录失效提示：曾登录但会话已失效时，显示横幅并退回登录视图。
   function clearLoginExpired(){
     var b = document.getElementById('login-expired-banner');
@@ -788,16 +875,7 @@
       logoutBtn.addEventListener('click', function(e){
         e.stopPropagation();
         menu.classList.remove('open');
-        fetch(bffBase() + '/api/logout', {method:'POST', credentials:'include'})
-          .catch(function(){})
-          .then(function(){
-            window.__ffUser = null;
-            renderUserInfo();
-            clearLoginExpired();
-            var lv = document.getElementById('login-view'); if(lv) lv.style.display = '';
-            var app = document.getElementById('app-shell'); if(app) app.classList.remove('active');
-            showToast('已退出登录，请重新登录');
-          });
+        doLogout();
       });
     }
   })();
@@ -935,12 +1013,15 @@
   // ---- 侧边栏路由 ----
   var titles = {
     'dashboard':'工作台','create':'创建视频','gallery':'我的视频',
-    'queue':'渲染队列','templates':'模板市场','design-system':'设计系统','settings':'设置'
+    'queue':'渲染队列','templates':'模板市场','design-system':'设计系统','settings':'设置',
+    'script-def':'定义视频脚本','logout':'退出系统'
   };
   var navItems = document.querySelectorAll('.nav-item');
   navItems.forEach(function(item){
     item.addEventListener('click', function(){
       var view = item.getAttribute('data-view');
+      // 退出系统：复用右上角头像下拉的退出登录逻辑，不切换视图。
+      if (view === 'logout') { doLogout(); return; }
       navItems.forEach(function(n){ n.classList.remove('active'); });
       item.classList.add('active');
       document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
@@ -949,7 +1030,77 @@
       document.querySelector('.content').scrollTop = 0;
       if (view === 'create') refreshQuota();
       if (view === 'gallery') { loadGallery(); }
+      if (view === 'script-def') { loadScriptDefList(); }
     });
+  });
+
+  // ---- 定义视频脚本 ----
+  var dsMsg = document.getElementById('ds-msg');
+  function setDsMsg(text, kind){ dsMsg.textContent = text; dsMsg.className = 'ds-msg ' + (kind || ''); }
+  var dsOpenDeepseek = document.getElementById('ds-open-deepseek');
+  if (dsOpenDeepseek) dsOpenDeepseek.addEventListener('click', function(){
+    window.open('https://chat.deepseek.com', '_blank', 'noopener');
+  });
+  var dsPrompt = document.getElementById('ds-prompt');
+  if (dsPrompt) dsPrompt.addEventListener('click', function(){
+    var txt = this.innerText;
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(function(){ showToast('提示词已复制'); }).catch(function(){});
+    }
+  });
+  // 拉取当前会话已保存的脚本列表。
+  async function loadScriptDefList(){
+    var box = document.getElementById('ds-list');
+    if (!box) return;
+    try {
+      var r = await fetch(bffBase() + '/api/scripts', { credentials: 'include' });
+      var j = await r.json();
+      var list = (j && j.scripts) || [];
+      if (!list.length){ box.innerHTML = '<div class="ds-empty">暂无已保存脚本</div>'; return; }
+      box.innerHTML = '';
+      list.forEach(function(s){
+        var el = document.createElement('div');
+        el.className = 'ds-item';
+        var time = s.updated_at ? new Date(s.updated_at).toLocaleString() : '';
+        var nameEl = document.createElement('div');
+        nameEl.className = 'ds-item-name';
+        nameEl.textContent = s.name;
+        var timeEl = document.createElement('div');
+        timeEl.className = 'ds-item-time';
+        timeEl.textContent = time;
+        el.appendChild(nameEl);
+        el.appendChild(timeEl);
+        el.addEventListener('click', function(){
+          document.getElementById('ds-name').value = s.name;
+          document.getElementById('ds-content').value = s.content;
+          showToast('已载入：' + s.name);
+          document.querySelector('.content').scrollTop = 0;
+        });
+        box.appendChild(el);
+      });
+    } catch (e){ box.innerHTML = '<div class="ds-empty">加载失败，请稍后重试</div>'; }
+  }
+  var dsSave = document.getElementById('ds-save');
+  if (dsSave) dsSave.addEventListener('click', async function(){
+    var name = (document.getElementById('ds-name').value || '').trim();
+    var content = document.getElementById('ds-content').value || '';
+    if (!name){ setDsMsg('请填写脚本名称', 'err'); return; }
+    if (!content.trim()){ setDsMsg('脚本内容不能为空', 'err'); return; }
+    try {
+      var r = await fetch(bffBase() + '/api/scripts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name: name, content: content })
+      });
+      var j = await r.json();
+      if (!r.ok){ setDsMsg('保存失败：' + (j.error || r.status), 'err'); return; }
+      setDsMsg('已保存：' + name, 'ok');
+      showToast('脚本已保存到服务器');
+      document.getElementById('ds-name').value = '';
+      document.getElementById('ds-content').value = '';
+      loadScriptDefList();
+    } catch (e){ setDsMsg('保存失败：' + e.message, 'err'); }
   });
 
   // ---- 创建页模板选中态 ----
