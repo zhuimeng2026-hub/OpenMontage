@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +17,8 @@ import (
 )
 
 const maxMCPBodyBytes = 2 << 20
+
+var uploadFilenamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 
 var allowedMCPTools = map[string]bool{
 	"upload_asset_chunk":          true,
@@ -56,12 +62,16 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	scope := renderQueueOwnerID(sid)
 	operation, _ := req.Args["operation"].(string)
 	projectID, _ := req.Args["project_id"].(string)
-	log.Printf("[bff-mcp] start tool=%s operation=%s sid_hash=%s scope_hash=%s project_id=%s", req.Tool, operation, mcp.ShortHashForLog(sid), mcp.ShortHashForLog(scope), projectID)
+	uploadDiag := ""
+	if req.Tool == "upload_asset_chunk" {
+		uploadDiag = " " + uploadArgsSummary(req.Args)
+	}
+	log.Printf("[bff-mcp] start tool=%s operation=%s sid_hash=%s scope_hash=%s project_id=%s%s", req.Tool, operation, mcp.ShortHashForLog(sid), mcp.ShortHashForLog(scope), projectID, uploadDiag)
 	start := time.Now()
 	var resultErr error
 	defer func() {
-		log.Printf("[bff-mcp] done tool=%s operation=%s scope_hash=%s project_id=%s elapsed_ms=%d err=%v",
-			req.Tool, operation, mcp.ShortHashForLog(scope), projectID, time.Since(start).Milliseconds(), resultErr)
+		log.Printf("[bff-mcp] done tool=%s operation=%s scope_hash=%s project_id=%s elapsed_ms=%d err=%v%s",
+			req.Tool, operation, mcp.ShortHashForLog(scope), projectID, time.Since(start).Milliseconds(), resultErr, uploadDiag)
 	}()
 
 	// Pre-check the per-submission file cap on a new upload. Rejecting at the
@@ -72,6 +82,8 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 			tier := h.Limits.Resolve(scope)
 			lim := limits.ForTier(tier)
 			if h.Store.AssetCount(scope) >= lim.MaxFilesPerSubmission {
+				resultErr = fmt.Errorf("upload quota reached: tier=%s files=%d max=%d", tier, h.Store.AssetCount(scope), lim.MaxFilesPerSubmission)
+				log.Printf("[bff-mcp] upload_rejected operation=start scope_hash=%s project_id=%s reason=quota%s", mcp.ShortHashForLog(scope), projectID, uploadDiag)
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
 					"error": fmt.Sprintf(
 						"your %q tier allows at most %d images per submission; this submission has already reached the limit",
@@ -95,13 +107,13 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	res, err := h.Store.Call(scope, req.Tool, req.Args)
 	if err != nil {
 		resultErr = err
-		log.Printf("[bff-mcp] upstream_failed tool=%s operation=%s sid_hash=%s project_id=%s err=%v", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, err)
+		log.Printf("[bff-mcp] upstream_failed tool=%s operation=%s sid_hash=%s project_id=%s err=%v%s", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, err, uploadDiag)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	if failure, ok := res["error"].(string); ok && failure != "" {
 		resultErr = fmt.Errorf("%s", failure)
-		log.Printf("[bff-mcp] tool_error tool=%s operation=%s sid_hash=%s project_id=%s error=%q", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, failure)
+		log.Printf("[bff-mcp] tool_error tool=%s operation=%s sid_hash=%s project_id=%s error=%q%s", req.Tool, operation, mcp.ShortHashForLog(sid), projectID, failure, uploadDiag)
 	}
 
 	// A successful render submission enters the caller's own render queue. The
@@ -149,4 +161,33 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, res)
+}
+
+// uploadArgsSummary emits only non-content diagnostics. The original filename
+// is intentionally represented by a short hash so logs can correlate retries
+// without leaking a user's local path or filename.
+func uploadArgsSummary(args map[string]interface{}) string {
+	filename, _ := args["filename"].(string)
+	hash := sha256.Sum256([]byte(filename))
+	ext := ""
+	if dot := strings.LastIndex(filename, "."); dot >= 0 && dot+1 < len(filename) {
+		ext = strings.ToLower(filename[dot:])
+	}
+	totalBytes := numberString(args["total_bytes"])
+	offset := numberString(args["offset"])
+	_, hasUploadID := args["upload_id"].(string)
+	return fmt.Sprintf("upload_diag={filename_hash=%x filename_len=%d filename_safe=%t extension=%q total_bytes=%s offset=%s upload_id_present=%t}", hash[:4], len([]byte(filename)), uploadFilenamePattern.MatchString(filename), ext, totalBytes, offset, hasUploadID)
+}
+
+func numberString(value interface{}) string {
+	switch number := value.(type) {
+	case float64:
+		return strconv.FormatInt(int64(number), 10)
+	case int:
+		return strconv.Itoa(number)
+	case int64:
+		return strconv.FormatInt(number, 10)
+	default:
+		return "-"
+	}
 }

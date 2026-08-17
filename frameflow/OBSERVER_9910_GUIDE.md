@@ -248,6 +248,17 @@ curl -fsS \
 | `failure_stage=orphaned` | 渲染/发布过程中服务重启，后台工作线程丢失 |
 | `remotion=0, chrome=0, ffmpeg=0` | 当前没有实际渲染子进程；不表示历史任务成功 |
 
+BFF 的上传日志会附带 `upload_diag={...}` 摘要。字段包括：
+
+- `filename_hash`：原始文件名的短哈希，只用于关联重试，不暴露文件名。
+- `filename_len`：原始文件名 UTF-8 字节长度。
+- `filename_safe`：是否满足最终保存名正则。
+- `extension`：解析出的后缀。
+- `total_bytes`、`offset`：分块上传声明大小和当前偏移；缺失时为 `-`。
+- `upload_id_present`：是否已进入 `append/complete` 阶段。
+
+例如 `filename_safe=false` 配合 MCP 的 `filename must be a safe basename`，表示请求在 `start` 阶段因文件名被拒绝；`filename_safe=true` 但 `offset mismatch` 则应检查客户端重试或分块顺序。
+
 ## 7. 图片文件名规范化规则
 
 素材在服务器上的最终保存名仍必须满足：
