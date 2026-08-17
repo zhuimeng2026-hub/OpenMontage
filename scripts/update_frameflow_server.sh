@@ -8,7 +8,7 @@ NO_PULL=0
 SKIP_TESTS=0
 BFF_BIN="/opt/OpenMontage/frameflow/bff/frameflow-bff"
 BFF_SERVICE="frameflow-bff.service"
-MCP_SERVICE="${MCP_SERVICE:-}"
+MCP_SERVICE="openmontage-mcp.service"
 TMP_DIR=""
 BACKUP_BIN=""
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/frameflow}"
@@ -42,19 +42,8 @@ done
 
 BFF_BIN="$REPO/frameflow/bff/frameflow-bff"
 
-# Production hosts may still use the original unit name. Prefer the canonical
-# unit, but transparently fall back to the existing MCP service so a deploy
-# never stops the only listener and then fails because a unit is missing.
-if [[ -z "$MCP_SERVICE" ]]; then
-  if sudo systemctl cat openmontage-mcp.service >/dev/null 2>&1; then
-    MCP_SERVICE="openmontage-mcp.service"
-  elif sudo systemctl cat mcp-server.service >/dev/null 2>&1; then
-    MCP_SERVICE="mcp-server.service"
-  else
-    die "no MCP systemd unit found (expected openmontage-mcp.service or mcp-server.service)"
-  fi
-fi
-echo "Using MCP service: $MCP_SERVICE"
+echo "BFF service: $BFF_SERVICE"
+echo "MCP service: $MCP_SERVICE"
 
 redact_journal() {
   # Keep diagnostics useful while avoiding accidental credentials in logs.
@@ -141,11 +130,8 @@ sudo systemctl stop "$BFF_SERVICE"
 ROLLBACK_NEEDED=1
 sudo install -m 0755 "$TMP_DIR/frameflow-bff.new" "$BFF_BIN"
 
-if [[ "$MCP_SERVICE" != "mcp-server.service" ]] && sudo systemctl cat mcp-server.service >/dev/null 2>&1; then
-  echo "Disabling legacy mcp-server.service..."
-  sudo systemctl disable --now mcp-server.service
-  [[ "$(sudo systemctl is-active mcp-server.service 2>/dev/null || true)" == inactive ]] || die "legacy mcp-server.service is still active"
-fi
+# BFF and MCP are independent deployments. Restart both directly; do not
+# inspect, disable, or infer dependencies from any legacy unit.
 sudo systemctl restart "$BFF_SERVICE"
 sudo systemctl restart "$MCP_SERVICE"
 
