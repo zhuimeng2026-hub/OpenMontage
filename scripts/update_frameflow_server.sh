@@ -8,7 +8,7 @@ NO_PULL=0
 SKIP_TESTS=0
 BFF_BIN="/opt/OpenMontage/frameflow/bff/frameflow-bff"
 BFF_SERVICE="frameflow-bff.service"
-MCP_SERVICE="openmontage-mcp.service"
+MCP_SERVICE="${MCP_SERVICE:-}"
 TMP_DIR=""
 BACKUP_BIN=""
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/frameflow}"
@@ -41,6 +41,20 @@ while (($#)); do
 done
 
 BFF_BIN="$REPO/frameflow/bff/frameflow-bff"
+
+# Production hosts may still use the original unit name. Prefer the canonical
+# unit, but transparently fall back to the existing MCP service so a deploy
+# never stops the only listener and then fails because a unit is missing.
+if [[ -z "$MCP_SERVICE" ]]; then
+  if sudo systemctl cat openmontage-mcp.service >/dev/null 2>&1; then
+    MCP_SERVICE="openmontage-mcp.service"
+  elif sudo systemctl cat mcp-server.service >/dev/null 2>&1; then
+    MCP_SERVICE="mcp-server.service"
+  else
+    die "no MCP systemd unit found (expected openmontage-mcp.service or mcp-server.service)"
+  fi
+fi
+echo "Using MCP service: $MCP_SERVICE"
 
 redact_journal() {
   # Keep diagnostics useful while avoiding accidental credentials in logs.
@@ -99,8 +113,12 @@ fi
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || [[ -x "$PYTHON_BIN" ]] || die "Python not found: $PYTHON_BIN"
 
 if ((SKIP_TESTS == 0)); then
-  echo "Running Python upload tests..."
-  "$PYTHON_BIN" -m pytest -q tests/test_asset_upload_chunk.py
+  if "$PYTHON_BIN" -c 'import pytest' >/dev/null 2>&1; then
+    echo "Running Python upload tests..."
+    "$PYTHON_BIN" -m pytest -q tests/test_asset_upload_chunk.py
+  else
+    echo "WARNING: pytest is not installed; skipping Python upload tests." >&2
+  fi
   echo "Running BFF Go tests..."
   (cd "$REPO/frameflow/bff" && go test ./...)
 fi
@@ -123,7 +141,7 @@ sudo systemctl stop "$BFF_SERVICE"
 ROLLBACK_NEEDED=1
 sudo install -m 0755 "$TMP_DIR/frameflow-bff.new" "$BFF_BIN"
 
-if sudo systemctl cat mcp-server.service >/dev/null 2>&1; then
+if [[ "$MCP_SERVICE" != "mcp-server.service" ]] && sudo systemctl cat mcp-server.service >/dev/null 2>&1; then
   echo "Disabling legacy mcp-server.service..."
   sudo systemctl disable --now mcp-server.service
   [[ "$(sudo systemctl is-active mcp-server.service 2>/dev/null || true)" == inactive ]] || die "legacy mcp-server.service is still active"
