@@ -33,6 +33,8 @@ OpenMontage MCP 探测 / 复测工具
   qr-wait         端到端：创建票据→轮询→手机授权→校验 me（--timeout 秒）
   cookie-check    检查 ff_sid 的 Set-Cookie 属性（--headers 抓包头，或读 qr-wait 产物）
   login-flow      完整链路：创建票据→扫码→授权→校验 me
+  instances      多实例健康检查 + 微信配置一致性（--bff 用逗号分隔多个实例地址）
+  qr-cross-instance 多实例扫码票据可见性校验：A 建票、B 查状态（验证 qrTickets 跨实例共享）
 
 环境变量
 --------
@@ -511,6 +513,90 @@ def cmd_bff_login_flow(bff: BFFClient, timeout: int = 300):
     return 0 if ok else 1
 
 
+def cmd_bff_instances(bff_list):
+    """多实例健康检查 + 微信配置一致性。
+
+    逐个实例探测 /api/me（无 cookie 应 200 + authenticated:false）与
+    /api/wechat/qrlogin（是否配置、APPID 是否一致），输出每实例状态与汇总。
+    --bff 用逗号分隔多个实例地址，例如
+      --bff "https://bff1,https://bff2,https://bff3"
+    """
+    results = []
+    appids = set()
+    for url in bff_list:
+        c = BFFClient(url)
+        row = {"url": url}
+        try:
+            me = c.get("/api/me")
+            row["me_ok"] = isinstance(me, dict)
+        except Exception as e:  # noqa: BLE001 - 探测工具需兜住网络错误
+            row["me_ok"] = False
+            row["error"] = str(e)
+        try:
+            cfg = c.get("/api/wechat/qrlogin")
+            if isinstance(cfg, dict):
+                if "auth_url" in cfg:
+                    row["wechat"] = "configured"
+                    q = urllib.parse.parse_qs(urllib.parse.urlparse(cfg["auth_url"]).query)
+                    row["appid"] = q.get("appid", [""])[0]
+                    appids.add(row["appid"])
+                elif "error" in cfg:
+                    row["wechat"] = "not_configured"
+                else:
+                    row["wechat"] = "unknown"
+            else:
+                row["wechat"] = "unknown"
+        except Exception as e:  # noqa: BLE001
+            row["wechat"] = "error:" + str(e)
+        results.append(row)
+        print("INSTANCE %s => me_ok=%s wechat=%s appid=%s" % (
+            url, row.get("me_ok"), row.get("wechat"), row.get("appid", "")))
+    all_ok = all(r.get("me_ok") for r in results)
+    consistent = len(appids) <= 1
+    print("INSTANCES_TOTAL = %d" % len(results))
+    print("INSTANCES_HEALTHY = %s" % all_ok)
+    print("WECHAT_CONFIG_CONSISTENT = %s" % consistent)
+    if not consistent:
+        print("  [WARN] 各实例 APPID 不一致，可能是不同部署 / 配置漂移")
+    if not all_ok:
+        print("  [WARN] 存在不可达实例，请检查该实例进程 / 反向代理 / 健康检查")
+    return 0 if (all_ok and consistent) else 1
+
+
+def cmd_bff_qr_cross_instance(bff_a, bff_b, poll=False, timeout=120):
+    """多实例扫码票据可见性校验（验证 qrTickets 跨实例共享修复是否生效）。
+
+    在实例 A 创建扫码票据，立即去实例 B 查询其状态：
+      - B 能看到 pending/authorized → 票据已跨实例共享，多实例扫码登录无缺口；
+      - B 返回 invalid/expired（或 A 创建的票据在 B 上查无）→ 票据未共享，
+        多实例部署下手机授权会落在一台、PC 轮询在另一台，导致扫码卡 pending。
+    --wait 时额外轮询 B 直到手机授权（需要真实扫码）。
+    """
+    c = bff_a.get("/api/wechat/qrlogin")
+    if not isinstance(c, dict) or "ticket" not in c:
+        print("QR_CREATE_FAILED = %s" % json.dumps(c, ensure_ascii=False))
+        return 1
+    ticket = c["ticket"]
+    print("TICKET = %s  (created on %s)" % (ticket, bff_a.base))
+    s = bff_b.get("/api/wechat/qrlogin/status", params={"ticket": ticket})
+    status = (s or {}).get("status")
+    print("STATUS_ON_B = %s  (queried on %s)" % (status, bff_b.base))
+    if status in ("pending", "authorized"):
+        print("CROSS_INSTANCE_QR_OK = true  (票据在实例间可见，多实例扫码登录无缺口)")
+        ok = True
+    elif status in ("invalid", "expired"):
+        print("CROSS_INSTANCE_QR_OK = false  (票据未跨实例共享，多实例扫码会卡 pending)")
+        ok = False
+    else:
+        print("CROSS_INSTANCE_QR_OK = unknown  (status=%s)" % status)
+        ok = False
+    if poll and ok:
+        print("== 等待手机扫码授权（轮询实例 B）==")
+        rc = _poll_qr(bff_b, ticket, timeout)
+        return 0 if rc == 0 else 1
+    return 0 if ok else 1
+
+
 def run_bff(args, bff: BFFClient):
     if args.cmd == "wechat-config":
         return cmd_bff_wechat_config(bff)
@@ -537,7 +623,9 @@ def main(argv=None):
     ap.add_argument("--log", default="om_mcp_probe.log", help="日志文件路径（默认 om_mcp_probe.log）")
     ap.add_argument("--quiet", action="store_true", help="仅写日志文件，不打印到控制台")
     ap.add_argument("--bff", default=os.environ.get("OM_BFF_URL", "https://render.mengxa.com"),
-                    help="BFF 基地址（微信登录调试子命令使用）")
+                    help="BFF 基地址（微信登录调试子命令使用）；instances 子命令可用逗号分隔多个实例地址")
+    ap.add_argument("--bff-b", default=os.environ.get("OM_BFF_B_URL", ""),
+                    help="第二实例基地址（qr-cross-instance 校验跨实例票据共享时使用）")
     ap.add_argument("--cookie-jar", default="",
                     help="cookie jar 文件（Netscape 格式），跨子命令共享 ff_sid / ff_wx_state")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -577,10 +665,30 @@ def main(argv=None):
     p_cc.add_argument("--headers", default="", help="curl -D 抓包头文件；缺省读 qr-wait 生成的 om_mcp_setcookie.txt")
     p_lf = sub.add_parser("login-flow", help="完整链路：创建票据→扫码→授权→校验 me")
     p_lf.add_argument("--timeout", type=int, default=300)
+    sub.add_parser("instances",
+                   help="多实例健康检查 + 微信配置一致性（--bff 用逗号分隔多个实例地址）")
+    p_qx = sub.add_parser("qr-cross-instance",
+                          help="多实例扫码票据可见性校验：A 建票、B 查状态（验证 qrTickets 跨实例共享）")
+    p_qx.add_argument("--wait", action="store_true",
+                      help="额外轮询第二实例 B 直到手机授权（需真实扫码）")
+    p_qx.add_argument("--timeout", type=int, default=120)
 
     args = ap.parse_args(argv)
     setup_logging(args.log, args.quiet)
-    if args.cmd in {"wechat-config", "me", "qr-create", "qr-status", "qr-wait", "cookie-check", "login-flow"}:
+    BFF_CMDS = {"wechat-config", "me", "qr-create", "qr-status", "qr-wait",
+                "cookie-check", "login-flow", "instances", "qr-cross-instance"}
+    if args.cmd in BFF_CMDS:
+        if args.cmd == "instances":
+            bffs = [BFFClient(u.strip()) for u in args.bff.split(",") if u.strip()]
+            if not bffs:
+                ap.error("instances 需要 --bff 提供至少一个实例地址（逗号分隔）")
+            return cmd_bff_instances(bffs)
+        if args.cmd == "qr-cross-instance":
+            if not args.bff_b:
+                ap.error("qr-cross-instance 需要 --bff-b 指定第二实例地址")
+            bff_a = BFFClient(args.bff)
+            bff_b = BFFClient(args.bff_b)
+            return cmd_bff_qr_cross_instance(bff_a, bff_b, poll=args.wait, timeout=args.timeout)
         bff = BFFClient(args.bff)
         if args.cookie_jar:
             bff.load_jar(args.cookie_jar)

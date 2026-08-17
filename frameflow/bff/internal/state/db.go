@@ -103,6 +103,22 @@ CREATE TABLE IF NOT EXISTS wechat_users (
 CREATE INDEX IF NOT EXISTS idx_wechat_users_openid ON wechat_users(openid);
 CREATE INDEX IF NOT EXISTS idx_wechat_users_expiry ON wechat_users(expires_at);
 
+-- Durable WeChat QR-login tickets. A desktop scan authorizes a ticket on one
+-- BFF instance (the phone's WeChat browser hits the callback), while the PC
+-- polls the ticket status on another instance. Persisting tickets here makes
+-- the authorized state visible to every instance in a multi-instance deploy,
+-- so a scan is not lost when the callback and the poll land on different pods.
+-- The in-memory qrTickets map is only a hot cache; this table is the
+-- cross-instance source of truth. Requires a shared DB volume across instances.
+CREATE TABLE IF NOT EXISTS wechat_qr_tickets (
+  ticket_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'pending',
+  profile_json TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wechat_qr_tickets_expiry ON wechat_qr_tickets(expires_at);
+
 	`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("sqlite schema: %w", err)

@@ -405,6 +405,7 @@
     </div>
     <h1>欢迎回来</h1>
     <div class="sub">使用微信服务号授权，安全登录你的视频创作空间</div>
+    <div id="login-expired-banner" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:12px;background:rgba(255,77,79,.12);border:1px solid rgba(255,77,79,.4);color:#ff6b6b;font-size:13px;text-align:center">登录状态已失效，请重新扫码登录</div>
     <button class="btn-wechat" id="wechat-login-btn">
       <svg class="wx-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <rect x="2.5" y="7" width="13" height="11" rx="5.5"/>
@@ -720,6 +721,34 @@
     clearTimeout(window.__ffToast);
     window.__ffToast = setTimeout(function(){ t.classList.remove('show'); }, 2800);
   }
+  // 登录失效提示：曾登录但会话已失效时，显示横幅并退回登录视图。
+  function clearLoginExpired(){
+    var b = document.getElementById('login-expired-banner');
+    if(b) b.style.display = 'none';
+  }
+  function onSessionLost(){
+    window.__ffUser = null;
+    var b = document.getElementById('login-expired-banner');
+    if(b) b.style.display = 'block';
+    var lv = document.getElementById('login-view');
+    if(lv) lv.style.display = '';
+    var app = document.getElementById('app-shell');
+    if(app) app.classList.remove('active');
+  }
+  // 应用运行中定时探测会话存活：已登录(__ffUser 已置)但 /api/me 返回未登录，
+  // 说明会话在服务端过期/丢失（如 BFF 重启或实例漂移），主动提示并退回登录。
+  function checkSessionAlive(){
+    if(!window.__ffUser) return; // 未登录则无需判定
+    fetch(bffBase() + '/api/me', {credentials:'include'})
+      .then(function(r){ return r.json(); })
+      .then(function(u){
+        if(!u || !u.authenticated){
+          onSessionLost();
+          showToast('登录已失效，请重新扫码登录');
+        }
+      }).catch(function(){});
+  }
+  setInterval(checkSessionAlive, 60000);
   function startWechatLogin(){
     // 微信内置浏览器：直接跳转服务号网页授权；桌面浏览器：弹窗扫码登录。
     var remo = (window.FF_CONFIG && window.FF_CONFIG.remotion) || {};
@@ -767,6 +796,7 @@
             document.getElementById('qr-login-modal').classList.remove('show');
             fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
               if(u && u.authenticated && u.user){
+                clearLoginExpired();
                 window.__ffUser = u.user;
                 renderUserInfo(); // 问候语/左下角/设置页账号同步微信登录信息
                 loadQueue(); // 用真实登录身份刷新渲染队列（与微信回调路径一致）
@@ -805,10 +835,11 @@
   (function(){
     try{
       var params = new URLSearchParams(location.search);
-      if(params.get('login') === 'wechat'){
-        fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
-          if(u && u.authenticated && u.user){
-            window.__ffUser = u.user;
+          if(params.get('login') === 'wechat'){
+            fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
+              if(u && u.authenticated && u.user){
+                clearLoginExpired();
+                window.__ffUser = u.user;
             renderUserInfo(); // 同步工作台问候语与账号信息
             loadQueue(); // 用真实登录身份重新过滤渲染队列
             showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
@@ -819,12 +850,17 @@
       }
       if(params.get('code')){ showToast('已收到微信授权回调（应走 BFF），演示模式直接进入'); enterApp(); }
       else{
-        // 已登录用户（会话 cookie 持久）刷新页面时直接进入，无需重复扫码
+        // 已登录用户（会话 cookie 持久）刷新页面时直接进入；曾登录但失效则提示重新扫码
         fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
           if(u && u.authenticated && u.user){
+            clearLoginExpired();
             window.__ffUser = u.user;
             renderUserInfo(); // 刷新页面后同步已登录账号信息
             enterApp();
+          } else if(/(\b|^)ff_sid=/.test(document.cookie || '')){
+            // 浏览器仍带 ff_sid，但后端已无该会话（过期 / 实例漂移 / BFF 重启）→ 提示失效
+            var b = document.getElementById('login-expired-banner');
+            if(b) b.style.display = 'block';
           }
         }).catch(function(){});
       }

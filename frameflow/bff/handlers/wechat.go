@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,28 +56,86 @@ type qrTicket struct {
 	Expires time.Time
 }
 
+// qrTickets is an in-memory hot cache for QR-login tickets. The cross-instance
+// source of truth is the wechat_qr_tickets table (see internal/state/db.go);
+// ticketGet/Set/Delete/MarkAuthorized write through to it when userDB is set
+// (production / multi-instance). When userDB is nil (dev without a DB) the map
+// alone is used so a local run needs no SQLite file.
 var qrTickets = struct {
 	sync.RWMutex
 	m map[string]*qrTicket
 }{m: make(map[string]*qrTicket)}
 
+func qrDB() *sql.DB { return userDB }
+
 func ticketGet(id string) (*qrTicket, bool) {
 	qrTickets.RLock()
-	defer qrTickets.RUnlock()
 	t, ok := qrTickets.m[id]
-	return t, ok
+	qrTickets.RUnlock()
+	if ok {
+		return t, true
+	}
+	if db := qrDB(); db != nil {
+		row := db.QueryRow(`SELECT status, profile_json, expires_at FROM wechat_qr_tickets WHERE ticket_id=? LIMIT 1`, id)
+		var status, profile, expires string
+		if err := row.Scan(&status, &profile, &expires); err == nil {
+			exp, perr := time.Parse(time.RFC3339, expires)
+			if perr != nil {
+				exp = time.Time{}
+			}
+			if time.Now().After(exp) {
+				ticketDelete(id) // lazy expiry sweep, keeps the table small
+				return nil, false
+			}
+			t = &qrTicket{Status: status, Expires: exp}
+			if profile != "" {
+				_ = json.Unmarshal([]byte(profile), &t.User)
+			}
+			qrTickets.Lock()
+			qrTickets.m[id] = t
+			qrTickets.Unlock()
+			return t, true
+		}
+	}
+	return nil, false
 }
 
 func ticketSet(id string, t *qrTicket) {
 	qrTickets.Lock()
-	defer qrTickets.Unlock()
 	qrTickets.m[id] = t
+	qrTickets.Unlock()
+	if db := qrDB(); db != nil {
+		exp := t.Expires.Format(time.RFC3339)
+		_, _ = db.Exec(`INSERT INTO wechat_qr_tickets(ticket_id,status,profile_json,created_at,expires_at)
+			VALUES(?,?,?,?,?)
+			ON CONFLICT(ticket_id) DO UPDATE SET status=excluded.status, profile_json=excluded.profile_json, expires_at=excluded.expires_at`,
+			id, t.Status, "", time.Now().Format(time.RFC3339), exp)
+	}
 }
 
 func ticketDelete(id string) {
 	qrTickets.Lock()
-	defer qrTickets.Unlock()
 	delete(qrTickets.m, id)
+	qrTickets.Unlock()
+	if db := qrDB(); db != nil {
+		_, _ = db.Exec(`DELETE FROM wechat_qr_tickets WHERE ticket_id=?`, id)
+	}
+}
+
+// ticketMarkAuthorized records a phone-side authorization (the callback runs in
+// the phone's WeChat browser, possibly on a different BFF instance than the PC
+// poll) so the desktop poll can observe the authorized state across instances.
+func ticketMarkAuthorized(id string, user map[string]interface{}) {
+	profile, _ := json.Marshal(user)
+	qrTickets.Lock()
+	if t, ok := qrTickets.m[id]; ok {
+		t.Status = "authorized"
+		t.User = user
+	}
+	qrTickets.Unlock()
+	if db := qrDB(); db != nil {
+		_, _ = db.Exec(`UPDATE wechat_qr_tickets SET status='authorized', profile_json=? WHERE ticket_id=?`, string(profile), id)
+	}
 }
 
 // QrLoginCreate issues a login ticket and returns the OAuth URL to render as a
@@ -154,8 +213,7 @@ func (h *Handlers) WechatCallback(c *gin.Context) {
 	// Desktop QR-login path
 	if t, ok := ticketGet(state); ok && t.Status == "pending" {
 		h.exchangeAndAuthorize(c, code, func(user map[string]interface{}) {
-			t.Status = "authorized"
-			t.User = user
+			ticketMarkAuthorized(state, user)
 		})
 		if c.Writer.Written() {
 			return

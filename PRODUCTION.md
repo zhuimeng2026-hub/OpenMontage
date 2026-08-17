@@ -1,11 +1,11 @@
 # OpenMontage / FrameFlow 生产环境迁移与微信登录落地规划
 
-> 状态：PR-2（登录态 SQLite 持久化，修复"刷新跳主页"）与 PR-3（监控脚本微信登录调试）**已实现**并通过 `go build`/`go test`/`go vet` 与 `python -m py_compile` 验证；PR-1（DNS/证书/微信凭据等运维变更）与 PR-4（前端登录失效提示，可选）待部署阶段执行。
+> 状态：PR-2（登录态 SQLite 持久化，修复"刷新跳主页"）、PR-3（监控脚本微信登录调试）、PR-4（前端"登录已失效"提示）均已**实现**并通过 `go build`/`go test`/`go vet` 与 `python -m py_compile` 验证；PR-1（DNS/证书/微信凭据等运维变更）待部署阶段执行。qrTickets 多实例共享也已落地（见下）。
 > 适用范围：FrameFlow BFF（端口 8080，Go/gin）+ nginx + OpenMontage 上游 MCP（端口 8900，`lanes.ymxt.top`）+ 监控脚本 `om_mcp_probe.py`。
 > 当前已实现的事实来源（务必以此为准，不要被旧文档误导）：
 > - 登录实现位于 `frameflow/bff/handlers/auth.go` + `wechat.go`，路由前缀 `/api/wechat/*`、`/api/me`、`/api/logout`。
 > - 环境变量名是 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` / `WECHAT_REDIRECT_URI` / `WECHAT_SCOPE`（**不是** `docs/web-multiuser-auth.md` 里的 `WECHAT_MP_*`）。
-> - 用户态 `userStore` 与扫码票据 `qrTickets` 现在都是 **BFF 进程内内存**，未持久化（这是任务 4 的根因）。
+> - 用户态 `userStore` 与扫码票据 `qrTickets` 现在都**持久化到 SQLite**（`wechat_users` / `wechat_qr_tickets` 表，写穿内存+DB，dev 无 DB 时回退内存）。`qrTickets` 持久化修复了多实例部署下"手机授权落 A 实例、PC 轮询在 B 实例导致扫码卡 pending"的缺口；前提是多实例共享同一 DB 卷（与 `wechat_users` 一致）。
 > - `docs/web-multiuser-auth.md` 描述的是另一套跑在 8900 端口 mcp_server.py 上的 `/web/*` 方案，**当前 BFF 未采用**，规划不依赖它。
 
 ---
@@ -99,9 +99,10 @@ PROXY_CLIENT_TOKEN=<独立客户端token>     # 必须与上游 token 不同
 PORT=8080
 ```
 
-### 0.5.3 仍需关注的生产缺口（与 4.2-B 对应）
+### 0.5.3 生产缺口跟踪
 
-- **扫码票据 `qrTickets` 仍是进程内内存**（`wechat.go:58`）。多实例 BFF 下：实例 1 建 ticket，手机回调落到实例 2 找不到 ticket → 扫码卡 pending。登录态本身已持久化 SQLite（不受影响），但**扫码登录链路需多实例粘性会话或把 ticket 也共享到 DB/Redis**。单实例 + 健康检查部署无碍。
+- ~~扫码票据 `qrTickets` 仍是进程内内存（`wechat.go:58`）~~ **已修复**：`qrTickets` 改为写穿 `wechat_qr_tickets` 表（2026-08-17 第二轮），多实例下手机回调与 PC 轮询落在不同实例也能共享扫码状态。前提：多实例共享同一 DB 卷（与 `wechat_users` 一致）；若各实例独立 SQLite 文件则仍需粘性会话或改 Redis。可用监控命令 `qr-cross-instance` 验证。
+- 多实例可观测性已补齐：监控脚本新增 `instances`（多实例健康检查 + 微信 APPID 配置一致性）与 `qr-cross-instance`（A 建票 / B 查状态，验证票据跨实例共享）两个子命令，详见第 5 节。
 
 ---
 
@@ -228,10 +229,8 @@ PORT=8080
 
 **B. 扫码票据 `qrTickets` 的共享（影响多实例）**
 
-- 当前 `qrTickets`（`wechat.go:58`）也是进程内 map。多实例下：实例 1 创建 ticket，用户手机回调落到实例 2 找不到 ticket → 扫码失败。
-- 方案二选一（推荐后者以最小改动）：
-  - 轻量：把 `qrTickets` 也存入同一 SQLite（或复用 `wechat_users` 的 pending 态），`QrLoginStatus`/`WechatCallback` 跨实例可见；或
-  - 运维约束：生产 BFF 先以**单实例 + 健康检查**部署（滚动发布时"先起新、再停旧"且用粘性会话），待共享存储落地后再扩多实例。
+- ~~当前 `qrTickets`（`wechat.go:58`）也是进程内 map~~ **已落地轻量方案**：改为写穿 `wechat_qr_tickets` 表（同一 SQLite），`QrLoginStatus`/`WechatCallback` 跨实例可见。多实例须共享同一 DB 卷；独立 SQLite 文件时仍建议单实例 + 粘性会话过渡。
+- 监控命令 `qr-cross-instance`（A 建票 / B 查状态）可直接验证该共享是否生效。
 
 **C. 前端无需大改，但建议加固**
 
