@@ -166,6 +166,9 @@ unset FRAMEFLOW_OBSERVER_TOKEN
 
 除了 `/health`，所有接口都要求 Bearer token。日志返回前会对常见 token、key、secret 字段二次脱敏。
 
+接口返回结构、其他大模型的标准排障流程、常见错误解释及 curl 示例，见
+[`OBSERVER_9910_GUIDE.md`](OBSERVER_9910_GUIDE.md)。
+
 ## 7. 日志保留
 
 创建 `/etc/logrotate.d/frameflow-observer`：

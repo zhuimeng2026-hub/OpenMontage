@@ -50,6 +50,11 @@ FRONTEND_ORIGIN=http://192.168.20.173:8080
 CUSTOM_COMPOSITION_ENABLED=true
 ```
 
+MCP 上游地址的优先级为 `MCP_BASE_URL` > 兼容旧部署的 `UPSTREAM_MCP_URL` >
+本机默认 `http://127.0.0.1:8900/mcp`。`MCP_PROGRESS_URL` 可省略；省略时会从最终
+生效的 MCP 地址派生同一主机的 `/render-progress`（例如 `/mcp` 会对应
+`/render-progress`），不会再固定指向本机。启动日志只记录脱敏后的 scheme、host 和 path。
+
 修改 `.env` 后必须重启 BFF 进程；不需要重新构建前端。不要把真实的
 `MCP_API_TOKEN` 提交到 Git。
 

@@ -18,14 +18,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from tools.asset_upload import _ALLOWED_EXTENSIONS, _SAFE_FILENAME, _max_upload_bytes
+from tools.asset_upload import UploadAsset, _ALLOWED_EXTENSIONS, _max_upload_bytes
 from lib.workbuddy_session import register_image, require_session
 from tools.base_tool import BaseTool, ResourceProfile, ToolResult, ToolRuntime, ToolStability, ToolTier
 
 
 class UploadAssetChunk(BaseTool):
     name = "upload_asset_chunk"
-    version = "1.0.0"
+    version = "1.1.0"
     tier = ToolTier.CORE
     stability = ToolStability.PRODUCTION
     runtime = ToolRuntime.LOCAL
@@ -73,11 +73,10 @@ class UploadAssetChunk(BaseTool):
             root = self._root()
             root.mkdir(parents=True, exist_ok=True)
             if operation == "start":
-                project_id, filename = inputs.get("project_id"), inputs.get("filename")
+                project_id, original_filename = inputs.get("project_id"), inputs.get("filename")
                 if not isinstance(project_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", project_id):
                     raise ValueError("project_id must be a safe basename")
-                if not isinstance(filename, str) or not _SAFE_FILENAME.fullmatch(filename):
-                    raise ValueError("filename must be a safe basename")
+                filename, original_filename = UploadAsset._sanitize_filename(original_filename)
                 if Path(filename).suffix.lower() not in _ALLOWED_EXTENSIONS:
                     raise ValueError("unsupported media extension")
                 total = int(inputs.get("total_bytes", 0))
@@ -88,9 +87,9 @@ class UploadAssetChunk(BaseTool):
                 state_path.parent.mkdir(parents=True, exist_ok=True)
                 session_id = inputs.get("mcp_session_id")
                 session_digest = require_session(session_id)
-                state_path.write_text(json.dumps({"project_id": project_id, "filename": filename, "total_bytes": total, "mime_type": inputs.get("mime_type"), "sha256": inputs.get("sha256"), "session_hash": session_digest, "created": time.time()}), encoding="utf-8")
+                state_path.write_text(json.dumps({"project_id": project_id, "filename": filename, "safe_filename": filename, "original_filename": original_filename, "total_bytes": total, "mime_type": inputs.get("mime_type"), "sha256": inputs.get("sha256"), "session_hash": session_digest, "created": time.time()}), encoding="utf-8")
                 part_path.write_bytes(b"")
-                return ToolResult(True, {"upload_id": upload_id, "next_offset": 0, "chunk_limit_bytes": min(1024 * 1024, _max_upload_bytes())}, duration_seconds=time.monotonic()-started)
+                return ToolResult(True, {"upload_id": upload_id, "next_offset": 0, "chunk_limit_bytes": min(1024 * 1024, _max_upload_bytes()), "filename": filename, "safe_filename": filename, "original_filename": original_filename, "renamed": filename != original_filename}, duration_seconds=time.monotonic()-started)
 
             upload_id = inputs.get("upload_id")
             state_path, part_path = self._state_paths(upload_id)
@@ -129,7 +128,7 @@ class UploadAssetChunk(BaseTool):
                 raise ValueError("asset already exists; use a different filename")
             os.replace(part_path, target)
             mime_type = state.get("mime_type") or mimetypes.guess_type(state["filename"])[0] or "application/octet-stream"
-            asset = {"id": f"{state['project_id']}-{digest[:12]}", "filename": state["filename"], "path": str(target), "relative_path": target.relative_to(root.parent).as_posix(), "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media", "mime_type": mime_type, "bytes": content_size, "sha256": digest, "source": "mcp_chunked_upload", "session_hash": state["session_hash"]}
+            asset = {"id": f"{state['project_id']}-{digest[:12]}", "filename": state["filename"], "original_filename": state.get("original_filename", state["filename"]), "path": str(target), "relative_path": target.relative_to(root.parent).as_posix(), "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media", "mime_type": mime_type, "bytes": content_size, "sha256": digest, "source": "mcp_chunked_upload", "session_hash": state["session_hash"]}
             batch = None
             if asset["type"] == "image":
                 batch = register_image(current_session, state["project_id"], asset)
