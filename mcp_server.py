@@ -75,6 +75,67 @@ if not _log.handlers:
     _stderr_handler.setFormatter(_formatter)
     _log.addHandler(_stderr_handler)
 
+# ---------------------------------------------------------------------------
+# 独立健康日志（logs/mcp_health.log）—— 供外部检测运行状态
+# ---------------------------------------------------------------------------
+# 与 mcp_server.log（全量请求/业务日志）分离，只写高信号、结构化的
+# `event=... key=value` 行，便于 grep/tail/监控脚本判断进程是否健康：
+#   - event=heartbeat status=ok ...  每 30s 心跳，停止即异常
+#   - event=tool_sync state=submit|done|timeout tool=...  工具执行生命周期与耗时
+#   - event=executor_wedge / event=executor_replaced ...  to_thread 卡死自愈记录
+# 采用与 mcp_server.log 相同的锁文件回退策略（文件被占用时写时间戳文件，
+# 仍不可用时退化 NullHandler），避免在 Windows 下因日志句柄被占而启动崩溃。
+_health_log = logging.getLogger("mcp_health")
+_health_log.setLevel(logging.INFO)
+_health_log.propagate = False
+if not _health_log.handlers:
+    _health_candidates = [
+        _LOG_DIR / "mcp_health.log",
+        _LOG_DIR / f"mcp_health_{int(time.time())}.log",
+    ]
+    _health_handler: Optional[logging.Handler] = None
+    for _hp in _health_candidates:
+        try:
+            _health_handler = RotatingFileHandler(
+                _hp,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            break
+        except (PermissionError, OSError):
+            continue
+    if _health_handler is None:
+        _health_handler = logging.NullHandler()
+    _health_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S"
+    ))
+    _health_log.addHandler(_health_handler)
+
+_PROCESS_START = time.time()
+_tool_pending_lock = threading.Lock()
+_tool_pending: dict[str, int] = {}  # tool name -> 在飞工具调用数（submit++ / done--）
+
+
+def _health(event: str, **fields) -> None:
+    """写一行结构化健康日志；失败静默（不影响业务）。"""
+    try:
+        parts = [f"event={event}"]
+        parts += [f"{k}={v}" for k, v in fields.items() if v is not None]
+        _health_log.info(" ".join(parts))
+    except Exception:  # noqa: BLE001 - 健康日志绝不允许拖垮业务
+        pass
+
+
+def _pending_tool_calls() -> dict[str, int]:
+    with _tool_pending_lock:
+        return dict(_tool_pending)
+
+
+def _health_bump_tool(name: str, delta: int) -> None:
+    with _tool_pending_lock:
+        _tool_pending[name] = max(0, _tool_pending.get(name, 0) + delta)
+
 # Ensure OpenMontage project root is on sys.path so tools/ and lib/ resolve.
 _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -215,6 +276,9 @@ async def _run_tool_sync(tool, inputs: dict[str, Any]) -> Any:
     """
     name = getattr(tool, "name", type(tool).__name__)
     _log.info("tool.sync.submit name=%s", name)
+    _health("tool_sync", state="submit", tool=name)
+    _health_bump_tool(name, +1)
+    _started_at = time.monotonic()
     ctx = contextvars.copy_context()
     fut = asyncio.to_thread(ctx.run, tool.execute, inputs)
     # 安全网：即使底层线程池/执行器异常卡死，也不会让请求永久挂起——
@@ -222,9 +286,15 @@ async def _run_tool_sync(tool, inputs: dict[str, Any]) -> Any:
     try:
         result = await asyncio.wait_for(fut, timeout=900)
     except asyncio.TimeoutError:
+        elapsed_ms = round((time.monotonic() - _started_at) * 1000)
         _log.error("tool.sync.timeout name=%s (executor wedge?) — abandoning call", name)
+        _health("tool_sync", state="timeout", tool=name, elapsed_ms=elapsed_ms)
+        _health_bump_tool(name, -1)
         raise
-    _log.info("tool.sync.done name=%s", name)
+    elapsed_ms = round((time.monotonic() - _started_at) * 1000)
+    _log.info("tool.sync.done name=%s elapsed_ms=%d", name, elapsed_ms)
+    _health("tool_sync", state="done", tool=name, elapsed_ms=elapsed_ms)
+    _health_bump_tool(name, -1)
     return result
 
 
@@ -241,30 +311,46 @@ def _start_executor_health_monitor() -> asyncio.Task:
 
     async def _monitor(loop: asyncio.AbstractEventLoop) -> None:
         _log.info("executor.health.monitor started on loop %r", loop)
+        _health("executor_monitor", state="started", loop=str(loop))
         while True:
             await asyncio.sleep(30)
             executor = getattr(loop, "_default_executor", None)
+            threads = len(getattr(executor, "_threads", ())) if executor is not None else 0
+            pending = _pending_tool_calls()
+            uptime_s = round(time.time() - _PROCESS_START)
             if executor is None:
+                _health("heartbeat", status="no_executor_yet", uptime_s=uptime_s,
+                        tool_pending=sum(pending.values()))
                 continue  # 尚未创建默认 executor，无从探测
             try:
                 fut = loop.run_in_executor(executor, lambda: None)
                 await asyncio.wait_for(fut, timeout=8)
-                _log.debug("executor.health.ok threads=%d", len(executor._threads))
+                _log.debug("executor.health.ok threads=%d", threads)
+                _health("heartbeat", status="ok", executor_threads=threads,
+                        tool_pending=sum(pending.values()),
+                        tool_pending_detail=",".join(f"{k}:{v}" for k, v in pending.items()),
+                        uptime_s=uptime_s)
             except asyncio.TimeoutError:
                 _log.error(
                     "executor.health.wedge default executor unresponsive (submit no-op "
                     "not picked up in 8s; workers=%d) — replacing it",
-                    len(getattr(executor, "_threads", ())),
+                    threads,
                 )
+                _health("executor_wedge", executor_threads=threads,
+                        tool_pending=sum(pending.values()), uptime_s=uptime_s)
                 try:
                     loop.set_default_executor(_cf.ThreadPoolExecutor(
                         max_workers=32, thread_name_prefix="asyncio",
                     ))
                     _log.warning("executor.health.replaced default executor")
+                    _health("executor_replaced", old_executor_threads=threads,
+                            uptime_s=uptime_s)
                 except Exception as exc:  # noqa: BLE001
                     _log.exception("executor.health.replace failed: %s", exc)
+                    _health("executor_replace_failed", error=str(exc))
             except Exception as exc:  # noqa: BLE001
                 _log.warning("executor.health.check error: %s", exc)
+                _health("executor_check_error", error=str(exc))
 
     loop = asyncio.get_running_loop()
     task = loop.create_task(_monitor(loop))
