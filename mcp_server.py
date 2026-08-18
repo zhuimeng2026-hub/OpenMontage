@@ -611,6 +611,26 @@ def _resolve_session_asset_path(asset: dict) -> Path:
 
 
 @mcp.tool()
+async def get_session_assets() -> dict[str, Any]:
+    """Return the images already uploaded for the current MCP session.
+
+    Lets the frontend show what is already on the server so the user does not
+    re-upload files after a partial upload failure. Each asset carries
+    ``relative_path`` (posix, repo-root-relative), ``original_filename``,
+    ``sha256``, ``bytes`` and ``type``. Returns ``{assets: []}`` when nothing
+    has been uploaded for this session yet.
+    """
+    from lib.workbuddy_session import get_session_assets as _get_session_assets
+
+    try:
+        assets = _get_session_assets(get_mcp_session_id())
+    except Exception as exc:  # pragma: no cover - defensive
+        _log.warning("get_session_assets failed: %s", exc)
+        return {"success": False, "error": str(exc), "assets": []}
+    return {"success": True, "assets": assets}
+
+
+@mcp.tool()
 async def create_remotion_video_share(
     project_id: Optional[str] = None,
     script_id: str = "photo-ken-burns",

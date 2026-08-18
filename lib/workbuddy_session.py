@@ -245,6 +245,22 @@ def locked(session_id: str | None) -> Iterator[tuple[str, dict[str, Any] | None]
         yield digest, _read(digest)
 
 
+def get_session_assets(session_id: str | None) -> list[dict[str, Any]]:
+    """Return the images already uploaded for an MCP session.
+
+    Used by the frontend to show what is already on the server so the user
+    does not re-upload files after a partial upload failure. Returns [] when
+    the session has no state yet (nothing uploaded) or the id is missing.
+    """
+    digest = session_hash(session_id)
+    if not digest:
+        return []
+    state = _read(digest)
+    if not state:
+        return []
+    return list(state.get("assets", []))
+
+
 def register_image(session_id: str | None, project_id: str, asset: dict[str, Any]) -> dict[str, Any]:
     """Add one completed image, deduplicating by sha/path within the open batch."""
     digest = require_session(session_id)

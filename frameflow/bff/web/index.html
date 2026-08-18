@@ -411,9 +411,25 @@
   .ctab:hover{background:rgba(255,255,255,0.1);}
   .ctab.active{background:rgba(124,92,255,0.2);color:var(--text-primary);border-color:rgba(124,92,255,0.4);font-weight:600;}
 
+  /* ============ CREATE: SESSION UPLOADED ASSETS ============ */
+  .sess-assets{background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-card);padding:18px 20px;margin-bottom:22px;}
+  .sess-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .sess-title{font-size:15px;font-weight:600;color:var(--text-primary);}
+  .sess-actions{display:flex;align-items:center;gap:10px;}
+  .sess-count{font-size:12px;color:var(--text-secondary);}
+  .sess-hint{font-size:12px;color:var(--text-secondary);margin:10px 0 12px;}
+  .sess-grid{display:flex;flex-wrap:wrap;gap:12px;}
+  .sess-empty{font-size:13px;color:var(--text-tertiary);padding:8px 0;}
+  .sess-cell{position:relative;width:92px;height:92px;border-radius:10px;overflow:hidden;border:1px solid var(--border-soft);background:#1e1e1e;cursor:pointer;}
+  .sess-cell img{width:100%;height:100%;object-fit:cover;display:block;}
+  .sess-cell .cb{position:absolute;top:6px;left:6px;width:18px;height:18px;accent-color:var(--primary);cursor:pointer;z-index:2;background:rgba(0,0,0,.4);border-radius:4px;}
+  .sess-cell .nm{position:absolute;left:0;right:0;bottom:0;font-size:10px;line-height:1.3;padding:3px 5px;background:linear-gradient(transparent,rgba(0,0,0,.72));color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .sess-cell.off{opacity:.45;}
+
   /* ============ CREATE: SCRIPT MODE ============ */
   .script-row{display:flex;gap:24px;align-items:flex-start;}
   .editor-col{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .script-row .panel{position:static;width:360px;flex-shrink:0;top:auto;right:auto;}
   .script-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
   .comp-name{height:34px;flex:0 0 220px;background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:8px;color:var(--text-primary);font-size:13px;padding:0 12px;outline:none;}
   .comp-name:focus{border-color:var(--primary);}
@@ -594,6 +610,21 @@
         <div class="create-tabs">
           <div class="ctab active" data-mode="template">模板模式</div>
           <div class="ctab" data-mode="script">脚本模式</div>
+        </div>
+
+        <!-- 当前会话已上传图片：可勾选，避免上传失败后重复上传 -->
+        <div class="sess-assets" id="sess-assets-box">
+          <div class="sess-head">
+            <div class="sess-title">本会话已上传图片</div>
+            <div class="sess-actions">
+              <span class="sess-count" id="sess-count">—</span>
+              <button type="button" class="btn-ghost" id="sess-toggle">全选</button>
+              <button type="button" class="btn-ghost" id="sess-refresh">刷新</button>
+              <button type="button" class="btn-primary" id="sess-merge" style="height:34px;padding:0 14px">将所选加入本次预览</button>
+            </div>
+          </div>
+          <div class="sess-hint">以下图片已在服务器（当前会话）中，无需重复上传。勾选后点击「将所选加入本次预览」即可继续渲染。</div>
+          <div class="sess-grid" id="sess-grid"><div class="sess-empty">尚未上传图片</div></div>
         </div>
 
         <!-- 模板模式：图生视频（黑盒预设） -->
@@ -1052,7 +1083,7 @@
       document.getElementById('view-' + view).classList.add('active');
       document.getElementById('topbar-title').textContent = titles[view];
       document.querySelector('.content').scrollTop = 0;
-      if (view === 'create') { refreshQuota(); loadScriptPicker(); }
+      if (view === 'create') { refreshQuota(); loadScriptPicker(); refreshSessionAssets(); }
       if (view === 'gallery') { loadGallery(); }
       if (view === 'script-def') { loadScriptDefList(); }
     });
@@ -1724,6 +1755,23 @@
     return currentImageBatch;
   }
 
+  // Reconcile the local upload count with the server's authoritative batch
+  // asset_count. The BFF enforces the per-submission cap and the "at least 5
+  // images" minimum against the batch, not the browser's local counter — so
+  // after partial failures, duplicate re-uploads, or a page refresh the local
+  // number can drift. Reading the real count back keeps the guard and the
+  // render gate honest and stops the browser from over-allowing uploads the
+  // server would reject. Returns null when unavailable (e.g. demo mode).
+  async function fetchBatchAssetCount(){
+    if (!currentImageBatch || window.FFMCP.demo) return null;
+    try {
+      var r = await fetch(bffBase() + '/api/image-batches/' + encodeURIComponent(currentImageBatch.id), { credentials: 'include' });
+      if (!r.ok) return null;
+      var b = await r.json();
+      return (b && typeof b.asset_count === 'number') ? b.asset_count : null;
+    } catch (e){ return null; }
+  }
+
   // Pull the real per-submission cap from the BFF quota endpoint and keep the
   // upload hint in sync. Skipped in demo mode (no BFF reachable).
   async function refreshQuota(){
@@ -1931,7 +1979,11 @@
       return;
     }
     var list = Array.prototype.slice.call(files);
-    var available = maxFilesPerSubmission - uploadedCount;
+    // 用服务端真实的批次 asset_count 计算可上传余量，避免本地计数因失败/
+    // 刷新漂移后误判上限，或放任本应被配额拦截的上传打到服务端再吃 422。
+    var serverCount = await fetchBatchAssetCount();
+    var baseCount = (serverCount != null) ? serverCount : uploadedCount;
+    var available = maxFilesPerSubmission - baseCount;
     if (available <= 0){
       showToast('本批次已达到 ' + maxFilesPerSubmission + ' 张上限，请先开始渲染');
       return;
@@ -1964,7 +2016,12 @@
     }
     setUploading(false);
     renderUploadPreview(); // 上传完成后刷新缩略图与渲染脚本标注
+    refreshSessionAssets(); // 同步刷新「本会话已上传图片」面板
     if (uploadInput) uploadInput.value = ''; // 重置，允许再次选择相同文件继续上传
+    // 一轮结束后用服务端真实数量回写计数，保证「至少 5 张」渲染门槛以真实
+    // 数量为准（已存在的图片被重新上传现在计为成功，通常已对齐；此为兜底）。
+    var sc = await fetchBatchAssetCount();
+    if (sc != null && sc > uploadedCount) uploadedCount = sc;
     if (failedCount > 0){
       setCreateProgress(true, null, '上传结束：成功 ' + uploadedCount + ' 张，失败 ' + failedCount + ' 张。失败文件可重新选择上传。');
     } else {
@@ -2117,6 +2174,7 @@
       document.getElementById('mode-template').style.display = mode === 'template' ? 'block' : 'none';
       document.getElementById('mode-script').style.display = mode === 'script' ? 'block' : 'none';
       if (mode === 'script'){ initMonaco(); loadScriptLoadSelect(); }
+      refreshSessionAssets(); // 切换模式后刷新本会话已上传图片（模板=批次会话 / 脚本=用户级会话）
     });
   });
 
@@ -2235,6 +2293,105 @@
     if (box) box.style.display = 'none';
   }
 
+  // ===== 当前会话已上传图片：复选框选择，避免上传失败后重复上传 =====
+  var sessionAssets = [];           // [{relative_path, original_filename, sha256, bytes, type}]
+  var sessAllChecked = true;
+  function assetThumbURL(rel){ return bffBase() + '/api/assets?rel=' + encodeURIComponent(rel); }
+  function fmtBytes(n){ n = Number(n) || 0; if (n < 1024) return n + ' B'; if (n < 1024*1024) return (n/1024).toFixed(0) + ' KB'; return (n/1024/1024).toFixed(1) + ' MB'; }
+
+  async function refreshSessionAssets(){
+    var grid = document.getElementById('sess-grid');
+    var count = document.getElementById('sess-count');
+    if (!grid) return;
+    try {
+      var r = await fetch(bffBase() + '/api/session/assets', { credentials: 'include' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var j = await r.json();
+      sessionAssets = (j && j.assets) || [];
+    } catch (e){
+      sessionAssets = [];
+      if (count) count.textContent = '加载失败';
+      return;
+    }
+    if (count) count.textContent = '已上传 ' + sessionAssets.length + ' 张（无需重复上传）';
+    if (!sessionAssets.length){
+      grid.innerHTML = '<div class="sess-empty">尚未上传图片</div>';
+      return;
+    }
+    grid.innerHTML = '';
+    sessionAssets.forEach(function(a, idx){
+      var rel = a.relative_path || '';
+      var name = a.original_filename || a.filename || ('asset-' + idx);
+      var cell = document.createElement('label');
+      cell.className = 'sess-cell' + (sessAllChecked ? '' : ' off');
+      cell.title = name + ' · ' + fmtBytes(a.bytes);
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'cb'; cb.checked = sessAllChecked; cb.value = rel;
+      cb.setAttribute('data-idx', String(idx));
+      cb.addEventListener('change', function(){ cell.classList.toggle('off', !cb.checked); });
+      var img = document.createElement('img');
+      img.src = assetThumbURL(rel); img.alt = name; img.loading = 'lazy';
+      var nm = document.createElement('span');
+      nm.className = 'nm'; nm.textContent = name;
+      cell.appendChild(cb); cell.appendChild(img); cell.appendChild(nm);
+      grid.appendChild(cell);
+    });
+  }
+
+  function activeCreateMode(){
+    var t = document.querySelector('.ctab.active');
+    return t ? t.getAttribute('data-mode') : 'template';
+  }
+
+  // 将勾选的已上传图片并入当前模式的预览，使渲染门槛（≥5 张）基于服务器已有
+  // 素材，无需因失败/刷新而重新上传。
+  function mergeSelectedToPreview(){
+    var selected = sessionAssets.filter(function(a){
+      return sessionAssets.indexOf(a) >= 0 && selectedRels().indexOf(a.relative_path) >= 0;
+    });
+    if (!selected.length){ showToast('请先勾选要加入预览的图片'); return; }
+    var mode = activeCreateMode();
+    if (mode === 'script'){
+      selected.forEach(function(a){
+        if (scriptUploadedImages.some(function(im){ return im.rel === a.relative_path; })) return;
+        scriptUploadedImages.push({ url: assetThumbURL(a.relative_path), name: a.original_filename || a.filename || '', size: a.bytes, rel: a.relative_path });
+      });
+      scriptUploaded = scriptUploadedImages.length;
+      renderScriptUploadPreview();
+      showToast('已将 ' + selected.length + ' 张已上传图片加入脚本模式预览');
+    } else {
+      selected.forEach(function(a){
+        if (uploadedImages.some(function(im){ return im.rel === a.relative_path; })) return;
+        uploadedImages.push({ url: assetThumbURL(a.relative_path), name: a.original_filename || a.filename || '', size: a.bytes, rel: a.relative_path });
+      });
+      uploadedCount = uploadedImages.length;
+      renderUploadPreview();
+      showToast('已将 ' + selected.length + ' 张已上传图片加入预览');
+    }
+  }
+
+  function selectedRels(){
+    var grid = document.getElementById('sess-grid');
+    var out = [];
+    if (!grid) return out;
+    grid.querySelectorAll('input.cb').forEach(function(cb){ if (cb.checked) out.push(cb.value); });
+    return out;
+  }
+
+  (function bindSessionAssets(){
+    var toggle = document.getElementById('sess-toggle');
+    var refresh = document.getElementById('sess-refresh');
+    var merge = document.getElementById('sess-merge');
+    if (toggle) toggle.addEventListener('click', function(){
+      sessAllChecked = !sessAllChecked;
+      var grid = document.getElementById('sess-grid');
+      if (grid) grid.querySelectorAll('input.cb').forEach(function(cb){ cb.checked = sessAllChecked; var c = cb.closest('.sess-cell'); if (c) c.classList.toggle('off', !sessAllChecked); });
+      toggle.textContent = sessAllChecked ? '全不选' : '全选';
+    });
+    if (refresh) refresh.addEventListener('click', refreshSessionAssets);
+    if (merge) merge.addEventListener('click', mergeSelectedToPreview);
+  })();
+
   async function scriptHandleFiles(files){
     var prog = document.getElementById('script-progress');
     var st = document.getElementById('script-status');
@@ -2253,6 +2410,7 @@
         scriptUploadedImages.push({ file: list[i], url: URL.createObjectURL(list[i]), name: list[i].name, size: list[i].size });
         st.textContent = '已上传 ' + scriptUploaded + ' 张素材';
         renderScriptUploadPreview();
+        refreshSessionAssets();
       } catch (e){ st.textContent = '上传失败：' + e.message; showToast('上传失败：' + e.message); return; }
     }
   }

@@ -80,6 +80,9 @@ func main() {
 		api.POST("/image-batches", h.RequireAuth(), ibh.Create)
 		api.GET("/image-batches/:id", h.RequireAuth(), ibh.Get)
 		api.POST("/image-batches/:id/render", h.RequireAuth(), ibh.Render)
+		// 当前会话已上传素材：列表（供复选框选择，避免上传失败后重复上传）+ 缩略图。
+		api.GET("/session/assets", h.SessionAssets)
+		api.GET("/assets", h.ServeAsset)
 		// Render queue: returns ONLY the caller's own jobs (scoped by ff_sid).
 		api.GET("/render-queue", h.RequireAuth(), h.RenderQueue)
 		api.POST("/render-queue/:jobId/republish", h.RequireAuth(), h.RepublishRender)

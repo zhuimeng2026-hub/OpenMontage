@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -45,6 +46,12 @@ type Config struct {
 	// The upstream MCP does NOT yet accept composition source, so this
 	// stays false: a render request with custom code returns 501 + a clear note
 	// instead of silently falling back to a template.
+	// RepoRoot is the OpenMontage repository root (the parent of the
+	// ``projects/`` directory where uploaded session assets live). It is used
+	// to serve uploaded-asset thumbnails at /api/assets. Defaults to three
+	// levels above StaticDir (frameflow/bff/web -> repo root) and can be
+	// overridden with REPO_ROOT for non-standard deploy layouts.
+	RepoRoot                 string
 	CustomCompositionEnabled bool
 	// BusinessStubJSON is an optional JSON map (business_key -> [{url,name}])
 	// used by the default StubFetcher. Replace with a real Fetcher impl to pull
@@ -88,6 +95,7 @@ func Load() *Config {
 		Port:                     get("BFF_PORT", "8080"),
 		SessionSecure:            os.Getenv("SESSION_SECURE") == "true",
 		StaticDir:                get("STATIC_DIR", "./web"),
+		RepoRoot:                 get("REPO_ROOT", filepath.Join(get("STATIC_DIR", "./web"), "..", "..", "..")),
 		StateDBPath:              get("STATE_DB_PATH", "./data/frameflow.db"),
 		AuthRequired:             os.Getenv("AUTH_REQUIRED") == "true",
 		DevLoginAllowed:          os.Getenv("DEV_LOGIN_ALLOWED") == "true",
