@@ -1,0 +1,69 @@
+# OpenMontage 系统状态监控托管单元（systemd）
+#
+# 作用：常驻运行 om_mcp_probe.py status --serve，暴露本机状态报告
+#       （CPU/内存/磁盘/端口/进程/上游连通），供远端 curl 拉取与存活探活。
+#       进程异常退出时由 systemd 自动拉起（Restart=always）。
+#
+# 部署（生产 Linux 渲染机）：
+#   sudo cp deploy/om-mcp-probe.service /etc/systemd/system/
+#   sudo cp deploy/monitor.env.example   /etc/openmontage/monitor.env
+#   sudo nano /etc/openmontage/monitor.env   # 填入真实 token 与上游地址
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now om-mcp-probe
+#   systemctl status om-mcp-probe
+#
+# 说明：
+#   - 默认 role=all（检查 80/443/8080/8900 + 关键进程 + 上游连通）。
+#     若监控机仅承担渲染（MCP/Remotion），把 OM_PROBE_ROLE 改为 render。
+#   - 上游连通探测目标由 OM_PROBE_TARGET 控制；双机部署下渲染机指向 BFF
+#     （如 http://<bff-host>:8080/api/mcp），BFF 机指向上游 MCP
+#     （如 http://localhost:8900/mcp）。
+#   - 容器内或无 systemd 的环境：用脚本 deploy/om-mcp-probe.bat 的 Linux 等价物
+#     （while true; do python3 om_mcp_probe.py ...; sleep 2; done）前台跑。
+
+[Unit]
+Description=OpenMontage system status probe (om_mcp_probe)
+Documentation=file:///opt/OpenMontage/om_mcp_probe.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 运行身份：用专用低权限账户，避免 root。需对该账户授权读写 REPO_DIR 与日志目录。
+User=openmontage
+Group=openmontage
+
+# 仓库根目录（按实际部署路径修改）
+WorkingDirectory=/opt/OpenMontage
+
+# 环境变量：token / 上游地址 / 角色集中管理，避免明文写进 unit
+EnvironmentFile=/etc/openmontage/monitor.env
+
+# 与渲染后端一致，清掉沙箱会话变量，防止安全删除钩子 fail-closed 误伤
+# Remotion 暂存/锁文件清理。Linux 部署一般无此变量，unset 也无害。
+Environment=CODEBUDDY_SESSION_ID= CLAUDE_SESSION_ID= NODE_OPTIONS=
+
+ExecStart=/usr/bin/python3 om_mcp_probe.py status \
+    --role ${OM_PROBE_ROLE:-all} \
+    --target ${OM_PROBE_TARGET:-} \
+    --serve 0.0.0.0:${OM_PROBE_PORT:-9099}
+
+# 异常退出自动拉起
+Restart=always
+RestartSec=3
+# 启动后给 10s 健康检查窗口，期间非 0 退出不计入失败计数
+StartLimitIntervalSec=0
+
+# 资源与权限收敛
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/OpenMontage /var/log/openmontage
+PrivateTmp=true
+
+# 日志：走 journald，便于 `journalctl -u om-mcp-probe`
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=om-mcp-probe
+
+[Install]
+WantedBy=multi-user.target
