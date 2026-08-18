@@ -781,6 +781,7 @@ class VideoCompose(BaseTool):
         "screen-demo": "Explainer",
         "presenter": "TalkingHead",
         "animation-first": "Explainer",
+        "custom-composition": "CustomComposition",
     }
 
     @classmethod
@@ -1074,6 +1075,29 @@ class VideoCompose(BaseTool):
 
         output_path = Path(inputs.get("output_path", "renders/output.mp4"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # --- Custom user-code pipeline (script mode / 自定义合成) ---
+        # The user supplies TSX `code` and the uploaded session images; there is
+        # no templated cut timeline, so bypass the cut/validation gates below and
+        # route straight to Remotion with the custom composition.
+        if edit_decisions.get("composition_mode") == "custom" and \
+                str(edit_decisions.get("render_runtime", "remotion")).strip().lower() == "remotion":
+            remotion_inputs: dict[str, Any] = {
+                "edit_decisions": dict(edit_decisions),
+                "output_path": str(output_path),
+            }
+            profile = inputs.get("profile") or inputs.get("output_profile")
+            if profile:
+                remotion_inputs["profile"] = profile
+            # Forward the creator-facing render timeout, live-progress callback,
+            # and render job id so the slot gate + SSE progress keep working.
+            if inputs.get("remotion_timeout_ms") is not None:
+                remotion_inputs["remotion_timeout_ms"] = inputs["remotion_timeout_ms"]
+            if inputs.get("_progress_callback") is not None:
+                remotion_inputs["_progress_callback"] = inputs["_progress_callback"]
+            if inputs.get("_job_id") is not None:
+                remotion_inputs["_job_id"] = inputs["_job_id"]
+            return self._remotion_render(remotion_inputs)
 
         # Build asset lookup: id -> asset info
         asset_lookup = {a["id"]: a for a in asset_manifest.get("assets", [])}
@@ -1489,6 +1513,22 @@ class VideoCompose(BaseTool):
         # 分隔符（/、..），避免目录穿越。
         staging_id = inputs.get("staging_id") or uuid.uuid4().hex[:12]
         staged_dir = composer_dir / "public" / "_staged" / staging_id
+
+        # --- Custom composition mode ---
+        # Stage the uploaded images (the only media channel for user TSX) so they
+        # can be referenced via staticFile() inside the custom code. Runs before
+        # the generic cuts loop (custom compositions carry no cuts).
+        if (composition_data or {}).get("composition_mode") == "custom":
+            custom_images = props.get("images") or []
+            staged_images = []
+            for idx, img in enumerate(custom_images):
+                if img:
+                    staged_images.append(self._stage_remotion_asset(img, idx, staged_dir))
+                else:
+                    staged_images.append(img)
+            props["images"] = staged_images
+            # Force composition routing to the runtime-compiled component.
+            props["renderer_family"] = "custom-composition"
 
         for idx, cut in enumerate(props.get("cuts", [])):
             # cuts[].source (Ken Burns / still) + background image/video layers

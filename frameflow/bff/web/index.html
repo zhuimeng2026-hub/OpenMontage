@@ -284,6 +284,20 @@
   .upload-preview{margin-top:14px;}
   .script-tag{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);}
   .script-tag b{color:var(--primary);font-weight:600;}
+  /* ============ 渲染脚本选择器（系统 + 我的脚本，单选 / 分页） ============ */
+  .script-list{max-height:240px;overflow:auto;border:1px solid var(--border-soft);border-radius:10px;background:var(--bg-surface);padding:8px;}
+  .script-group-title{font-size:12px;color:var(--text-secondary);margin:6px 2px 4px;font-weight:600;}
+  .script-opt{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;cursor:pointer;font-size:14px;}
+  .script-opt:hover{background:rgba(255,255,255,0.04);}
+  .script-opt input{accent-color:var(--primary);}
+  .script-opt-user{color:var(--text-primary);}
+  .script-key{margin-left:auto;font-size:11px;color:var(--text-secondary);font-family:monospace;}
+  .script-empty{font-size:13px;color:var(--text-secondary);padding:6px 4px;}
+  .script-hint{font-size:12px;color:#F8B4B4;margin-top:8px;min-height:16px;}
+  .script-pager{display:flex;align-items:center;gap:10px;margin-top:8px;}
+  .pager-btn{background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft);border-radius:8px;padding:4px 12px;cursor:pointer;font-size:13px;}
+  .pager-btn:disabled{opacity:.4;cursor:not-allowed;}
+  .pager-info{font-size:12px;color:var(--text-secondary);}
   .thumb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:10px;margin-top:10px;}
   .thumb{position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;background:rgba(255,255,255,0.05);border:1px solid var(--border-soft);}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -603,12 +617,11 @@
                 <div class="tmpl" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><span class="tn">产品宣传</span></div>
                 <div class="tmpl" style="background:linear-gradient(135deg,#7C5CFF,#F87171)"><span class="tn">节日祝福</span></div>
               </div>
-              <div class="pl" style="margin-top:14px">Remotion 渲染脚本</div>
-              <select id="image-script-select" class="opt" style="width:100%;box-sizing:border-box;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft)">
-                <option value="ecommerce-product-demo">电商产品演示</option>
-                <option value="cinematic-montage">电影混剪</option>
-                <option value="photo-ken-burns">照片运镜</option>
-              </select>
+              <div class="pl" style="margin-top:14px">渲染脚本（系统脚本 + 我的脚本）</div>
+              <div id="image-script-list" class="script-list"></div>
+              <div id="image-script-hint" class="script-hint"></div>
+              <button class="btn-ghost" id="open-in-script-mode" type="button" style="display:none;margin-top:10px">在脚本模式打开此脚本 →</button>
+              <div id="image-script-pager" class="script-pager"></div>
             </div>
             <div class="panel">
               <h4>渲染设置</h4>
@@ -637,6 +650,12 @@
                 <button class="btn-ghost" id="comp-save">保存</button>
                 <button class="btn-ghost" id="comp-reset">重置为模板</button>
                 <span id="comp-msg" class="comp-msg"></span>
+              </div>
+              <div class="script-load-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+                <span class="pl" style="margin:0">从我的脚本载入：</span>
+                <select id="script-load-select" class="opt" style="flex:1;min-width:140px"><option value="">— 选择已保存脚本 —</option></select>
+                <button class="btn-ghost" id="script-load-btn" type="button">载入编辑器</button>
+                <button class="btn-ghost" id="script-load-refresh" type="button">刷新</button>
               </div>
               <div id="monaco" class="monaco-host"><div class="loading">编辑器加载中…</div></div>
             </div>
@@ -1028,7 +1047,7 @@
       document.getElementById('view-' + view).classList.add('active');
       document.getElementById('topbar-title').textContent = titles[view];
       document.querySelector('.content').scrollTop = 0;
-      if (view === 'create') refreshQuota();
+      if (view === 'create') { refreshQuota(); loadScriptPicker(); }
       if (view === 'gallery') { loadGallery(); }
       if (view === 'script-def') { loadScriptDefList(); }
     });
@@ -1646,7 +1665,15 @@
   var thumbGrid     = document.getElementById('thumb-grid');
   var previewCount  = document.getElementById('preview-count');
   var previewScript = document.getElementById('preview-script');
-  var imageScriptSelect = document.getElementById('image-script-select');
+  // 当前选中的渲染脚本：{id, name, kind:'system'|'user'}。create 页用它替代原 <select>。
+  var selectedScript = { id: '', name: '', kind: 'system' };
+  var savedScriptPage = 0;
+  var savedScriptPageSize = 8;
+  var savedScriptTotal = 0;
+  // 已保存脚本的 id -> {name, content}，供模板模式桥接到脚本模式时载入编辑器。
+  var savedScriptContent = {};
+  // 切换脚本模式时若编辑器尚未就绪，先暂存待灌入的脚本内容。
+  var pendingScriptContent = null;
   var currentImageBatch = null;
   // Per-submission image cap. Default matches the free tier; refreshed from
   // /api/quota so the hint and the guard stay aligned with the user's tier.
@@ -1656,13 +1683,17 @@
   async function ensureImageBatch(){
     if (currentImageBatch) return currentImageBatch;
     if (window.FFMCP && window.FFMCP.demo) return null;
+    // 自定义脚本在模板模式无法渲染：提前给出明确提示，避免上传完成才遇到 422。
+    if (selectedScript.kind === 'user'){
+      throw new Error('当前选中的是自定义脚本，模板模式仅支持系统脚本渲染，请切换到「脚本模式」');
+    }
     var base = bffBase();
     if (!base) throw new Error('未配置 BFF 地址');
+    var scriptId = selectedScript.id || 'ecommerce-product-demo';
     currentImageBatch = await jsonRequest(base + '/api/image-batches', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({script_id: imageScriptSelect ? imageScriptSelect.value : 'ecommerce-product-demo'})
+      body:JSON.stringify({script_id: scriptId})
     });
-    if (previewScript && imageScriptSelect) previewScript.textContent = imageScriptSelect.options[imageScriptSelect.selectedIndex].text;
     return currentImageBatch;
   }
 
@@ -1695,7 +1726,10 @@
       uploadDrop.style.pointerEvents = loading ? 'none' : '';
       uploadDrop.style.opacity = loading ? '0.6' : '';
     }
-    if (renderBtn) renderBtn.disabled = loading;
+    if (renderBtn){
+      // 上传中禁用；上传结束是否恢复取决于当前是否选中自定义脚本（自定义脚本不可在模板模式渲染）。
+      renderBtn.disabled = loading ? true : (selectedScript.kind === 'user');
+    }
   }
 
   // 把已上传图片渲染为缩略图网格，并标注本批将使用的渲染脚本（当前选中的模板）。
@@ -1723,12 +1757,136 @@
     updatePreviewScript();
   }
 
-  // 渲染脚本 = 当前选中的模板名（模板模式下整批图片共用一个预设）。
+  // 渲染脚本 = 当前选中的脚本（模板模式下整批图片共用一个预设）。
   function updatePreviewScript(){
     if (!previewScript) return;
-    var scriptSelect = document.getElementById('image-script-select');
-    var selected = scriptSelect && scriptSelect.options[scriptSelect.selectedIndex];
-    previewScript.textContent = selected ? selected.textContent : '—';
+    var sel = document.querySelector('input[name="ff-script"]:checked');
+    previewScript.textContent = sel ? (sel.getAttribute('data-name') || sel.value) : '—';
+  }
+
+  function escAttr(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  // 选中某个脚本单选框后，更新预览标注，并按类型决定「开始渲染」是否可用。
+  function applySelectedScript(inp){
+    selectedScript = { id: inp.value, name: inp.getAttribute('data-name') || '', kind: inp.getAttribute('data-kind') || 'system' };
+    updatePreviewScript();
+    var hint = document.getElementById('image-script-hint');
+    var bridge = document.getElementById('open-in-script-mode');
+    if (selectedScript.kind === 'user'){
+      if (renderBtn) renderBtn.disabled = true;
+      if (hint) hint.textContent = '自定义脚本需在「脚本模式」中渲染：上传图片后由脚本读取使用。';
+      if (bridge) bridge.style.display = '';
+    } else {
+      if (renderBtn && !isUploading) renderBtn.disabled = false;
+      if (hint) hint.textContent = '';
+      if (bridge) bridge.style.display = 'none';
+    }
+  }
+
+  // 从模板模式选中自定义脚本后，一键跳到脚本模式并把脚本内容灌进 Monaco 编辑器；
+  // 用户在脚本模式上传图片即可让该自定义脚本读取使用（走 compositions 管线）。
+  function openScriptInEditor(name, content){
+    var tab = document.querySelector('.ctab[data-mode="script"]');
+    if (tab) tab.click(); // 触发脚本模式显隐 + initMonaco
+    var cn = document.getElementById('comp-name');
+    if (cn && name) cn.value = name;
+    if (content != null){
+      if (ffMonaco) ffMonaco.setValue(content);
+      else pendingScriptContent = content; // 编辑器异步就绪后再灌入
+    }
+  }
+  (function bindOpenInScriptMode(){
+    var btn = document.getElementById('open-in-script-mode');
+    if (!btn) return;
+    btn.addEventListener('click', function(){
+      if (selectedScript.kind !== 'user') return;
+      var entry = savedScriptContent[selectedScript.id];
+      if (!entry){ showToast('未找到该脚本内容，请刷新列表'); return; }
+      openScriptInEditor(entry.name, entry.content);
+      showToast('已打开「' + entry.name + '」，请在右侧上传图片后渲染');
+    });
+  })();
+
+  // 渲染翻页 + 单选的脚本选择器：系统脚本常驻，已保存脚本分页加载。
+  async function loadScriptPicker(){
+    var listEl = document.getElementById('image-script-list');
+    if (!listEl) return;
+    savedScriptContent = {}; // 重新拉取前清空，避免分页残留旧条目
+    var base = bffBase();
+    var systemScripts = [];
+    try {
+      if (base){
+        var r1 = await fetch(base + '/api/image-scripts', { credentials:'include' });
+        var j1 = await r1.json();
+        systemScripts = (j1 && j1.scripts) || [];
+      }
+    } catch(e){ systemScripts = []; }
+    var savedScripts = [];
+    try {
+      if (base){
+        var r2 = await fetch(base + '/api/scripts?limit=' + savedScriptPageSize + '&offset=' + (savedScriptPage * savedScriptPageSize), { credentials:'include' });
+        var j2 = await r2.json();
+        savedScripts = (j2 && j2.scripts) || [];
+        savedScriptTotal = (j2 && typeof j2.total === 'number') ? j2.total : savedScripts.length;
+      }
+    } catch(e){ savedScripts = []; savedScriptTotal = 0; }
+
+    var html = '';
+    html += '<div class="script-group-title">系统脚本</div>';
+    if (!systemScripts.length){ html += '<div class="script-empty">暂无</div>'; }
+    systemScripts.forEach(function(s){
+      html += '<label class="script-opt"><input type="radio" name="ff-script" value="'+escAttr(s.id)+'" data-kind="system" data-name="'+escAttr(s.name)+'"><span>'+escAttr(s.name)+'</span></label>';
+    });
+    html += '<div class="script-group-title">我的脚本（已保存）</div>';
+    if (!savedScripts.length){ html += '<div class="script-empty">尚未保存脚本 · 可在「定义视频脚本」页保存</div>'; }
+    savedScripts.forEach(function(s){
+      savedScriptContent[s.id] = { name: s.name, content: s.content };
+      html += '<label class="script-opt script-opt-user"><input type="radio" name="ff-script" value="'+escAttr(s.id)+'" data-kind="user" data-name="'+escAttr(s.name)+'"><span>'+escAttr(s.name)+'</span><em class="script-key">'+escAttr(s.key || '')+'</em></label>';
+    });
+    listEl.innerHTML = html;
+
+    listEl.querySelectorAll('input[name="ff-script"]').forEach(function(r){
+      r.addEventListener('change', function(e){ applySelectedScript(e.target); });
+    });
+
+    // 还原当前选择（分页切换后保持选中态），无选中则默认第一项系统脚本。
+    var radios = listEl.querySelectorAll('input[name="ff-script"]');
+    var matched = false;
+    radios.forEach(function(r){
+      var ok = (r.value === selectedScript.id) && (r.getAttribute('data-kind') === selectedScript.kind);
+      r.checked = ok;
+      if (ok) matched = true;
+    });
+    if (!matched && radios.length){
+      var firstSys = listEl.querySelector('input[name="ff-script"][data-kind="system"]') || radios[0];
+      firstSys.checked = true;
+      applySelectedScript(firstSys);
+    } else if (matched){
+      var sel = listEl.querySelector('input[name="ff-script"]:checked');
+      if (sel) applySelectedScript(sel);
+    }
+    renderScriptPager();
+    updatePreviewScript();
+  }
+
+  function renderScriptPager(){
+    var pager = document.getElementById('image-script-pager');
+    if (!pager) return;
+    if (savedScriptTotal <= savedScriptPageSize){ pager.innerHTML = ''; return; }
+    var totalPages = Math.ceil(savedScriptTotal / savedScriptPageSize);
+    var cur = savedScriptPage + 1;
+    pager.innerHTML =
+      '<button type="button" class="pager-btn" id="script-prev"'+(savedScriptPage<=0?' disabled':'')+'>上一页</button>'+
+      '<span class="pager-info">'+cur+' / '+totalPages+'</span>'+
+      '<button type="button" class="pager-btn" id="script-next"'+(savedScriptPage>=totalPages-1?' disabled':'')+'>下一页</button>';
+    var prev = document.getElementById('script-prev');
+    var next = document.getElementById('script-next');
+    if (prev) prev.addEventListener('click', function(){ if (savedScriptPage>0){ savedScriptPage--; loadScriptPicker(); } });
+    if (next) next.addEventListener('click', function(){ if ((savedScriptPage+1)*savedScriptPageSize < savedScriptTotal){ savedScriptPage++; loadScriptPicker(); } });
   }
 
   // 清空预览并释放 object URL，避免内存泄漏。
@@ -1799,6 +1957,9 @@
     uploadInput.addEventListener('change', function(){ if (uploadInput.files) handleFiles(uploadInput.files); });
   }
 
+  // 初次加载即填充创建页的脚本选择器（系统 + 我的脚本）。
+  loadScriptPicker();
+
   if (renderBtn){
     renderBtn.addEventListener('click', async function(){
       if (uploadedCount < minFilesPerSubmission){
@@ -1855,7 +2016,7 @@
   var ffMonaco = null;
   var scriptUploaded = 0;
   var DEFAULT_COMP =
-'import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing} from "remotion";\n' +
+'import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing, staticFile} from "remotion";\n' +
 '\n' +
 'export const MyComposition: React.FC<{images: string[]; durationPerImage?: number}> = (\n' +
 '  {images, durationPerImage = 3}\n' +
@@ -1873,7 +2034,7 @@
 '        <Sequence key={i} from={i * durationPerImage} durationInFrames={durationPerImage}>\n' +
 '          <AbsoluteFill>\n' +
 '            <img\n' +
-'              src={src}\n' +
+'              src={staticFile(src)}\n' +
 '              style={{width: "100%", height: "100%", objectFit: "cover", transform: `scale(${i === idx ? scale : 1})`}}\n' +
 '            />\n' +
 '          </AbsoluteFill>\n' +
@@ -1900,6 +2061,8 @@
         scrollBeyondLastLine: false,
         tabSize: 2
       });
+      // 若从模板模式桥接进来时编辑器尚未就绪，此刻把待灌入的脚本内容写入。
+      if (pendingScriptContent != null){ ffMonaco.setValue(pendingScriptContent); pendingScriptContent = null; }
     });
   }
 
@@ -1913,9 +2076,49 @@
       var mode = tab.getAttribute('data-mode');
       document.getElementById('mode-template').style.display = mode === 'template' ? 'block' : 'none';
       document.getElementById('mode-script').style.display = mode === 'script' ? 'block' : 'none';
-      if (mode === 'script') initMonaco();
+      if (mode === 'script'){ initMonaco(); loadScriptLoadSelect(); }
     });
   });
+
+  // 脚本模式：从「我的脚本」载入已保存的自定义脚本到编辑器。
+  function loadScriptLoadSelect(){
+    var sel = document.getElementById('script-load-select');
+    if (!sel) return;
+    var base = bffBase();
+    if (!base) return;
+    fetch(base + '/api/scripts?limit=200', { credentials: 'include' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var items = (j && j.scripts) || [];
+        sel.innerHTML = '<option value="">— 选择已保存脚本 —</option>' +
+          items.map(function(s){ return '<option value="'+escAttr(s.id)+'">'+escAttr(s.name)+'</option>'; }).join('');
+      })
+      .catch(function(){ /* 保持默认选项 */ });
+  }
+  (function bindScriptLoader(){
+    var btn = document.getElementById('script-load-btn');
+    var refresh = document.getElementById('script-load-refresh');
+    var sel = document.getElementById('script-load-select');
+    if (!btn || !sel) return;
+    function doLoad(){
+      var id = sel.value;
+      if (!id){ showToast('请先选择一个已保存脚本'); return; }
+      fetch(bffBase() + '/api/scripts?limit=200', { credentials: 'include' })
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          var items = (j && j.scripts) || [];
+          var found = null;
+          for (var i = 0; i < items.length; i++){ if (items[i].id === id){ found = items[i]; break; } }
+          if (!found){ showToast('未找到该脚本，请刷新'); return; }
+          if (ffMonaco) ffMonaco.setValue(found.content || '');
+          var cn = document.getElementById('comp-name'); if (cn && found.name) cn.value = found.name;
+          setCompMsg('已载入：' + found.name, 'ok');
+        })
+        .catch(function(e){ setCompMsg('载入失败：' + e.message, 'err'); });
+    }
+    btn.addEventListener('click', doLoad);
+    if (refresh) refresh.addEventListener('click', loadScriptLoadSelect);
+  })();
 
   // 保存合成
   document.getElementById('comp-save').addEventListener('click', async function(){

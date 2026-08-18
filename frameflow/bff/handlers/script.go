@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -56,15 +57,20 @@ func (h *ScriptHandler) Create(c *gin.Context) {
 	s := h.Scripts.Save(scope, req.Name, req.Content)
 	c.JSON(http.StatusOK, gin.H{
 		"id":         s.ID,
+		"key":        s.Key,
 		"name":       s.Name,
 		"created_at": s.CreatedAt,
 		"updated_at": s.UpdatedAt,
 	})
 }
 
-// List returns the session's saved scripts (newest first).
+// List returns the session's saved scripts (newest first), paginated when
+// ?limit is provided. total is always the unfiltered count.
 func (h *ScriptHandler) List(c *gin.Context) {
 	sid := h.ensureSession(c)
 	scope := renderQueueOwnerID(sid)
-	c.JSON(http.StatusOK, gin.H{"scripts": h.Scripts.List(scope)})
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "0"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	scripts, total := h.Scripts.List(scope, limit, offset)
+	c.JSON(http.StatusOK, gin.H{"scripts": scripts, "total": total})
 }

@@ -23,6 +23,20 @@ import {
   ecommerceProductDemoDefaultProps,
   ECOMMERCE_PRODUCT_DEMO_DURATION,
 } from "../../demo/src/EcommerceProductDemo";
+import { CustomComposition } from "./CustomComposition";
+
+// Runtime-compiled user composition: duration is derived from how many images
+// the user supplied (images.length × durationPerImage). Falls back to 30s.
+const calculateCustomMetadata: CalculateMetadataFunction<Record<string, unknown>> = async ({
+  props,
+}) => {
+  const images = Array.isArray((props as { images?: unknown }).images)
+    ? ((props as { images: unknown[] }).images as unknown[])
+    : [];
+  const dpi = Number((props as { durationPerImage?: number }).durationPerImage) || 3;
+  const frames = Math.max(1, Math.round(images.length * dpi * 30));
+  return { durationInFrames: frames };
+};
 
 const calculateEcommerceMetadata: CalculateMetadataFunction<Record<string, unknown>> = async ({ props }) => {
   const target = Number((props as { targetDurationSeconds?: number }).targetDurationSeconds);
@@ -351,6 +365,20 @@ export const Root: React.FC = () => {
           fadeOutSeconds: 1.5,
           overlay: true,
         } as EndTagProps}
+      />
+      <Composition
+        id="CustomComposition"
+        component={CustomComposition}
+        durationInFrames={30 * 30}
+        fps={30}
+        width={1080}
+        height={1920}
+        defaultProps={{
+          code: "",
+          images: [],
+          durationPerImage: 3,
+        }}
+        calculateMetadata={calculateCustomMetadata}
       />
     </>
   );

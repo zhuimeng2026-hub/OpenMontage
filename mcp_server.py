@@ -597,6 +597,7 @@ async def create_remotion_video_share(
     duration_per_image: float = 3.0,
     aspect_ratio: str = "9:16",
     title: Optional[str] = None,
+    code: Optional[str] = None,
     queue_owner_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Generate and share a Remotion photo video from images in this MCP session.
@@ -617,9 +618,20 @@ async def create_remotion_video_share(
         "cinematic-montage": "cinematic-trailer",
         "ecommerce-product-demo": "ecommerce-product-demo",
     }
-    renderer_family = script_families.get(script_id)
-    if renderer_family is None:
-        return {"success": False, "status": "failed", "stage": "validation", "message": f"Unknown script_id: {script_id}", "error": f"script_id must be one of: {', '.join(sorted(script_families))}"}
+    # Custom composition mode: a caller-supplied TSX source. Bypasses the
+    # templated script_id lookup entirely and requires the safeguard flag.
+    if code:
+        if not str(os.environ.get("CUSTOM_COMPOSITION_ENABLED", "")).strip().lower() in ("1", "true", "yes", "on"):
+            return {
+                "success": False, "status": "failed", "stage": "validation",
+                "message": "自定义合成渲染未启用：请在 .env 设置 CUSTOM_COMPOSITION_ENABLED=true",
+                "error": "custom composition rendering disabled",
+            }
+        renderer_family = "custom-composition"
+    else:
+        renderer_family = script_families.get(script_id)
+        if renderer_family is None:
+            return {"success": False, "status": "failed", "stage": "validation", "message": f"Unknown script_id: {script_id}", "error": f"script_id must be one of: {', '.join(sorted(script_families))}"}
 
     started = time.monotonic()
     sid = get_mcp_session_id()
@@ -662,29 +674,52 @@ async def create_remotion_video_share(
         motion = ["zoom-in", "pan-left", "ken-burns", "pan-right"]
         cuts = []
         scene_plan = []
-        for index, asset in enumerate(safe_assets):
-            start_seconds = index * duration
-            end_seconds = (index + 1) * duration
-            animation = motion[index % len(motion)]
-            cuts.append({
-                "id": f"cut-{index:04d}", "source": asset["id"], "in_seconds": start_seconds,
-                "out_seconds": end_seconds, "layer": "primary", "transition_in": "fade" if index else "cut",
-                "transition_duration": 0.25 if index else 0, "transform": {"animation": animation},
-            })
-            scene_plan.append({
-                "type": "image",
-                "description": f"Uploaded customer photo {index + 1}",
-                "shot_intent": "Present the uploaded photo with restrained camera motion",
-                "narrative_role": "customer_photo",
-                "hero_moment": index == 0,
-                "shot_language": {"camera_movement": animation, "shot_size": "full-frame"},
-            })
-        edit_decisions = {
-            "version": "1.0", "cuts": cuts, "render_runtime": "remotion",
-            "renderer_family": renderer_family, "composition_mode": "templated",
-            "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "targetDurationSeconds": duration * len(safe_assets), "compose_target": {"width": width, "height": height, "fit": "cover"}},
-        }
-        if script_id == "ecommerce-product-demo":
+        edit_decisions = {}
+        if code:
+            # Custom composition mode: the caller supplied TSX source. The
+            # uploaded session images are passed directly to the user code via
+            # the `images` field (referenced with staticFile() inside the code).
+            images = [a["path"] for a in safe_assets]
+            edit_decisions = {
+                "version": "1.0",
+                "cuts": [],
+                "render_runtime": "remotion",
+                "renderer_family": "custom-composition",
+                "composition_mode": "custom",
+                "custom_code": code,
+                "images": images,
+                "duration_per_image": duration,
+                "metadata": {
+                    "title": title or f"{project} 自定义合成",
+                    "script_id": "custom",
+                    "targetDurationSeconds": duration * max(len(images), 1),
+                    "compose_target": {"width": width, "height": height, "fit": "cover"},
+                },
+            }
+        else:
+            for index, asset in enumerate(safe_assets):
+                start_seconds = index * duration
+                end_seconds = (index + 1) * duration
+                animation = motion[index % len(motion)]
+                cuts.append({
+                    "id": f"cut-{index:04d}", "source": asset["id"], "in_seconds": start_seconds,
+                    "out_seconds": end_seconds, "layer": "primary", "transition_in": "fade" if index else "cut",
+                    "transition_duration": 0.25 if index else 0, "transform": {"animation": animation},
+                })
+                scene_plan.append({
+                    "type": "image",
+                    "description": f"Uploaded customer photo {index + 1}",
+                    "shot_intent": "Present the uploaded photo with restrained camera motion",
+                    "narrative_role": "customer_photo",
+                    "hero_moment": index == 0,
+                    "shot_language": {"camera_movement": animation, "shot_size": "full-frame"},
+                })
+            edit_decisions = {
+                "version": "1.0", "cuts": cuts, "render_runtime": "remotion",
+                "renderer_family": renderer_family, "composition_mode": "templated",
+                "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "targetDurationSeconds": duration * len(safe_assets), "compose_target": {"width": width, "height": height, "fit": "cover"}},
+            }
+        if script_id == "ecommerce-product-demo" and not code:
             if len(safe_assets) < 4:
                 raise ValueError("ecommerce-product-demo requires at least 4 uploaded images")
             # The Remotion composition has four semantic slots. Keep the

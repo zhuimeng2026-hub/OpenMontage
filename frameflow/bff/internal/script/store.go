@@ -1,6 +1,9 @@
 package script
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 	"sync"
 	"time"
 )
@@ -11,6 +14,7 @@ import (
 type Script struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
+	Key       string    `json:"key"`
 	Content   string    `json:"content"`
 	SessionID string    `json:"-"` // owner session; not exported
 	CreatedAt time.Time `json:"created_at"`
@@ -30,11 +34,6 @@ func NewStore() *Store {
 	return &Store{bySess: make(map[string]map[string]*Script)}
 }
 
-func (s *Store) nextID() string {
-	s.seq++
-	return time.Now().Format("20060102150405") + "-" + itoa(s.seq)
-}
-
 func itoa(n uint64) string {
 	if n == 0 {
 		return "0"
@@ -49,23 +48,21 @@ func itoa(n uint64) string {
 	return string(buf[i:])
 }
 
-// Save creates or updates a script owned by the given session (matched by name).
+// Save creates a new script owned by the session. The stored key combines the
+// script name, a per-user tag (derived from the session) and a timestamp, so
+// duplicate display names never collide — every save is a distinct, uniquely
+// identified script (this is the anti-duplicate-naming safeguard).
 func (s *Store) Save(sessionID, name, content string) *Script {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.bySess[sessionID] == nil {
 		s.bySess[sessionID] = make(map[string]*Script)
 	}
+	s.seq++
 	now := time.Now()
-	for _, sc := range s.bySess[sessionID] {
-		if sc.Name == name {
-			sc.Content = content
-			sc.UpdatedAt = now
-			return sc
-		}
-	}
 	sc := &Script{
-		ID:        s.nextID(),
+		ID:        now.Format("20060102150405") + "-" + itoa(s.seq),
+		Key:       buildKey(name, sessionID, now, s.seq),
 		Name:      name,
 		Content:   content,
 		SessionID: sessionID,
@@ -76,8 +73,10 @@ func (s *Store) Save(sessionID, name, content string) *Script {
 	return sc
 }
 
-// List returns all scripts owned by the session (newest first).
-func (s *Store) List(sessionID string) []*Script {
+// List returns scripts owned by the session (newest first). When limit > 0 the
+// result is paginated (offset is 0-based); total is always the unfiltered count
+// so the caller can render pager controls.
+func (s *Store) List(sessionID string, limit, offset int) ([]*Script, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	m := s.bySess[sessionID]
@@ -92,5 +91,47 @@ func (s *Store) List(sessionID string) []*Script {
 			}
 		}
 	}
-	return out
+	total := len(out)
+	if limit > 0 {
+		if offset < 0 {
+			offset = 0
+		}
+		if offset > total {
+			offset = total
+		}
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		out = out[offset:end]
+	}
+	return out, total
+}
+
+// userTag derives a stable, short per-user identifier from the session id.
+// Scripts are scoped per session; this tag makes duplicate display names unique
+// across users without leaking the raw session id.
+func userTag(sessionID string) string {
+	sum := sha256.Sum256([]byte(sessionID))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+// sanitizeName keeps alphanumerics and CJK, replacing everything else with '-'
+// so the key stays readable and reasonably URL/file-safe.
+func sanitizeName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || (r >= 0x4e00 && r <= 0x9fff) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// buildKey produces a globally-unique script key: <name>-<userTag>-<timestamp>-<seq>.
+func buildKey(name, sessionID string, t time.Time, seq uint64) string {
+	return sanitizeName(name) + "-" + userTag(sessionID) + "-" + t.Format("20060102-150405") + "-" + itoa(seq)
 }
