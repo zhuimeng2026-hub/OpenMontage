@@ -1555,7 +1555,7 @@
   function fmtTime(iso){
     try { var d = new Date(iso); if(isNaN(d)) return '';
       var p = function(n){ return (n<10?'0':'')+n; };
-      return p(d.getHours()) + ':' + p(d.getMinutes());
+      return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
     } catch(e){ return ''; }
   }
 
@@ -1567,7 +1567,7 @@
     var republish = (j.status === '已完成' || j.status === '失败') && !url ? '<button type="button" class="qrepublish" data-republish-job="' + esc(j.job_id || '') + '">' + (j.status === '失败' ? '尝试恢复微云链接' : '生成微云链接') + '</button>' : '';
     var jobID = j.job_id || 'unknown-job', name = j.name || '未命名视频', status = j.status || '未知';
     var attrs = interactive ? ' class="vcard video-link" role="button" tabindex="0" aria-label="打开视频：' + esc(name) + '"' : ' class="vcard"';
-    return '<div' + attrs + ' data-job="' + esc(jobID) + '" data-share-url="' + (interactive ? esc(url) : '') + '"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="' + pillStyle(status) + '">' + esc(status) + '</span></div><div class="meta"><div class="t">' + esc(name) + '</div><div class="m">' + esc(fmtTime(j.created_at) || '时间未知') + ' · ' + esc(jobID) + '</div>' + link + republish + '<span class="qerror" aria-live="polite"></span></div></div>';
+    return '<div' + attrs + ' data-job="' + esc(jobID) + '" data-share-url="' + (interactive ? esc(url) : '') + '"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="' + pillStyle(status) + '">' + esc(status) + '</span></div><div class="meta"><div class="t">' + esc(name) + '</div><div class="m">' + esc(fmtTime(j.created_at) || '日期未知') + ' · ' + esc(jobID) + '</div>' + link + republish + '<span class="qerror" aria-live="polite"></span></div></div>';
   }
   function renderGallery(){
     var body = document.getElementById('gallery-body'); if(!body) return;
