@@ -186,8 +186,62 @@ async def _run_tool_sync(tool, inputs: dict[str, Any]) -> Any:
     Capturing the context explicitly here keeps the session/request ids alive
     across the hop — mirroring the fix already applied inside ``execute_tool``.
     """
+    name = getattr(tool, "name", type(tool).__name__)
+    _log.info("tool.sync.submit name=%s", name)
     ctx = contextvars.copy_context()
-    return await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    fut = asyncio.to_thread(ctx.run, tool.execute, inputs)
+    # 安全网：即使底层线程池/执行器异常卡死，也不会让请求永久挂起——
+    # 超时后向上抛错，FastMCP 会回 500，客户端可感知并重试而非无限等待。
+    try:
+        result = await asyncio.wait_for(fut, timeout=900)
+    except asyncio.TimeoutError:
+        _log.error("tool.sync.timeout name=%s (executor wedge?) — abandoning call", name)
+        raise
+    _log.info("tool.sync.done name=%s", name)
+    return result
+
+
+def _start_executor_health_monitor() -> asyncio.Task:
+    """在 MCP 主事件循环上启动默认 executor 健康自愈监控。
+
+    背景：长驻进程曾出现 ``asyncio.to_thread`` 默认 executor 卡死——
+    dispatch 已写日志但工具永远不被任何 worker 拾取（事件循环仍活、多个
+    worker 全空闲），外部 upload_asset_chunk 全部挂起，只能靠重启恢复。
+    此处每 30s 用空操作探测默认 executor；一旦超时即替换为新 executor，
+    使后续工具调用立即恢复，无需人工重启。返回主循环上的监控 task。
+    """
+    import concurrent.futures as _cf
+
+    async def _monitor(loop: asyncio.AbstractEventLoop) -> None:
+        _log.info("executor.health.monitor started on loop %r", loop)
+        while True:
+            await asyncio.sleep(30)
+            executor = getattr(loop, "_default_executor", None)
+            if executor is None:
+                continue  # 尚未创建默认 executor，无从探测
+            try:
+                fut = loop.run_in_executor(executor, lambda: None)
+                await asyncio.wait_for(fut, timeout=8)
+                _log.debug("executor.health.ok threads=%d", len(executor._threads))
+            except asyncio.TimeoutError:
+                _log.error(
+                    "executor.health.wedge default executor unresponsive (submit no-op "
+                    "not picked up in 8s; workers=%d) — replacing it",
+                    len(getattr(executor, "_threads", ())),
+                )
+                try:
+                    loop.set_default_executor(_cf.ThreadPoolExecutor(
+                        max_workers=32, thread_name_prefix="asyncio",
+                    ))
+                    _log.warning("executor.health.replaced default executor")
+                except Exception as exc:  # noqa: BLE001
+                    _log.exception("executor.health.replace failed: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("executor.health.check error: %s", exc)
+
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(_monitor(loop))
+    return task
 
 
 # ---------------------------------------------------------------------------
@@ -1840,6 +1894,13 @@ if __name__ == "__main__":
                 app, fd=sock.fileno(), timeout_keep_alive=keep_alive_seconds,
             )
         server = uvicorn.Server(config)
-        asyncio.run(server.serve())
+
+        async def _serve_with_health():
+            # 默认 executor 健康自愈监控（与本循环同跑）：探测到 to_thread
+            # 卡死即替换默认 executor，避免 upload_asset_chunk 等静默挂起。
+            _start_executor_health_monitor()
+            await server.serve()
+
+        asyncio.run(_serve_with_health())
     else:
         mcp.run(transport=transport)
