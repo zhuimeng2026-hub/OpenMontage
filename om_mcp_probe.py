@@ -46,6 +46,13 @@ BFF 日志检查（复现“上传卡第一张”类问题时，在 BFF 主机�
                   需配合 BFF 侧新增的 [bff-session]/[bff-mcp] done/[image-batch]
                   结构化日志（见 frameflow/bff 的 log-check 相关提交）。
 
+系统状态采集（双机部署：A=render/nginx/BFF，B=MCP/Remotion）
+------------------------------------------------------------
+  status          采集本机系统状态：CPU/内存/磁盘占用、监听端口存活、
+                  关键进程存活、上游链路连通（A→B）。命中异常阈值时在报告中
+                  打印 [WARN]/[ERROR]，并写 om_mcp_probe.log 强化异常留痕。
+                  --role 预设各机关注点（bff/render/all）；--serve 暴露 HTTP 报告。
+
 环境变量
 --------
   OM_MCP_URL     端点（默认 https://dw.aixifs.com/mcp）
@@ -67,6 +74,7 @@ import json
 import logging
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -649,7 +657,7 @@ def cmd_log_check(args):
     直接 `curl http://<主机>:<端口>/` 即可拿到最新日志检查报告，无需落盘或 SSH。
     """
     if args.serve:
-        return _run_log_serve(args)
+        return _run_serve(args, _render_log_report)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         code = _render_log_report(args)
@@ -799,12 +807,11 @@ def _render_log_report(args):
     return 1 if problems else 0
 
 
-def _run_log_serve(args):
-    """以 HTTP 服务形式暴露 log-check 报告（部署机侧）。
+def _run_serve(args, render_fn):
+    """以 HTTP 服务形式暴露报告（部署机侧，供 log-check / status 复用）。
 
-    用法：om_mcp_probe.py log-check --log-path /var/log/frameflow-bff.log \\
-            --serve 0.0.0.0:9099
-    远端读取：curl http://<部署机>:9099/
+    用法：om_mcp_probe.py <子命令> --serve 0.0.0.0:9099
+    远端读取：curl http://<部署机>:<端口>/
     GET / 返回纯文本报告；GET /healthz 返回 OK，便于存活探活。
     """
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -821,7 +828,7 @@ def _run_log_serve(args):
                 return
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                _render_log_report(args)
+                render_fn(args)
             body = buf.getvalue().encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -836,7 +843,7 @@ def _run_log_serve(args):
     port = int(port or "9099")
     host = host or "0.0.0.0"
     httpd = ThreadingHTTPServer((host, port), _Handler)
-    print("log-check serving on http://%s:%d/  (Ctrl-C 停止)" % (host, port))
+    print("%s serving on http://%s:%d/  (Ctrl-C 停止)" % (render_fn.__name__, host, port))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -846,6 +853,281 @@ def _run_log_serve(args):
 
 def ts_iso(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%S", ts) if ts else "?"
+
+
+# ---------------------------------------------------------------------------
+# 系统状态采集（双机部署：A=render/nginx/BFF，B=MCP/Remotion）
+# ---------------------------------------------------------------------------
+
+_ROLE_PRESETS = {
+    "bff": {
+        "ports": [80, 443, 8080],
+        "procs": ["nginx", "frameflow-bff", "frameflow"],
+        "target": os.environ.get("OM_BFF_UPSTREAM", ""),
+    },
+    "render": {
+        "ports": [8900],
+        "procs": ["remotion", "chrome", "chromium", "node"],
+        "target": os.environ.get("OM_BFF_URL", ""),
+    },
+    "all": {
+        "ports": [80, 443, 8080, 8900],
+        "procs": ["nginx", "frameflow", "remotion", "chrome", "chromium", "node"],
+        "target": "",
+    },
+}
+
+
+def _safe_hostname():
+    try:
+        return socket.gethostname()
+    except Exception:
+        return "?"
+
+
+def _sample_cpu():
+    """返回 CPU 使用率(%)；不可用返回 None。优先 psutil，回退 /proc/stat。"""
+    try:
+        import psutil
+        return round(float(psutil.cpu_percent(interval=1)), 1)
+    except Exception:
+        pass
+    try:
+        def _read():
+            parts = open("/proc/stat").readline().split()
+            vals = list(map(int, parts[1:]))
+            return sum(vals), vals[3]  # total, idle
+        t1 = _read()
+        time.sleep(0.5)
+        t2 = _read()
+        total = t2[0] - t1[0]
+        idle = t2[1] - t1[1]
+        if total <= 0:
+            return 0.0
+        return round((1 - idle / total) * 100, 1)
+    except Exception:
+        return None
+
+
+def _sample_mem():
+    """返回 (使用率%, 可用MB)；不可用返回 (None, None)。"""
+    try:
+        import psutil
+        m = psutil.virtual_memory()
+        return round(float(m.percent), 1), int(m.available / 1024 / 1024)
+    except Exception:
+        pass
+    try:
+        info = {}
+        for line in open("/proc/meminfo"):
+            k, v = line.split(":", 1)
+            info[k.strip()] = int(v.split()[0])  # KB
+        total = info["MemTotal"]
+        avail = info.get("MemAvailable", info.get("MemFree", 0))
+        return round((1 - avail / total) * 100, 1), int(avail / 1024)
+    except Exception:
+        return None, None
+
+
+def _sample_disk(path):
+    """返回 (使用率%, 可用GB)；不可用返回 (None, None)。"""
+    try:
+        import psutil
+        d = psutil.disk_usage(path)
+        return round(float(d.percent), 1), round(d.free / 1024 / 1024 / 1024, 1)
+    except Exception:
+        pass
+    try:
+        st = os.statvfs(path)
+        total = st.f_blocks * st.f_frsize
+        free = st.f_bavail * st.f_frsize
+        if total <= 0:
+            return None, None
+        return round((1 - free / total) * 100, 1), round(free / 1024 / 1024 / 1024, 1)
+    except Exception:
+        return None, None
+
+
+def _check_port(port, host="127.0.0.1", timeout=2.0):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        return s.connect_ex((host, int(port))) == 0
+    except Exception:
+        return False
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def _check_procs(names):
+    """返回 dict: 进程名子串 -> 命中进程数；psutil 不可用时返回 None。"""
+    try:
+        import psutil
+        found = {}
+        for p in psutil.process_iter(["name", "cmdline"]):
+            try:
+                nm = ((p.info.get("name") or "") + " " +
+                      " ".join(p.info.get("cmdline") or []))
+            except Exception:
+                continue
+            for n in names:
+                if n.lower() in nm.lower():
+                    found[n] = found.get(n, 0) + 1
+        return found
+    except Exception:
+        return None
+
+
+def _http_probe(url, timeout=10):
+    """纯连通性 + 耗时探测：返回 (ok, http_code, elapsed_ms, err)。"""
+    bf = tempfile.NamedTemporaryFile("w+", delete=False, suffix=".body")
+    bf.close()
+    cmd = ["curl", "-sS", "--max-time", str(timeout),
+           "-o", bf.name, "-w", "%{http_code} %{time_total}", url]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
+        # -w 指标写入 stdout；body 已落到 -o 文件，不会混入 stdout。
+        metrics = (r.stdout or "").strip().split()
+        code = metrics[0] if metrics else "000"
+        elapsed = int(float(metrics[1]) * 1000) if len(metrics) > 1 else 0
+        ok = r.returncode == 0 and code[:1] in ("2", "3")
+        err = "" if r.returncode == 0 else (r.stderr or "").strip()[:200]
+        return ok, code, elapsed, err
+    except subprocess.TimeoutExpired:
+        return False, "000", timeout * 1000, "curl timeout"
+    except Exception as e:  # noqa: BLE001
+        return False, "000", 0, str(e)
+    finally:
+        try:
+            os.remove(bf.name)
+        except OSError:
+            pass
+
+
+def cmd_status(args):
+    """采集本机系统状态。--serve 时作为 HTTP 服务运行（部署机侧）。"""
+    if args.serve:
+        return _run_serve(args, _render_status_report)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = _render_status_report(args)
+    sys.stdout.write(buf.getvalue())
+    return code
+
+
+def _render_status_report(args):
+    """采集本机系统状态并打印报告。
+
+    命中异常阈值 / 故障时，除报告中打印 [WARN]/[ERROR] 外，还会通过
+    LOG.warning/LOG.error 写入 om_mcp_probe.log，强化异常留痕，便于事后复盘。
+    """
+    preset = _ROLE_PRESETS.get(args.role, _ROLE_PRESETS["all"])
+    ports = [int(p) for p in args.ports.split(",") if p.strip()] or preset["ports"]
+    proc_names = [p for p in args.procs.split(",") if p.strip()] or preset["procs"]
+    target = args.target or preset.get("target", "")
+
+    print("=== OpenMontage 系统状态采集 (status) ===")
+    print("ROLE = %s" % args.role)
+    print("HOSTNAME = %s" % _safe_hostname())
+    print("COLLECT_AT = %s" % ts_iso(time.localtime(time.time())))
+    print()
+
+    problems = []
+
+    # [1] CPU / 内存 / 磁盘
+    print("[1] 资源占用")
+    cpu = _sample_cpu()
+    if cpu is None:
+        print("  CPU: [WARN] 无法采样（无 psutil 且非 /proc 系统）")
+        LOG.warning("status: CPU 采样失败")
+        problems.append("cpu_unavailable")
+    else:
+        warn = cpu >= args.cpu_warn
+        print("  CPU%% = %.1f%s" % (cpu, " [WARN 高负载]" if warn else ""))
+        if warn:
+            LOG.warning("status: CPU 使用率 %.1f%% >= 阈值 %.0f%%", cpu, args.cpu_warn)
+            problems.append("cpu_high")
+
+    mem_pct, mem_avail = _sample_mem()
+    if mem_pct is None:
+        print("  内存: [WARN] 无法采样")
+        LOG.warning("status: 内存采样失败")
+        problems.append("mem_unavailable")
+    else:
+        warn = mem_pct >= args.mem_warn
+        print("  内存%% = %.1f (可用 %d MB)%s" % (mem_pct, mem_avail or 0,
+                                                 " [WARN 高占用]" if warn else ""))
+        if warn:
+            LOG.warning("status: 内存使用率 %.1f%% >= 阈值 %.0f%%", mem_pct, args.mem_warn)
+            problems.append("mem_high")
+
+    disk_pct, disk_free = _sample_disk(args.disk_path)
+    if disk_pct is None:
+        print("  磁盘(%s): [WARN] 无法采样" % args.disk_path)
+        LOG.warning("status: 磁盘采样失败 path=%s", args.disk_path)
+        problems.append("disk_unavailable")
+    else:
+        warn = disk_pct >= args.disk_warn
+        print("  磁盘(%s)%% = %.1f (可用 %.1f GB)%s" % (
+            args.disk_path, disk_pct, disk_free or 0, " [WARN 空间不足]" if warn else ""))
+        if warn:
+            LOG.warning("status: 磁盘使用率 %.1f%% >= 阈值 %.0f%% path=%s",
+                        disk_pct, args.disk_warn, args.disk_path)
+            problems.append("disk_high")
+    print()
+
+    # [2] 监听端口
+    print("[2] 监听端口存活 (127.0.0.1)")
+    for port in ports:
+        ok = _check_port(port)
+        flag = "OK" if ok else "[ERROR 端口未监听]"
+        if not ok:
+            LOG.error("status: 端口 %d 未监听（预期服务不可达）", port)
+            problems.append("port_down:%d" % port)
+        print("  :%d -> %s" % (port, flag))
+    print()
+
+    # [3] 关键进程存活
+    print("[3] 关键进程存活")
+    proc_hits = _check_procs(proc_names)
+    if proc_hits is None:
+        print("  [WARN] psutil 不可用，跳过进程检查；端口检查仍可覆盖服务可达性")
+        LOG.warning("status: 进程检查不可用（无 psutil）")
+    else:
+        for name in proc_names:
+            cnt = proc_hits.get(name, 0)
+            flag = ("count=%d" % cnt) if cnt > 0 else "[ERROR 未找到进程]"
+            if cnt == 0:
+                LOG.error("status: 未找到关键进程: %s", name)
+                problems.append("proc_missing:%s" % name)
+            print("  %-20s -> %s" % (name, flag))
+    print()
+
+    # [4] 上游链路连通
+    print("[4] 上游链路连通")
+    if not target:
+        print("  (未配置 --target，跳过；可用 --target 指定 BFF→MCP 端点)")
+    else:
+        ok, code, elapsed, err = _http_probe(target)
+        if ok:
+            slow = elapsed >= 3000
+            print("  %s -> HTTP %s, %d ms%s" % (target, code, elapsed,
+                                               " [WARN 慢]" if slow else ""))
+            if slow:
+                LOG.warning("status: 上游探测慢 target=%s %dms", target, elapsed)
+                problems.append("upstream_slow")
+        else:
+            print("  %s -> [ERROR] HTTP %s err=%s" % (target, code, err))
+            LOG.error("status: 上游探测失败 target=%s code=%s err=%s", target, code, err)
+            problems.append("upstream_down")
+    print()
+
+    print("VERDICT = %s" % ("PROBLEMS_FOUND" if problems else "NO_PROBLEMS_DETECTED"))
+    print("PROBLEM_TAGS = %s" % (",".join(problems) if problems else "-"))
+    return 1 if problems else 0
 
 
 def run_bff(args, bff: BFFClient):
@@ -942,10 +1224,30 @@ def main(argv=None):
     p_lc.add_argument("--serve", default="",
                      help="以 HTTP 服务形式运行（部署机侧）：监听 host:port，远端 curl http://<host>:<port>/ 读取报告；如 --serve 0.0.0.0:9099")
 
+    # ---- 系统状态采集子命令 ----
+    p_st = sub.add_parser("status",
+                          help="采集本机系统状态（CPU/内存/磁盘/端口/进程/上游连通）；异常状态强化记录；--serve 暴露 HTTP 报告")
+    p_st.add_argument("--role", choices=["bff", "render", "all"], default="all",
+                      help="本机角色：bff=nginx+BFF+前端, render=MCP+Remotion, all=全部（默认 all）")
+    p_st.add_argument("--ports", default="",
+                      help="额外需要检查监听的端口（逗号分隔）；为空时用 --role 预设")
+    p_st.add_argument("--procs", default="",
+                      help="需要检查存活的进程名子串（逗号分隔）；为空时用 --role 预设")
+    p_st.add_argument("--target", default="",
+                      help="上游链路探测 URL（如 BFF→MCP 端点）；为空时用 --role 预设/环境变量")
+    p_st.add_argument("--disk-path", default="/", help="磁盘占用采样路径（默认 /）")
+    p_st.add_argument("--cpu-warn", type=float, default=85.0, help="CPU 使用率阈值%%（默认 85）")
+    p_st.add_argument("--mem-warn", type=float, default=85.0, help="内存使用率阈值%%（默认 85）")
+    p_st.add_argument("--disk-warn", type=float, default=90.0, help="磁盘使用率阈值%%（默认 90）")
+    p_st.add_argument("--serve", default="",
+                      help="以 HTTP 服务形式运行（部署机侧）：监听 host:port，远端 curl http://<host>:<port>/ 读取报告；如 --serve 0.0.0.0:9099")
+
     args = ap.parse_args(argv)
     setup_logging(args.log, args.quiet)
     if args.cmd == "log-check":
         return cmd_log_check(args)
+    if args.cmd == "status":
+        return cmd_status(args)
     BFF_CMDS = {"wechat-config", "me", "qr-create", "qr-status", "qr-wait",
                 "cookie-check", "login-flow", "instances", "qr-cross-instance"}
     if args.cmd in BFF_CMDS:
