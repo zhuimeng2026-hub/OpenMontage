@@ -981,12 +981,42 @@ def _check_procs(names):
         return None
 
 
-def _http_probe(url, timeout=10):
-    """纯连通性 + 耗时探测：返回 (ok, http_code, elapsed_ms, err)。"""
+# chrome/chromium/chrome-headless-shell 只在 Remotion 渲染进行中才存在（渲染期进程），
+# 闲置时缺省属正常，不作为关键进程缺失上报（见 _render_status_report 的按需处理）。
+RENDER_ON_DEMAND_PROCS = {"chrome", "chromium", "chrome-headless-shell", "headless-shell", "headless_shell"}
+
+
+def _render_active():
+    """是否有 Remotion 渲染子进程在跑（headless 浏览器只在该时刻存在）。
+
+    识别 "remotion render" 命令行（区别于常驻的 remotion studio）。"""
+    try:
+        import psutil
+        for p in psutil.process_iter(["cmdline"]):
+            try:
+                cmd = " ".join(p.info.get("cmdline") or [])
+            except Exception:
+                continue
+            if "remotion render" in cmd:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _http_probe(url, timeout=10, token=""):
+    """纯连通性 + 耗时探测：返回 (ok, http_code, elapsed_ms, err)。
+
+    提供 token 时附加 Bearer 头——BFF / MCP 均要求鉴权，否则一律 401 会误报
+    为 upstream_down（健康系统被误判为故障）。
+    """
     bf = tempfile.NamedTemporaryFile("w+", delete=False, suffix=".body")
     bf.close()
     cmd = ["curl", "-sS", "--max-time", str(timeout),
-           "-o", bf.name, "-w", "%{http_code} %{time_total}", url]
+           "-o", bf.name, "-w", "%{http_code} %{time_total}"]
+    if token:
+        cmd += ["-H", "Authorization: Bearer %s" % token]
+    cmd.append(url)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
         # -w 指标写入 stdout；body 已落到 -o 文件，不会混入 stdout。
@@ -1005,6 +1035,69 @@ def _http_probe(url, timeout=10):
             os.remove(bf.name)
         except OSError:
             pass
+
+
+def _mcp_probe(url, token, timeout=15):
+    """对 MCP 端点做真实 initialize 握手探测（带 Bearer + Accept + 会话）。
+
+    纯 GET /mcp 无鉴权/无 Accept 头会被 MCP 层拒绝（401/406），必须走协议握手
+    才能证明「服务可正常接受工具调用」。返回 (ok, http_code, elapsed_ms, err)。
+    """
+    import time as _t
+    t0 = _t.monotonic()
+    hdrs = [
+        "Content-Type: application/json",
+        "Accept: application/json, text/event-stream",
+        "Authorization: Bearer %s" % token,
+    ]
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                   "clientInfo": {"name": "om_probe", "version": "1.0.0"}},
+    })
+    hf = tempfile.NamedTemporaryFile("w+", delete=False, suffix=".hdr")
+    bf = tempfile.NamedTemporaryFile("w+", delete=False, suffix=".body")
+    hf.close()
+    bf.close()
+    cmd = ["curl", "-sS", "--max-time", str(timeout),
+           "-D", hf.name, "-o", bf.name]
+    for h in hdrs:
+        cmd += ["-H", h]
+    cmd += ["-d", body, url]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
+        code = "000"
+        try:
+            with open(hf.name, encoding="utf-8", errors="replace") as f:
+                for line in f.read().splitlines():
+                    if line.lower().startswith("http/"):
+                        parts = line.split(" ", 2)
+                        if len(parts) > 1:
+                            code = parts[1]
+        except OSError:
+            pass
+        with open(bf.name, encoding="utf-8", errors="replace") as f:
+            raw = f.read()
+        elapsed = int((_t.monotonic() - t0) * 1000)
+        # streamable HTTP：initialize 成功返回 200（JSON）或 202（SSE 延迟响应）且含 result
+        ok = r.returncode == 0 and code[:1] == "2" and '"result"' in raw
+        if ok:
+            err = ""
+        elif r.returncode != 0:
+            err = (r.stderr or "").strip()[:200]
+        else:
+            err = "code=%s body=%s" % (code, raw[:200])
+        return ok, code, elapsed, err
+    except subprocess.TimeoutExpired:
+        return False, "000", timeout * 1000, "curl timeout"
+    except Exception as e:  # noqa: BLE001
+        return False, "000", 0, str(e)
+    finally:
+        for fp in (hf.name, bf.name):
+            try:
+                os.remove(fp)
+            except OSError:
+                pass
 
 
 def cmd_status(args):
@@ -1093,17 +1186,31 @@ def _render_status_report(args):
     # [3] 关键进程存活
     print("[3] 关键进程存活")
     proc_hits = _check_procs(proc_names)
+    render_on = _render_active()
+    on_demand = [n for n in proc_names if n in RENDER_ON_DEMAND_PROCS]
+    on_demand_found = False
     if proc_hits is None:
         print("  [WARN] psutil 不可用，跳过进程检查；端口检查仍可覆盖服务可达性")
         LOG.warning("status: 进程检查不可用（无 psutil）")
     else:
         for name in proc_names:
             cnt = proc_hits.get(name, 0)
-            flag = ("count=%d" % cnt) if cnt > 0 else "[ERROR 未找到进程]"
-            if cnt == 0:
+            if cnt > 0:
+                print("  %-20s -> count=%d" % (name, cnt))
+                if name in RENDER_ON_DEMAND_PROCS:
+                    on_demand_found = True
+            elif name in RENDER_ON_DEMAND_PROCS:
+                # headless 浏览器只在 Remotion 渲染进行中才存在；闲置时缺省正常
+                print("  %-20s -> count=0 (渲染时才需要)" % name)
+            else:
                 LOG.error("status: 未找到关键进程: %s", name)
                 problems.append("proc_missing:%s" % name)
-            print("  %-20s -> %s" % (name, flag))
+                print("  %-20s -> [ERROR 未找到进程]" % name)
+    if render_on and on_demand and not on_demand_found:
+        # 渲染在跑却一个 headless 浏览器都没有 → 渲染已卡死/浏览器崩溃
+        LOG.error("status: 渲染进行中但缺少 headless 浏览器进程: %s", ",".join(on_demand))
+        problems.append("proc_missing:" + "+".join(on_demand))
+        print("  [ERROR] 渲染进行中但无任何 headless 浏览器进程 (%s)" % ",".join(on_demand))
     print()
 
     # [4] 上游链路连通
@@ -1111,7 +1218,11 @@ def _render_status_report(args):
     if not target:
         print("  (未配置 --target，跳过；可用 --target 指定 BFF→MCP 端点)")
     else:
-        ok, code, elapsed, err = _http_probe(target)
+        token = getattr(args, "token", None) or ""
+        if "/mcp" in target.lower():
+            ok, code, elapsed, err = _mcp_probe(target, token) if token else _http_probe(target)
+        else:
+            ok, code, elapsed, err = _http_probe(target, token=token)
         if ok:
             slow = elapsed >= 3000
             print("  %s -> HTTP %s, %d ms%s" % (target, code, elapsed,

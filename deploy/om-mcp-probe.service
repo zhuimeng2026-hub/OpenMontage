@@ -26,6 +26,8 @@ Description=OpenMontage system status probe (om_mcp_probe)
 Documentation=file:///opt/OpenMontage/om_mcp_probe.py
 After=network-online.target
 Wants=network-online.target
+# 启动后给 10s 健康检查窗口，期间非 0 退出不计入失败计数（Restart=always 不设启动频率上限）
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -43,16 +45,24 @@ EnvironmentFile=/etc/openmontage/monitor.env
 # Remotion 暂存/锁文件清理。Linux 部署一般无此变量，unset 也无害。
 Environment=CODEBUDDY_SESSION_ID= CLAUDE_SESSION_ID= NODE_OPTIONS=
 
-ExecStart=/usr/bin/python3 om_mcp_probe.py status \
-    --role ${OM_PROBE_ROLE:-all} \
-    --target ${OM_PROBE_TARGET:-} \
-    --serve 0.0.0.0:${OM_PROBE_PORT:-9099}
+# 注意：systemd 的 ExecStart 不支持 bash 的 ${VAR:-default} 默认值语法（会原样传给命令）。
+#       OM_PROBE_ROLE/OM_PROBE_TARGET/OM_PROBE_PORT 由 EnvironmentFile（/etc/openmontage/monitor.env）
+#       提供；其中 role 与 port 必须显式设置（建议 role=all, port=9099），target 可留空以跳过上游探测。
+#       --log 是全局参数，必须放在子命令 status 之前。
+ExecStart=/usr/bin/python3 om_mcp_probe.py \
+    --log /var/log/openmontage/om_mcp_probe.log \
+    status \
+    --role ${OM_PROBE_ROLE} \
+    --target ${OM_PROBE_TARGET} \
+    --serve 0.0.0.0:${OM_PROBE_PORT}
+
+# systemd 自动创建 /var/log/openmontage（属主 openmontage），供 --log 写入
+LogsDirectory=openmontage
+LogsDirectoryMode=0755
 
 # 异常退出自动拉起
 Restart=always
 RestartSec=3
-# 启动后给 10s 健康检查窗口，期间非 0 退出不计入失败计数
-StartLimitIntervalSec=0
 
 # 资源与权限收敛
 NoNewPrivileges=true
