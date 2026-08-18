@@ -65,11 +65,14 @@ if result.error:
     print("error:", result.error)
 
 if result.success:
+    # -of default=nokey=1:noprint_wrappers=1 每行只印 codec_type（video/audio），
+    # 避免 csv=p=0 把多流拼成 "video,audio" 导致 "video" 误判不到。
     probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(out_mp4)],
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+         "-of", "default=nokey=1:noprint_wrappers=1", str(out_mp4)],
         capture_output=True, text=True,
     )
-    streams = [s for s in probe.stdout.split() if s]
+    streams = [s.strip() for s in probe.stdout.split() if s.strip()]
     print("output streams:", streams)
     has_video = "video" in streams
     has_audio = "audio" in streams

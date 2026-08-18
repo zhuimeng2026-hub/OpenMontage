@@ -1,4 +1,5 @@
 import * as React from "react";
+import * as JsxRuntime from "react/jsx-runtime";
 import * as Babel from "@babel/standalone";
 import * as Remotion from "remotion";
 
@@ -50,10 +51,16 @@ function compileUserComponent(
       filename: "custom.tsx",
     }).code as string;
 
-    // `require` that resolves "remotion" to this bundle's real module so the
-    // user's `import {...} from "remotion"` binds to the live Remotion runtime.
+    // `require` that resolves well-known modules to this bundle's real
+    // instances. Babel's automatic JSX runtime emits `require("react/jsx-runtime")`
+    // which webpack cannot resolve inside a `new Function`, so we must provide
+    // it explicitly alongside React and Remotion.
     const userRequire = (mod: string): unknown => {
       if (mod === "remotion") return Remotion;
+      if (mod === "react") return React;
+      if (mod === "react/jsx-runtime" || mod === "react/jsx-dev-runtime") {
+        return JsxRuntime;
+      }
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       return require(mod);
     };
