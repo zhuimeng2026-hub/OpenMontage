@@ -134,6 +134,16 @@ MP_verify_*.txt
 .gocache-test/
 frameflow/bff/.bff-bin/
 frameflow/bff/data/
+# Local build / run artifacts (frameflow BFF) — regenerable, never commit
+frameflow/bff/bff-server.exe
+frameflow/bff/*.exe~
+frameflow/bff/bff.log
+p1_run.txt
+result_run.txt
+pexels_6684209.jpg
+test_*.srt
+test_*.vtt
+test_*.caption.json
 
 # nginx runtime logs / generated tool lists (regenerable)
 nginx/direct_mcp.log
