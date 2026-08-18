@@ -591,31 +591,23 @@ async def upload_asset_chunk(
 
 
 def _resolve_session_asset_path(asset: dict) -> Path:
-    """Resolve a session asset to an absolute, OS-portable path.
+    """Resolve a session asset to an absolute path from its OS-portable
+    ``relative_path`` (posix, relative to the repo root).
 
-    Assets are persisted (and may be read back on a different machine) with
-    both an absolute ``path`` (OS-specific, e.g. ``C:\\Users\\...`` on Windows)
-    and a posix ``relative_path`` relative to the repo root. The absolute path
-    is only valid on the machine that performed the upload. In a heterogeneous
-    deployment (dev on Windows, prod on Linux) it must be recomputed from
-    ``relative_path`` + the *current* repo root, otherwise the file is not
-    found and the render fails with "session asset ... not a readable image".
+    Session assets are persisted with ``relative_path`` only; the absolute
+    location is recomputed from the *current* repo root so the same session
+    works on heterogeneous deployments (dev on Windows, prod on Linux). The
+    upload-time absolute ``path`` is intentionally never read — it is
+    OS-specific and invalid on any other machine, which is exactly what broke
+    uploads in the Win10/Ubuntu setup.
     """
     rel = asset.get("relative_path")
-    if rel:
-        candidate = (_PROJECT_ROOT / rel).resolve()
-        if candidate.is_file():
-            return candidate
-    abs_path = asset.get("path")
-    if abs_path:
-        candidate = Path(abs_path).resolve()
-        if candidate.is_file():
-            return candidate
-    # No readable file found — return the preferred candidate so callers can
-    # surface a precise error instead of a confusing one.
-    if rel:
-        return (_PROJECT_ROOT / rel).resolve()
-    return Path(abs_path).resolve() if abs_path else Path()
+    if not rel:
+        raise ValueError("session asset has no relative_path; cannot resolve a filesystem location")
+    candidate = (_PROJECT_ROOT / rel).resolve()
+    if not candidate.is_file():
+        raise ValueError(f"session asset not found at resolved relative path: {rel}")
+    return candidate
 
 
 @mcp.tool()
