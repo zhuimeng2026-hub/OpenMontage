@@ -50,6 +50,26 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _atomic_replace(tmp: Path, path: Path) -> None:
+    """os.replace with retry for Windows "Access Denied" (WinError 5).
+
+    On Windows the destination can be transiently locked by antivirus or a
+    concurrent reader, making os.replace fail with PermissionError. A short
+    back-off retry is the standard remedy; we never mask a genuinely broken
+    filesystem because the final attempt re-raises the real OSError.
+    """
+    delay = 0.02
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(delay)
+            delay *= 1.7
+
+
 def _write(path: Path, state: dict[str, Any]) -> None:
     state["updated_at"] = _now()
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -58,7 +78,7 @@ def _write(path: Path, state: dict[str, Any]) -> None:
             json.dump(state, handle, ensure_ascii=False, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        _atomic_replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -106,7 +126,7 @@ def _write_index(index: dict[str, str]) -> None:
             json.dump(index, handle, ensure_ascii=False, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        _atomic_replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
 

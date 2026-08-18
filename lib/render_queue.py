@@ -25,11 +25,26 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+
+
+def _atomic_replace(tmp: Path, path: Path) -> None:
+    """os.replace with retry for Windows "Access Denied" (WinError 5)."""
+    delay = 0.02
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(delay)
+            delay *= 1.7
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_DIR = ROOT / "projects" / ".mcp_sessions"
@@ -289,7 +304,7 @@ def save_job_record(job_id: str, kwargs: dict[str, Any]) -> None:
                 json.dump(records, handle, ensure_ascii=False, indent=2)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp, path)
+            _atomic_replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -314,7 +329,7 @@ def delete_job_record(job_id: str) -> None:
                     json.dump(records, handle, ensure_ascii=False, indent=2)
                     handle.flush()
                     os.fsync(handle.fileno())
-                os.replace(tmp, path)
+                _atomic_replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
 

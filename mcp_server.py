@@ -44,14 +44,29 @@ _log = logging.getLogger("mcp_server")
 _log.setLevel(logging.INFO)
 _formatter = logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
-# File handler with rotation (10 MB per file, keep 5 backups)
+# File handler with rotation (10 MB per file, keep 5 backups).
+# If the primary log file is locked by another process (e.g. a log viewer
+# holding an exclusive handle on Windows), fall back to a timestamped file
+# instead of crashing at startup.
 if not _log.handlers:
-    _file_handler = RotatingFileHandler(
+    _log_candidates = [
         _LOG_DIR / "mcp_server.log",
-        maxBytes=10 * 1024 * 1024,
-        backupCount=5,
-        encoding="utf-8",
-    )
+        _LOG_DIR / f"mcp_server_{int(time.time())}.log",
+    ]
+    _file_handler: Optional[logging.Handler] = None
+    for _lp in _log_candidates:
+        try:
+            _file_handler = RotatingFileHandler(
+                _lp,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            break
+        except (PermissionError, OSError):
+            continue
+    if _file_handler is None:
+        _file_handler = logging.NullHandler()
     _file_handler.setFormatter(_formatter)
     _log.addHandler(_file_handler)
 
@@ -142,9 +157,21 @@ _business_log = logging.getLogger("session_video")
 _business_log.setLevel(logging.INFO)
 _business_log.propagate = False
 if not _business_log.handlers:
-    _business_handler = RotatingFileHandler(
-        _LOG_DIR / "session_video.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
-    )
+    _business_candidates = [
+        _LOG_DIR / "session_video.log",
+        _LOG_DIR / f"session_video_{int(time.time())}.log",
+    ]
+    _business_handler: Optional[logging.Handler] = None
+    for _blp in _business_candidates:
+        try:
+            _business_handler = RotatingFileHandler(
+                _blp, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+            break
+        except (PermissionError, OSError):
+            continue
+    if _business_handler is None:
+        _business_handler = logging.NullHandler()
     _business_handler.setFormatter(logging.Formatter("%(message)s"))
     _business_log.addHandler(_business_handler)
 

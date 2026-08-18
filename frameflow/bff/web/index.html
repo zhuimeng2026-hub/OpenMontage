@@ -316,6 +316,32 @@
   .panel .opt{height:40px;border-radius:10px;background:rgba(255,255,255,0.06);display:flex;align-items:center;padding:0 16px;font-size:14px;margin-bottom:8px;}
   .create-row{display:flex;gap:24px;position:relative;}
 
+  /* ============ 再来一组 / 我的渲染任务（多任务可见） ============ */
+  .btn-restart{
+    width:100%;height:48px;border:none;border-radius:12px;margin-top:14px;
+    background:rgba(79,216,255,0.14);border:1px solid rgba(79,216,255,0.5);
+    color:#9fe9ff;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    transition:background .15s ease,opacity .15s ease;
+  }
+  .btn-restart:hover{background:rgba(79,216,255,0.22);}
+  .btn-restart:active{transform:translateY(0);}
+  .btn-restart:disabled{opacity:.4;cursor:not-allowed;}
+  .create-tasks{margin-top:16px;border-top:1px solid var(--border-soft);padding-top:14px;}
+  .create-tasks h5{font-size:13px;font-weight:600;margin:0 0 10px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;}
+  .create-tasks h5 span{color:var(--accent);font-weight:600;}
+  .create-tasks .ct-row{display:flex;align-items:center;gap:10px;padding:9px 12px;margin-bottom:8px;background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:10px;}
+  .create-tasks .ct-name{font-size:13px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .create-tasks .ct-sub{font-size:11px;color:var(--text-secondary);margin-top:2px;}
+  .create-tasks .ct-badge{font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px;flex:none;}
+  .ct-badge.rendering{background:rgba(79,216,255,0.16);color:#9fe9ff;}
+  .ct-badge.queued{background:rgba(255,190,92,0.16);color:#ffce8a;}
+  .ct-badge.done{background:rgba(52,211,153,0.16);color:#7be0b0;}
+  .ct-badge.failed{background:rgba(255,90,90,0.16);color:#ff9b9b;}
+  .create-tasks .ct-empty{font-size:12px;color:var(--text-tertiary);padding:4px 2px;}
+  .create-tasks .ct-viewall{font-size:12px;color:var(--primary);cursor:pointer;margin-top:4px;display:inline-block;}
+  .create-tasks .ct-viewall:hover{text-decoration:underline;}
+
   /* ============ QUEUE TABLE ============ */
   .qsub{font-size:13px;color:var(--text-secondary);margin-bottom:18px;}
   .filter-bar{display:flex;gap:8px;margin-bottom:20px;}
@@ -666,6 +692,12 @@
                   <div id="create-fill" class="fill" style="width:0%;height:100%;background:var(--grad-primary)"></div>
                 </div>
                 <div id="create-status" style="font-size:12px;color:var(--text-secondary);margin-top:8px">准备中…</div>
+              </div>
+              <button type="button" class="btn-restart" id="restart-btn" style="display:none">🔄 再来一组 · 新建渲染任务</button>
+              <div class="create-tasks" id="create-tasks" style="display:none">
+                <h5>🎬 我的渲染任务 <span id="create-tasks-count"></span></h5>
+                <div id="create-tasks-body"><div class="ct-empty">提交渲染后将在此实时显示任务进度</div></div>
+                <span class="ct-viewall" data-view="queue">查看完整队列 ›</span>
               </div>
               <div style="font-size:12px;color:var(--text-secondary);margin-top:14px">本视频预计消耗 12 分钟渲染额度</div>
             </div>
@@ -1083,7 +1115,14 @@
       document.getElementById('view-' + view).classList.add('active');
       document.getElementById('topbar-title').textContent = titles[view];
       document.querySelector('.content').scrollTop = 0;
-      if (view === 'create') { refreshQuota(); loadScriptPicker(); refreshSessionAssets(); }
+      if (view === 'create') {
+        refreshQuota(); loadScriptPicker(); refreshSessionAssets();
+        loadCreateTasks(); // 进入创建页即刷新「我的渲染任务」
+        if (createTasksTimer) clearInterval(createTasksTimer);
+        createTasksTimer = setInterval(loadCreateTasks, 5000); // 多任务实时可见
+      } else if (createTasksTimer) {
+        clearInterval(createTasksTimer); createTasksTimer = null;
+      }
       if (view === 'gallery') { loadGallery(); }
       if (view === 'script-def') { loadScriptDefList(); }
     });
@@ -1733,6 +1772,15 @@
   // 切换脚本模式时若编辑器尚未就绪，先暂存待灌入的脚本内容。
   var pendingScriptContent = null;
   var currentImageBatch = null;
+  // 当前「创建页进度面板」正在展示的渲染任务 jobId。仅最新提交的任务可写本面板，
+  // 旧任务的实时进度交由「我的渲染任务」列表（轮询队列）呈现，避免两个订阅互相覆盖。
+  var currentProgressJobId = null;
+  // 多任务控件引用与轮询计时器。
+  var restartBtn = document.getElementById('restart-btn');
+  var createTasksBox = document.getElementById('create-tasks');
+  var createTasksBody = document.getElementById('create-tasks-body');
+  var createTasksCount = document.getElementById('create-tasks-count');
+  var createTasksTimer = null;
   // Per-submission image cap. Default matches the free tier; refreshed from
   // /api/quota so the hint and the guard stay aligned with the user's tier.
   var maxFilesPerSubmission = 10;
@@ -2071,6 +2119,7 @@
         }
         var jobId = v && (v.render_job_id || (v.data && v.data.render_job_id));
         var submittedQueued = v && v.status === 'queued';
+        currentProgressJobId = jobId; // 仅本任务写「创建页进度面板」，旧任务交由任务列表
         setCreateProgress(true, 0, '已提交，任务号 ' + jobId + (submittedQueued ? ' · 排队中…' : ' · 渲染中…'));
         showToast('已提交渲染任务 ' + jobId);
         loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
@@ -2081,7 +2130,15 @@
         currentImageBatch = null;
         clearUploadedImages(); // 本轮提交结束：清掉缩略图预览并释放 object URL
         refreshQuota();
+        // 多任务：立即开放「再来一组」，让用户在新任务渲染的同时上传下一组图片。
+        // 历史任务仍在「我的渲染任务」/「渲染队列」中可见，不会因本轮重置而丢失。
+        if (restartBtn){ restartBtn.style.display = ''; restartBtn.disabled = false; }
+        if (createTasksBox) createTasksBox.style.display = '';
+        renderBtn.disabled = false; // 放开按钮，配合下方 min 张数守卫即可连续发起新任务
+        loadCreateTasks(); // 把刚提交的任务刷进创建页「我的渲染任务」
+        var subJobId = jobId;
         window.FFMCP.subscribeProgress(jobId, function(ev){
+          if (subJobId !== currentProgressJobId) return; // 只展示最新任务的进度
           var pct = ev && (ev.percent || ev.progress || 0);
           if (ev && ev.status === 'published'){
             setCreateProgress(true, 100, '渲染完成 · 分享链接：' + (ev.share_url || '(见控制台)'));
@@ -2103,6 +2160,75 @@
       }
     });
   }
+
+  // ---- 创建页：再来一组（多任务开关）----
+  // 提交一轮渲染后，用户可点「再来一组」开始新一轮：仅重置本次上传状态，
+  // 不动队列里已有的历史任务。新一轮图片会通过 ensureImageBatch() 开一条新的
+  // 上游 MCP 会话（新 batch_id / project_id），从而连接到渲染机器作为独立任务。
+  function restartForNewGroup(){
+    if (isUploading){ showToast('图片上传中，请稍候再开始新的一组'); return; }
+    if (!restartBtn || restartBtn.style.display === 'none') return; // 尚未提交过任务
+    uploadedCount = 0;
+    currentImageBatch = null;
+    lastBatchId = null;
+    currentProgressJobId = null; // 旧任务进度交给「我的渲染任务」列表，不再占用本面板
+    clearUploadedImages();
+    setCreateProgress(false);
+    renderBtn.disabled = false;
+    if (restartBtn) restartBtn.disabled = false;
+    showToast('已开始新的一组：上传新图片后可再次点「开始渲染」。上一次任务仍在「我的渲染任务」中可见。');
+    loadCreateTasks();
+  }
+  if (restartBtn) restartBtn.addEventListener('click', restartForNewGroup);
+
+  // 创建页内联「我的渲染任务」列表：直接复用 /api/render-queue（按会话隔离，仅本人任务）。
+  // 多任务并发时，这里能看到每一个已提交任务的实时状态，保证「渲染任务用户可见」。
+  async function loadCreateTasks(){
+    var base = queueBase();
+    if (!base || (window.FFMCP && window.FFMCP.demo)) return;
+    try {
+      var r = await fetch(base + '/api/render-queue', { credentials: 'include' });
+      if (!r.ok) return;
+      var data = await r.json();
+      paintCreateTasks((data && data.jobs) || []);
+    } catch (e){ /* 轮询失败静默，下一次周期自动重试 */ }
+  }
+  function createTaskBadgeClass(status){
+    switch (String(status)){
+      case '渲染中': return 'rendering';
+      case '排队':   return 'queued';
+      case '已完成': return 'done';
+      case '失败':   return 'failed';
+      default:       return 'queued';
+    }
+  }
+  function paintCreateTasks(jobs){
+    if (!createTasksBody) return;
+    if (!jobs || !jobs.length){
+      createTasksBody.innerHTML = '<div class="ct-empty">暂无进行中的任务</div>';
+      if (createTasksCount) createTasksCount.textContent = '';
+      return;
+    }
+    if (createTasksCount) createTasksCount.textContent = '（' + jobs.length + '）';
+    var html = jobs.slice(0, 6).map(function(j){
+      var cls = createTaskBadgeClass(j.status);
+      var sub = (j.res ? j.res + ' · ' : '') + (j.created_at ? j.created_at : '');
+      var link = (j.status === '已完成' && safeDownloadURL(j.share_url))
+        ? '<a class="qdownload" href="' + esc(safeDownloadURL(j.share_url)) + '" target="_blank" rel="noopener noreferrer" style="margin-left:8px">下载/分享</a>'
+        : '';
+      return '<div class="ct-row" data-job="' + esc(j.job_id) + '">'
+        + '<div style="flex:1;min-width:0"><div class="ct-name">' + esc(j.name || '帧流作品') + '</div>'
+        + '<div class="ct-sub">' + esc(sub) + '</div></div>'
+        + '<span class="ct-badge ' + cls + '">' + esc(j.status || '排队') + '</span>' + link + '</div>';
+    }).join('');
+    createTasksBody.innerHTML = html;
+  }
+  // 「我的渲染任务」→ 完整队列 跳转
+  var ctViewAll = document.querySelector('#create-tasks .ct-viewall');
+  if (ctViewAll) ctViewAll.addEventListener('click', function(){
+    var q = document.querySelector('.nav-item[data-view="queue"]');
+    if (q) q.click();
+  });
 
   // ===== 创建页：脚本模式（Monaco 编辑器 + 自定义 Remotion 合成）=====
   var ffMonaco = null;

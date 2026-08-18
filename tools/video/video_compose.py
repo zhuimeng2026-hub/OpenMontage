@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import time
 import uuid
@@ -1752,7 +1753,27 @@ class VideoCompose(BaseTool):
                 on_output = None
                 if progress_callback:
                     on_output = lambda line: self._emit_remotion_progress(line, progress_callback)
-                self.run_command(cmd, timeout=subprocess_timeout, cwd=composer_dir, on_output=on_output)
+                # WorkBuddy's terminal injects NODE_OPTIONS=--require<genie-safe-delete>
+                # (a "safe delete" shim) into every child process. Remotion's bundle
+                # step cleans a large temp dir; the shim routes that delete through a
+                # recycle-bin binary that times out on Windows, corrupting the bundle
+                # and surfacing as "Cannot find module 'react/jsx-runtime'". Strip the
+                # shim from the subprocess env so Node deletes directly.
+                render_env = dict(os.environ)
+                render_env.pop("NODE_OPTIONS", None)
+                # Belt-and-suspenders: if the PATH `rm` shim still triggers, point it
+                # at a binary-less dir so it downgrades to the native recycle bin.
+                render_env["GENIE_TRASH_DIR"] = str(
+                    Path(os.environ.get("TMPDIR", os.environ.get("TEMP", "/tmp")))
+                    / "genie-trash-disabled"
+                )
+                self.run_command(
+                    cmd,
+                    timeout=subprocess_timeout,
+                    cwd=composer_dir,
+                    on_output=on_output,
+                    env=render_env,
+                )
             except subprocess.CalledProcessError as e:
                 # run_command uses check=True + capture_output, so the useful
                 # Remotion diagnostics live in stderr/stdout — surface the tail

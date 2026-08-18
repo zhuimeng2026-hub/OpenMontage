@@ -415,6 +415,7 @@ class BaseTool(ABC):
         timeout: Optional[int] = None,
         cwd: Optional[Path] = None,
         on_output: Optional["Callable[[str], None]"] = None,
+        env: Optional[dict] = None,
     ) -> subprocess.CompletedProcess:
         """Run a subprocess command with standard error handling.
 
@@ -448,6 +449,7 @@ class BaseTool(ABC):
                     errors="replace",
                     timeout=timeout,
                     cwd=cwd,
+                    env=env,
                     check=True,
                 )
             except subprocess.CalledProcessError as exc:
@@ -473,6 +475,7 @@ class BaseTool(ABC):
             encoding="utf-8",
             errors="replace",
             cwd=cwd,
+            env=env,
         )
         captured: list[str] = []
         assert proc.stdout is not None
