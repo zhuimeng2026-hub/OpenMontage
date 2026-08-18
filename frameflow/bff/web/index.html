@@ -668,6 +668,10 @@
                 <div class="d2">JPG / PNG / WEBP</div>
                 <input type="file" id="upload-input-script" accept="image/jpeg,image/png,image/webp" multiple hidden>
               </div>
+              <div class="upload-preview" id="script-upload-preview" style="display:none;margin-top:12px">
+                <div class="script-tag">当前任务已上传 <b id="script-preview-count">0</b> 张图片</div>
+                <div class="thumb-grid" id="script-thumb-grid"></div>
+              </div>
               <div class="pl">分辨率</div>
               <div class="opt">1080p</div>
               <div class="pl">时长 / 张</div>
@@ -2038,6 +2042,9 @@
   // ===== 创建页：脚本模式（Monaco 编辑器 + 自定义 Remotion 合成）=====
   var ffMonaco = null;
   var scriptUploaded = 0;
+  // 脚本模式已上传图片预览数据：{file, url, name, size}。仅记录上传成功的素材，
+  // 用于在当前任务下展示已上传图片缩略图（与模板模式 uploadedImages 相互独立）。
+  var scriptUploadedImages = [];
   var DEFAULT_COMP =
 'import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing, staticFile} from "remotion";\n' +
 '\n' +
@@ -2191,6 +2198,43 @@
     });
     input.addEventListener('change', function(){ if (input.files) scriptHandleFiles(input.files); });
   })();
+  // 把脚本模式已上传图片渲染为缩略图网格（与模板模式共用 .thumb-grid/.thumb 样式）。
+  function renderScriptUploadPreview(){
+    var box = document.getElementById('script-upload-preview');
+    var grid = document.getElementById('script-thumb-grid');
+    var cnt = document.getElementById('script-preview-count');
+    if (!grid) return;
+    if (!scriptUploadedImages.length){
+      if (box) box.style.display = 'none';
+      return;
+    }
+    grid.innerHTML = '';
+    scriptUploadedImages.forEach(function(im, idx){
+      var cell = document.createElement('div');
+      cell.className = 'thumb';
+      var img = document.createElement('img');
+      img.src = im.url; img.alt = im.name;
+      var ix = document.createElement('span');
+      ix.className = 'idx'; ix.textContent = String(idx + 1);
+      var nm = document.createElement('span');
+      nm.className = 'nm'; nm.textContent = im.name;
+      cell.appendChild(img); cell.appendChild(ix); cell.appendChild(nm);
+      grid.appendChild(cell);
+    });
+    if (cnt) cnt.textContent = String(scriptUploadedImages.length);
+    if (box) box.style.display = 'block';
+  }
+
+  // 清空脚本模式已上传图片预览并释放 object URL，避免内存泄漏。
+  function clearScriptUploadedImages(){
+    scriptUploadedImages.forEach(function(im){ if (im.url) URL.revokeObjectURL(im.url); });
+    scriptUploadedImages = [];
+    var grid = document.getElementById('script-thumb-grid');
+    if (grid) grid.innerHTML = '';
+    var box = document.getElementById('script-upload-preview');
+    if (box) box.style.display = 'none';
+  }
+
   async function scriptHandleFiles(files){
     var prog = document.getElementById('script-progress');
     var st = document.getElementById('script-status');
@@ -2206,7 +2250,9 @@
       try {
         await window.FFMCP.chunkUpload(list[i], {});
         scriptUploaded++;
+        scriptUploadedImages.push({ file: list[i], url: URL.createObjectURL(list[i]), name: list[i].name, size: list[i].size });
         st.textContent = '已上传 ' + scriptUploaded + ' 张素材';
+        renderScriptUploadPreview();
       } catch (e){ st.textContent = '上传失败：' + e.message; showToast('上传失败：' + e.message); return; }
     }
   }
@@ -2245,7 +2291,7 @@
       loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
       window.FFMCP.subscribeProgress(jobId, function(ev){
         var pct = ev && (ev.percent || ev.progress || 0);
-        if (ev && ev.status === 'published'){ fill.style.width = '100%'; st.textContent = '渲染完成 · 链接：' + (ev.share_url || '(见控制台)'); showToast('渲染完成！'); btn.disabled = false; }
+        if (ev && ev.status === 'published'){ fill.style.width = '100%'; st.textContent = '渲染完成 · 链接：' + (ev.share_url || '(见控制台)'); showToast('渲染完成！'); btn.disabled = false; scriptUploaded = 0; clearScriptUploadedImages(); }
         else { fill.style.width = pct + '%'; st.textContent = '渲染中 ' + pct + '%'; }
       }, function(){ st.textContent = '进度订阅异常，将改用轮询'; });
     } catch (e){ st.textContent = '提交失败：' + e.message; btn.disabled = false; }
