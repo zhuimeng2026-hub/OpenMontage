@@ -590,6 +590,34 @@ async def upload_asset_chunk(
     return response
 
 
+def _resolve_session_asset_path(asset: dict) -> Path:
+    """Resolve a session asset to an absolute, OS-portable path.
+
+    Assets are persisted (and may be read back on a different machine) with
+    both an absolute ``path`` (OS-specific, e.g. ``C:\\Users\\...`` on Windows)
+    and a posix ``relative_path`` relative to the repo root. The absolute path
+    is only valid on the machine that performed the upload. In a heterogeneous
+    deployment (dev on Windows, prod on Linux) it must be recomputed from
+    ``relative_path`` + the *current* repo root, otherwise the file is not
+    found and the render fails with "session asset ... not a readable image".
+    """
+    rel = asset.get("relative_path")
+    if rel:
+        candidate = (_PROJECT_ROOT / rel).resolve()
+        if candidate.is_file():
+            return candidate
+    abs_path = asset.get("path")
+    if abs_path:
+        candidate = Path(abs_path).resolve()
+        if candidate.is_file():
+            return candidate
+    # No readable file found — return the preferred candidate so callers can
+    # surface a precise error instead of a confusing one.
+    if rel:
+        return (_PROJECT_ROOT / rel).resolve()
+    return Path(abs_path).resolve() if abs_path else Path()
+
+
 @mcp.tool()
 async def create_remotion_video_share(
     project_id: Optional[str] = None,
@@ -662,14 +690,17 @@ async def create_remotion_video_share(
         root = _PROJECT_ROOT / "projects" / project
         safe_assets = []
         for asset in assets:
-            path = Path(asset.get("path", "")).resolve()
+            path = _resolve_session_asset_path(asset)
             try:
                 path.relative_to(root.resolve())
             except ValueError as exc:
                 raise ValueError("session asset path is outside the project workspace") from exc
             if not path.is_file() or asset.get("type") != "image":
                 raise ValueError(f"session asset is not a readable image: {path.name}")
-            safe_assets.append({**asset, "source_tool": "upload_asset", "scene_id": f"photo-{len(safe_assets):04d}"})
+            # Recompute and persist the OS-correct absolute path so downstream
+            # consumers (custom `images`, ecommerce slots) no longer depend on
+            # the upload-time absolute path that may belong to another OS.
+            safe_assets.append({**asset, "path": str(path), "source_tool": "upload_asset", "scene_id": f"photo-{len(safe_assets):04d}"})
 
         motion = ["zoom-in", "pan-left", "ken-burns", "pan-right"]
         cuts = []
