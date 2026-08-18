@@ -81,13 +81,6 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// A brand-new submission must start with the full upload quota. The
-	// session-wide counter only resets on a successful render, so without this a
-	// user who abandoned a broken batch (or retried several times) would carry
-	// stale "used" counts into the next batch and hit the 422 quota wall before
-	// reaching the required minimum of 5 images.
-	h.Sessions.ResetAsset(scope)
-
 	id := "batch-" + randHex(12)
 	projectID := "frameflow-batch-" + id
 	t0 := time.Now()

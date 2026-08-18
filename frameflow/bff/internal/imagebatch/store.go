@@ -69,9 +69,41 @@ func (s *Store) ByProject(sessionID, projectID string) (*Batch, error) {
 }
 
 func (s *Store) IncAsset(sessionID, projectID string) (*Batch, error) {
-	_, err := s.db.Exec(`UPDATE image_batches SET asset_count=asset_count+1,updated_at=? WHERE session_id=? AND project_id=?`, time.Now().UTC().Format(time.RFC3339Nano), sessionID, projectID)
+	result, err := s.db.Exec(`UPDATE image_batches SET asset_count=asset_count+1,updated_at=? WHERE session_id=? AND project_id=? AND status='collecting' AND asset_count < ?`, time.Now().UTC().Format(time.RFC3339Nano), sessionID, projectID, MaxBatchImages)
 	if err != nil {
 		return nil, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rows != 1 {
+		return nil, errors.New("image batch asset count increment rejected")
+	}
+	b, err := s.ByProject(sessionID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if b == nil || b.Status != "collecting" || b.AssetCount > MaxBatchImages {
+		return nil, errors.New("image batch asset count update rejected")
+	}
+	return b, nil
+}
+
+func (s *Store) SetAssetCount(sessionID, projectID string, count int) (*Batch, error) {
+	if count < 0 || count > MaxBatchImages {
+		return nil, errors.New("image batch asset count out of bounds")
+	}
+	result, err := s.db.Exec(`UPDATE image_batches SET asset_count=?,updated_at=? WHERE session_id=? AND project_id=? AND status='collecting'`, count, time.Now().UTC().Format(time.RFC3339Nano), sessionID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rows != 1 {
+		return nil, errors.New("image batch asset count update rejected")
 	}
 	return s.ByProject(sessionID, projectID)
 }

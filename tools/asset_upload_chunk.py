@@ -124,15 +124,35 @@ class UploadAssetChunk(BaseTool):
             assets_dir.mkdir(parents=True, exist_ok=True)
             target = (assets_dir / state["filename"]).resolve()
             target.relative_to(assets_dir)
-            if target.exists():
-                raise ValueError("asset already exists; use a different filename")
-            os.replace(part_path, target)
             mime_type = state.get("mime_type") or mimetypes.guess_type(state["filename"])[0] or "application/octet-stream"
             asset = {"id": f"{state['project_id']}-{digest[:12]}", "filename": state["filename"], "original_filename": state.get("original_filename", state["filename"]), "relative_path": target.relative_to(root.parent).as_posix(), "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media", "mime_type": mime_type, "bytes": content_size, "sha256": digest, "source": "mcp_chunked_upload", "session_hash": state["session_hash"]}
+
+            if target.exists():
+                existing_digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                if existing_digest != digest:
+                    raise ValueError("asset already exists; use a different filename")
+                batch = None
+                canonical_asset = asset
+                if asset["type"] == "image":
+                    batch = register_image(current_session, state["project_id"], asset)
+                    canonical_asset = next((item for item in batch.get("assets", []) if item.get("sha256") == digest), asset)
+                part_path.unlink(missing_ok=True)
+                state_path.unlink(missing_ok=True)
+                canonical_target = (root.parent / canonical_asset["relative_path"]).resolve()
+                return ToolResult(True, {"asset": canonical_asset, "asset_manifest": {"assets": [canonical_asset]}, "upload_id": upload_id, "deduplicated": True, **({"batch": batch} if batch else {})}, [str(canonical_target)], duration_seconds=time.monotonic()-started)
+
+            os.replace(part_path, target)
             batch = None
+            deduplicated = False
+            canonical_asset = asset
             if asset["type"] == "image":
                 batch = register_image(current_session, state["project_id"], asset)
+                canonical_asset = next((item for item in batch.get("assets", []) if item.get("sha256") == digest), asset)
+                deduplicated = canonical_asset.get("relative_path") != asset["relative_path"]
+                if deduplicated:
+                    target.unlink(missing_ok=True)
             state_path.unlink(missing_ok=True)
-            return ToolResult(True, {"asset": asset, "asset_manifest": {"assets": [asset]}, "upload_id": upload_id, **({"batch": batch} if batch else {})}, [str(target)], duration_seconds=time.monotonic()-started)
+            canonical_target = (root.parent / canonical_asset["relative_path"]).resolve()
+            return ToolResult(True, {"asset": canonical_asset, "asset_manifest": {"assets": [canonical_asset]}, "upload_id": upload_id, "deduplicated": deduplicated, **({"batch": batch} if batch else {})}, [str(canonical_target)], duration_seconds=time.monotonic()-started)
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
             return ToolResult(False, error=str(exc), duration_seconds=time.monotonic()-started)

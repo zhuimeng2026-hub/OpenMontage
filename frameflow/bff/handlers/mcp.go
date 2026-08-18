@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"path"
 	"regexp"
@@ -154,31 +155,99 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 		}
 	}
 
-	// Update the per-submission counter after a successful call:
-	//   - a completed upload increments the count
-	//   - creating a video closes the submission and resets it for the next one
-	// Only count a complete that actually succeeded upstream. The upstream
-	// returns res["error"] (e.g. "asset already exists") on a failed or
-	// duplicate complete; counting those would inflate the quota and block the
-	// legitimate retry that the user needs to reach the required 5 images.
+	// Update counters only after an explicitly successful complete. Batch counts
+	// are durable and authoritative; the session counter is only a legacy
+	// script-mode fallback.
 	if req.Tool == "upload_asset_chunk" {
 		if op, _ := req.Args["operation"].(string); op == "complete" {
-			if errStr, ok := res["error"].(string); ok && errStr != "" {
-				log.Printf("[bff-mcp] upload_complete_error scope_hash=%s project_id=%s error=%q%s", mcp.ShortHashForLog(scope), projectID, errStr, uploadDiag)
-			} else {
-				h.Store.IncAsset(scope)
-				if h.ImageBatches != nil {
-					if projectID, _ := req.Args["project_id"].(string); projectID != "" {
-						h.ImageBatches.IncAsset(scope, projectID)
-					}
-				}
-			}
+			h.recordUploadComplete(scope, projectID, res, uploadDiag)
 		}
 	} else if req.Tool == "create_remotion_video_share" {
 		h.Store.ResetAsset(scope)
 	}
 
 	c.JSON(http.StatusOK, res)
+}
+
+func uploadCompleteSucceeded(res map[string]interface{}) bool {
+	success, ok := res["success"].(bool)
+	if !ok || !success {
+		return false
+	}
+	errorText, _ := res["error"].(string)
+	return strings.TrimSpace(errorText) == ""
+}
+
+func uploadWasDeduplicated(res map[string]interface{}) bool {
+	deduplicated, _ := res["deduplicated"].(bool)
+	return deduplicated
+}
+
+func authoritativeAssetCount(res map[string]interface{}) (int, bool) {
+	if res == nil {
+		return 0, false
+	}
+	var count int
+	switch value := res["asset_count"].(type) {
+	case int:
+		count = value
+	case int64:
+		if value < 0 || value > int64(imagebatch.MaxBatchImages) {
+			return 0, false
+		}
+		count = int(value)
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > float64(imagebatch.MaxBatchImages) || math.Trunc(value) != value {
+			return 0, false
+		}
+		count = int(value)
+	default:
+		return 0, false
+	}
+	return count, count >= 0 && count <= imagebatch.MaxBatchImages
+}
+
+func (h *Handlers) recordUploadComplete(scope, projectID string, res map[string]interface{}, uploadDiag string) {
+	if !uploadCompleteSucceeded(res) {
+		log.Printf("[bff-mcp] upload_complete_not_counted scope_hash=%s project_id=%s deduplicated=%t%s", mcp.ShortHashForLog(scope), projectID, uploadWasDeduplicated(res), uploadDiag)
+		return
+	}
+	if projectID != "" && h.ImageBatches != nil {
+		batch, err := h.ImageBatches.ByProject(scope, projectID)
+		if err != nil {
+			log.Printf("[bff-mcp] upload_batch_lookup_failed scope_hash=%s project_id=%s err=%v%s", mcp.ShortHashForLog(scope), projectID, err, uploadDiag)
+			return
+		}
+		if batch == nil || batch.Status != "collecting" {
+			// Names such as frameflow-default are used by legacy script-mode
+			// uploads and do not identify a durable image batch.
+			if uploadWasDeduplicated(res) {
+				return
+			}
+			h.Store.IncAsset(scope)
+			return
+		}
+		if count, ok := authoritativeAssetCount(res); ok {
+			if _, err := h.ImageBatches.SetAssetCount(scope, projectID, count); err != nil {
+				log.Printf("[bff-mcp] upload_asset_count_sync_failed scope_hash=%s project_id=%s asset_count=%d err=%v%s", mcp.ShortHashForLog(scope), projectID, count, err, uploadDiag)
+			}
+			return
+		}
+		if uploadWasDeduplicated(res) {
+			log.Printf("[bff-mcp] upload_deduplicated_without_count scope_hash=%s project_id=%s%s", mcp.ShortHashForLog(scope), projectID, uploadDiag)
+			return
+		}
+		if _, err := h.ImageBatches.IncAsset(scope, projectID); err != nil {
+			log.Printf("[bff-mcp] upload_asset_count_fallback_failed scope_hash=%s project_id=%s err=%v%s", mcp.ShortHashForLog(scope), projectID, err, uploadDiag)
+			return
+		}
+		log.Printf("[bff-mcp] upload_asset_count_fallback_increment scope_hash=%s project_id=%s%s", mcp.ShortHashForLog(scope), projectID, uploadDiag)
+		return
+	}
+	if uploadWasDeduplicated(res) {
+		return
+	}
+	h.Store.IncAsset(scope)
 }
 
 func sanitizeUploadFilename(args map[string]interface{}) {

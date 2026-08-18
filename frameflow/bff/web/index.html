@@ -2004,8 +2004,12 @@
           projectId: imageBatch ? imageBatch.project_id : undefined,
           onProgress: function(p){ if (createFill) createFill.style.width = p + '%'; }
         });
-        uploadedCount++;
-        uploadedImages.push({ file: list[i], url: URL.createObjectURL(list[i]), name: list[i].name, size: list[i].size });
+        var serverAssetCount = res && (typeof res.asset_count === 'number' ? res.asset_count : (res.data && typeof res.data.asset_count === 'number' ? res.data.asset_count : null));
+        if (serverAssetCount != null) uploadedCount = serverAssetCount;
+        else if (!(res && (res.deduplicated === true || (res.data && res.data.deduplicated === true)))) uploadedCount++;
+        if (!(res && (res.deduplicated === true || (res.data && res.data.deduplicated === true)))) {
+          uploadedImages.push({ file: list[i], url: URL.createObjectURL(list[i]), name: list[i].name, size: list[i].size });
+        }
         lastBatchId = (res && res.batch_id) || (res && res.data && res.data.batch_id) || lastBatchId;
         lastMsg = (res && res.message) || '';
       } catch (err){
@@ -2021,7 +2025,7 @@
     // 一轮结束后用服务端真实数量回写计数，保证「至少 5 张」渲染门槛以真实
     // 数量为准（已存在的图片被重新上传现在计为成功，通常已对齐；此为兜底）。
     var sc = await fetchBatchAssetCount();
-    if (sc != null && sc > uploadedCount) uploadedCount = sc;
+    if (sc != null) uploadedCount = sc;
     if (failedCount > 0){
       setCreateProgress(true, null, '上传结束：成功 ' + uploadedCount + ' 张，失败 ' + failedCount + ' 张。失败文件可重新选择上传。');
     } else {
@@ -2046,6 +2050,10 @@
 
   if (renderBtn){
     renderBtn.addEventListener('click', async function(){
+      if (!(window.FFMCP && window.FFMCP.demo)) {
+        var freshCount = await fetchBatchAssetCount();
+        if (freshCount != null) uploadedCount = freshCount;
+      }
       if (uploadedCount < minFilesPerSubmission){
         setCreateProgress(true, null, '请先上传至少 ' + minFilesPerSubmission + ' 张图片（当前 ' + uploadedCount + ' 张）');
         showToast('请先上传至少 ' + minFilesPerSubmission + ' 张图片');

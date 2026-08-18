@@ -127,6 +127,80 @@ func TestUploadQuotaScriptModeFallback(t *testing.T) {
 	}
 }
 
+func TestUploadCompleteSuccessRequiresExplicitSuccess(t *testing.T) {
+	if uploadCompleteSucceeded(map[string]interface{}{"error": "asset already exists"}) {
+		t.Fatal("error-only response must not count")
+	}
+	if uploadCompleteSucceeded(map[string]interface{}{"success": false}) {
+		t.Fatal("success:false response must not count")
+	}
+	if !uploadCompleteSucceeded(map[string]interface{}{"success": true}) {
+		t.Fatal("success:true without error should count")
+	}
+	if uploadCompleteSucceeded(map[string]interface{}{"success": true, "error": "upstream rejected"}) {
+		t.Fatal("success:true with error must not count")
+	}
+}
+
+func TestRecordUploadCompleteScriptModeUsesSessionCounter(t *testing.T) {
+	h, cleanup := newTestStore(t)
+	defer cleanup()
+	scope := renderQueueOwnerID("sid-script-complete")
+	result := map[string]interface{}{"success": true}
+	h.recordUploadComplete(scope, "frameflow-default", result, "")
+	if got := h.Store.AssetCount(scope); got != 1 {
+		t.Fatalf("expected script-mode session count 1, got %d", got)
+	}
+	h.recordUploadComplete(scope, "frameflow-default", map[string]interface{}{"success": true, "deduplicated": true}, "")
+	if got := h.Store.AssetCount(scope); got != 1 {
+		t.Fatalf("deduplicated upload changed session count to %d", got)
+	}
+	h.recordUploadComplete(scope, "frameflow-default", map[string]interface{}{"success": false}, "")
+	if got := h.Store.AssetCount(scope); got != 1 {
+		t.Fatalf("failed upload changed session count to %d", got)
+	}
+}
+
+func TestAuthoritativeAssetCountAllowsDownwardSync(t *testing.T) {
+	h, cleanup := newTestStore(t)
+	defer cleanup()
+	scope := renderQueueOwnerID("sid-authoritative")
+	b, err := h.ImageBatches.Create(scope, "batch-authoritative", "frameflow-batch-authoritative", "photo-ken-burns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ImageBatches.SetAssetCount(scope, b.ProjectID, 4); err != nil {
+		t.Fatal(err)
+	}
+	h.recordUploadComplete(scope, b.ProjectID, map[string]interface{}{"success": true, "asset_count": float64(2)}, "")
+	got, err := h.ImageBatches.ByProject(scope, b.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AssetCount != 2 {
+		t.Fatalf("expected authoritative count 2, got %d", got.AssetCount)
+	}
+}
+
+func TestImageBatchAssetCountBoundsAndFallback(t *testing.T) {
+	h, cleanup := newTestStore(t)
+	defer cleanup()
+	scope := renderQueueOwnerID("sid-bounds")
+	b, err := h.ImageBatches.Create(scope, "batch-bounds", "frameflow-batch-bounds", "photo-ken-burns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ImageBatches.SetAssetCount(scope, b.ProjectID, imagebatch.MaxBatchImages); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ImageBatches.IncAsset(scope, b.ProjectID); err == nil {
+		t.Fatal("increment past max must fail")
+	}
+	if _, err := h.ImageBatches.SetAssetCount(scope, b.ProjectID, imagebatch.MaxBatchImages+1); err == nil {
+		t.Fatal("out-of-range set must fail")
+	}
+}
+
 // setBatchAssetCount updates a batch's committed asset count directly via the
 // imagebatch store (there is no increment-by-N helper).
 func setBatchAssetCount(h *Handlers, scope, batchID string, n int, status string) error {
