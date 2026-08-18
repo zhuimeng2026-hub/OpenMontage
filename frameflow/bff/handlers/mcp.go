@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"frameflow-bff/internal/imagebatch"
 	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
 )
@@ -89,18 +90,10 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	// reached. (upload_asset_chunk's operation lives in req.Args.)
 	if req.Tool == "upload_asset_chunk" {
 		if op, _ := req.Args["operation"].(string); op == "start" {
-			tier := h.Limits.Resolve(scope)
-			lim := limits.ForTier(tier)
-			if h.Store.AssetCount(scope) >= lim.MaxFilesPerSubmission {
-				resultErr = fmt.Errorf("upload quota reached: tier=%s files=%d max=%d", tier, h.Store.AssetCount(scope), lim.MaxFilesPerSubmission)
+			if reject, status, body := h.quotaRejectForUpload(scope, projectID); reject {
+				resultErr = fmt.Errorf("upload quota reached")
 				log.Printf("[bff-mcp] upload_rejected operation=start scope_hash=%s project_id=%s reason=quota%s", mcp.ShortHashForLog(scope), projectID, uploadDiag)
-				c.JSON(http.StatusUnprocessableEntity, gin.H{
-					"error": fmt.Sprintf(
-						"your %q tier allows at most %d images per submission; this submission has already reached the limit",
-						tier, lim.MaxFilesPerSubmission),
-					"files": h.Store.AssetCount(scope),
-					"max":   lim.MaxFilesPerSubmission,
-				})
+				c.JSON(status, body)
 				return
 			}
 		}
@@ -164,12 +157,20 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	// Update the per-submission counter after a successful call:
 	//   - a completed upload increments the count
 	//   - creating a video closes the submission and resets it for the next one
+	// Only count a complete that actually succeeded upstream. The upstream
+	// returns res["error"] (e.g. "asset already exists") on a failed or
+	// duplicate complete; counting those would inflate the quota and block the
+	// legitimate retry that the user needs to reach the required 5 images.
 	if req.Tool == "upload_asset_chunk" {
 		if op, _ := req.Args["operation"].(string); op == "complete" {
-			h.Store.IncAsset(scope)
-			if h.ImageBatches != nil {
-				if projectID, _ := req.Args["project_id"].(string); projectID != "" {
-					h.ImageBatches.IncAsset(scope, projectID)
+			if errStr, ok := res["error"].(string); ok && errStr != "" {
+				log.Printf("[bff-mcp] upload_complete_error scope_hash=%s project_id=%s error=%q%s", mcp.ShortHashForLog(scope), projectID, errStr, uploadDiag)
+			} else {
+				h.Store.IncAsset(scope)
+				if h.ImageBatches != nil {
+					if projectID, _ := req.Args["project_id"].(string); projectID != "" {
+						h.ImageBatches.IncAsset(scope, projectID)
+					}
 				}
 			}
 		}
@@ -264,4 +265,47 @@ func numberString(value interface{}) string {
 	default:
 		return "-"
 	}
+}
+
+// quotaRejectForUpload decides whether an upload_asset_chunk "start" must be
+// rejected for quota reasons. It returns (reject, httpStatus, body).
+//
+// The check is batch-aware. When the upload targets an active ("collecting")
+// image batch we enforce the cap against that batch's authoritative committed
+// image count (b.AssetCount), NOT the leaky session-wide counter. The
+// session counter only resets on a successful render, so across abandoned
+// batches and repeated retries it over-counts and would block a legitimate
+// retry before the user reaches the required minimum of 5 images — a 422
+// deadlock. Using the batch count keeps the quota scoped to the current
+// submission and always leaves room to reach the minimum. The session-wide
+// cap remains the fallback for script mode / uploads without a batch.
+func (h *Handlers) quotaRejectForUpload(scope, projectID string) (bool, int, gin.H) {
+	tier := h.Limits.Resolve(scope)
+	lim := limits.ForTier(tier)
+	if projectID != "" && h.ImageBatches != nil {
+		if b, berr := h.ImageBatches.ByProject(scope, projectID); berr == nil && b != nil && b.Status == "collecting" {
+			if b.AssetCount >= imagebatch.MaxBatchImages {
+				return true, http.StatusUnprocessableEntity, gin.H{
+					"error": fmt.Sprintf(
+						"本批次最多 %d 张图片，当前已上传 %d 张",
+						imagebatch.MaxBatchImages, b.AssetCount),
+					"files": b.AssetCount,
+					"max":   imagebatch.MaxBatchImages,
+				}
+			}
+			// Batch count is authoritative here; do not also apply the
+			// session-wide cap (which may be stale from prior attempts).
+			return false, 0, nil
+		}
+	}
+	if h.Store.AssetCount(scope) >= lim.MaxFilesPerSubmission {
+		return true, http.StatusUnprocessableEntity, gin.H{
+			"error": fmt.Sprintf(
+				"your %q tier allows at most %d images per submission; this submission has already reached the limit",
+				tier, lim.MaxFilesPerSubmission),
+			"files": h.Store.AssetCount(scope),
+			"max":   lim.MaxFilesPerSubmission,
+		}
+	}
+	return false, 0, nil
 }

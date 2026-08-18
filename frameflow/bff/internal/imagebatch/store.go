@@ -6,6 +6,17 @@ import (
 	"time"
 )
 
+// MinBatchImages / MaxBatchImages are the business bounds for a single render
+// session's image set. A submission needs AT LEAST MinBatchImages to render
+// (the upstream can't produce a meaningful montage from fewer) and is capped at
+// MaxBatchImages. Both the render-time validator (validateImageCount) and the
+// upload-time quota check must agree on these, so they live here as the single
+// source of truth.
+const (
+	MinBatchImages = 5
+	MaxBatchImages = 10
+)
+
 type Batch struct {
 	ID          string    `json:"id"`
 	ProjectID   string    `json:"project_id"`

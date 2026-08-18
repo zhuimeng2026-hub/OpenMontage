@@ -23,8 +23,8 @@ var imageScripts = map[string]string{
 }
 
 func validateImageCount(count int) error {
-	if count < 5 || count > 10 {
-		return fmt.Errorf("image batch requires 5 to 10 images")
+	if count < imagebatch.MinBatchImages || count > imagebatch.MaxBatchImages {
+		return fmt.Errorf("image batch requires %d to %d images", imagebatch.MinBatchImages, imagebatch.MaxBatchImages)
 	}
 	return nil
 }
@@ -80,6 +80,13 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "unknown script_id", "scripts": imageScripts})
 		return
 	}
+
+	// A brand-new submission must start with the full upload quota. The
+	// session-wide counter only resets on a successful render, so without this a
+	// user who abandoned a broken batch (or retried several times) would carry
+	// stale "used" counts into the next batch and hit the 422 quota wall before
+	// reaching the required minimum of 5 images.
+	h.Sessions.ResetAsset(scope)
 
 	id := "batch-" + randHex(12)
 	projectID := "frameflow-batch-" + id
@@ -180,7 +187,7 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		return
 	}
 	if err := validateImageCount(b.AssetCount); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "asset_count": b.AssetCount, "min": 5, "max": 10})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "asset_count": b.AssetCount, "min": imagebatch.MinBatchImages, "max": imagebatch.MaxBatchImages})
 		return
 	}
 	if err := h.ensureBatchSession(scope, b); err != nil {

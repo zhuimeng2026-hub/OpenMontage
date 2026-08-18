@@ -196,6 +196,14 @@
     var complete = await mcpCall('upload_asset_chunk', {
       operation: 'complete', project_id: projectId, filename: filename, upload_id: uploadId
     });
+    // The upstream rejects a re-upload of an already-committed file with
+    // "asset already exists". That is not a real failure for the user — the
+    // image is already part of this batch — so treat it as a successful upload
+    // instead of surfacing a false "上传失败" and blocking the required 5.
+    var completeErr = (complete && (complete.error || (complete.data && complete.data.error))) || '';
+    if (completeErr && /asset already exists/i.test(completeErr)) {
+      return Object.assign({}, complete, { success: true, already_exists: true });
+    }
     if (!complete || complete.success === false || (complete.data && complete.data.success === false)) {
       throw new Error('chunk complete 失败：' + JSON.stringify(complete));
     }
