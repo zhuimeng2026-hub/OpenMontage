@@ -792,6 +792,7 @@
 
         <div class="ds-section">已保存脚本</div>
         <div class="ds-list" id="ds-list"><div class="ds-empty">暂无已保存脚本</div></div>
+        <div class="script-pager" id="ds-pager"></div>
       </section>
     </div>
   </div>
@@ -1067,15 +1068,20 @@
       navigator.clipboard.writeText(txt).then(function(){ showToast('提示词已复制'); }).catch(function(){});
     }
   });
-  // 拉取当前会话已保存的脚本列表。
+  // 定义视频脚本页：已保存脚本分页状态（与创建页脚本选择器共用同一后端分页接口）。
+  var dsPage = 0;
+  var dsPageSize = 8;
+  var dsTotal = 0;
+  // 拉取当前会话已保存的脚本列表（分页）。
   async function loadScriptDefList(){
     var box = document.getElementById('ds-list');
     if (!box) return;
     try {
-      var r = await fetch(bffBase() + '/api/scripts', { credentials: 'include' });
+      var r = await fetch(bffBase() + '/api/scripts?limit=' + dsPageSize + '&offset=' + (dsPage * dsPageSize), { credentials: 'include' });
       var j = await r.json();
       var list = (j && j.scripts) || [];
-      if (!list.length){ box.innerHTML = '<div class="ds-empty">暂无已保存脚本</div>'; return; }
+      dsTotal = (j && typeof j.total === 'number') ? j.total : list.length;
+      if (!list.length){ box.innerHTML = '<div class="ds-empty">暂无已保存脚本</div>'; renderDsPager(); return; }
       box.innerHTML = '';
       list.forEach(function(s){
         var el = document.createElement('div');
@@ -1098,6 +1104,22 @@
         box.appendChild(el);
       });
     } catch (e){ box.innerHTML = '<div class="ds-empty">加载失败，请稍后重试</div>'; }
+    renderDsPager();
+  }
+  function renderDsPager(){
+    var pager = document.getElementById('ds-pager');
+    if (!pager) return;
+    if (dsTotal <= dsPageSize){ pager.innerHTML = ''; return; }
+    var totalPages = Math.ceil(dsTotal / dsPageSize);
+    var cur = dsPage + 1;
+    pager.innerHTML =
+      '<button type="button" class="pager-btn" id="ds-prev"'+(dsPage<=0?' disabled':'')+'>上一页</button>'+
+      '<span class="pager-info">'+cur+' / '+totalPages+'</span>'+
+      '<button type="button" class="pager-btn" id="ds-next"'+(dsPage>=totalPages-1?' disabled':'')+'>下一页</button>';
+    var prev = document.getElementById('ds-prev');
+    var next = document.getElementById('ds-next');
+    if (prev) prev.addEventListener('click', function(){ if (dsPage>0){ dsPage--; loadScriptDefList(); } });
+    if (next) next.addEventListener('click', function(){ if ((dsPage+1)*dsPageSize < dsTotal){ dsPage++; loadScriptDefList(); } });
   }
   var dsSave = document.getElementById('ds-save');
   if (dsSave) dsSave.addEventListener('click', async function(){
@@ -1118,6 +1140,7 @@
       showToast('脚本已保存到服务器');
       document.getElementById('ds-name').value = '';
       document.getElementById('ds-content').value = '';
+      dsPage = 0;
       loadScriptDefList();
     } catch (e){ setDsMsg('保存失败：' + e.message, 'err'); }
   });
