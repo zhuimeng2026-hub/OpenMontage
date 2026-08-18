@@ -190,7 +190,6 @@ class UploadAsset(BaseTool):
                 "id": f"{project_id}-{digest[:12]}",
                 "filename": filename,
                 "original_filename": original_filename,
-                "path": str(target),
                 "relative_path": relative_path,
                 "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media",
                 "mime_type": mime_type,

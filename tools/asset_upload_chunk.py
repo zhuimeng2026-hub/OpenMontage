@@ -128,7 +128,7 @@ class UploadAssetChunk(BaseTool):
                 raise ValueError("asset already exists; use a different filename")
             os.replace(part_path, target)
             mime_type = state.get("mime_type") or mimetypes.guess_type(state["filename"])[0] or "application/octet-stream"
-            asset = {"id": f"{state['project_id']}-{digest[:12]}", "filename": state["filename"], "original_filename": state.get("original_filename", state["filename"]), "path": str(target), "relative_path": target.relative_to(root.parent).as_posix(), "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media", "mime_type": mime_type, "bytes": content_size, "sha256": digest, "source": "mcp_chunked_upload", "session_hash": state["session_hash"]}
+            asset = {"id": f"{state['project_id']}-{digest[:12]}", "filename": state["filename"], "original_filename": state.get("original_filename", state["filename"]), "relative_path": target.relative_to(root.parent).as_posix(), "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media", "mime_type": mime_type, "bytes": content_size, "sha256": digest, "source": "mcp_chunked_upload", "session_hash": state["session_hash"]}
             batch = None
             if asset["type"] == "image":
                 batch = register_image(current_session, state["project_id"], asset)

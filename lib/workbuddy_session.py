@@ -269,10 +269,12 @@ def register_image(session_id: str | None, project_id: str, asset: dict[str, Any
             raise ValueError("MCP session is already collecting assets for another project")
 
         digest_value = asset.get("sha256")
-        path_value = asset.get("path")
+        # Prefer the OS-portable relative_path; fall back to path for legacy
+        # session state that predates the relative_path field.
+        rel_value = asset.get("relative_path") or asset.get("path")
         if not any(
             (digest_value and item.get("sha256") == digest_value)
-            or (path_value and item.get("path") == path_value)
+            or (rel_value and (item.get("relative_path") or item.get("path")) == rel_value)
             for item in state["assets"]
         ):
             state["assets"].append(asset)

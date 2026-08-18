@@ -48,7 +48,7 @@ def test_chunk_upload_round_trip_is_session_scoped(tmp_path: Path, monkeypatch):
     assert completed.success
     asset = completed.data["asset"]
     assert asset["sha256"] == digest
-    assert Path(asset["path"]).read_bytes() == content
+    assert (projects.parent / asset["relative_path"]).read_bytes() == content
     assert completed.data["batch"]["status"] == "collecting_assets"
 
 
@@ -126,5 +126,5 @@ def test_chunk_upload_sanitizes_filename_and_preserves_extension(
     asset = completed.data["asset"]
     assert asset["filename"] == safe_filename
     assert asset["original_filename"] == original_filename
-    assert Path(asset["path"]).name == safe_filename
-    assert Path(asset["path"]).read_bytes() == content
+    assert Path(asset["relative_path"]).name == safe_filename
+    assert (projects.parent / asset["relative_path"]).read_bytes() == content

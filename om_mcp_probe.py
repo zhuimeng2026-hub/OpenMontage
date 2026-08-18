@@ -1013,7 +1013,7 @@ def main(argv=None):
             info = cli.extract(resp)
             print(json.dumps(info, ensure_ascii=False, indent=2))
             if isinstance(info, dict):
-                path = (info.get("asset") or {}).get("path") or info.get("path")
+                path = (info.get("asset") or {}).get("relative_path") or (info.get("asset") or {}).get("path") or info.get("relative_path") or info.get("path")
                 if path:
                     print("SERVER_PATH =", path)
             return 0
@@ -1022,7 +1022,7 @@ def main(argv=None):
             info = cli.chunk_upload(args.file, args.project, chunk=args.chunk)
             print(json.dumps(info, ensure_ascii=False, indent=2))
             if isinstance(info, dict):
-                path = (info.get("asset") or {}).get("path") or info.get("path")
+                path = (info.get("asset") or {}).get("relative_path") or (info.get("asset") or {}).get("path") or info.get("relative_path") or info.get("path")
                 if path:
                     print("SERVER_PATH =", path)
             return 0

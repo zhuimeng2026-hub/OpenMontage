@@ -303,7 +303,7 @@ def _asset_entry(project_dir: Path, asset: dict) -> dict:
     not-servable (exists=False): /media only serves within the project, and
     a bare-filename fallback path would 404 or hit the wrong file.
     """
-    raw_path = asset.get("path") or ""
+    raw_path = asset.get("relative_path") or asset.get("path") or ""
     resolved = _resolve_asset_path(project_dir, raw_path)
     if resolved is not None:
         try:

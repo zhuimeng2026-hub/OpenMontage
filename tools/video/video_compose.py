@@ -45,6 +45,26 @@ from tools.base_tool import (
 
 import os
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _asset_abs_path(asset: dict, default: str = "") -> str:
+    """Resolve an asset record to an on-disk absolute path.
+
+    Session-uploaded assets carry an OS-portable ``relative_path`` (posix,
+    relative to the repo root); template/workspace assets may still carry an
+    absolute ``path``. Prefer ``relative_path`` so the same record resolves
+    correctly on a different OS than the one that performed the upload.
+    """
+    rel = asset.get("relative_path")
+    if rel:
+        p = Path(rel)
+        return str(p if p.is_absolute() else (_REPO_ROOT / rel))
+    ap = asset.get("path")
+    if ap:
+        return str(ap)
+    return default
+
 
 def _get_remotion_concurrency():
     """Return the concurrency value for Remotion rendering."""
@@ -1112,7 +1132,7 @@ class VideoCompose(BaseTool):
             source_id = cut.get("source", "")
             resolved_cut = dict(cut)
             if source_id in asset_lookup:
-                resolved_cut["source"] = asset_lookup[source_id]["path"]
+                resolved_cut["source"] = _asset_abs_path(asset_lookup[source_id])
             resolved_cuts.append(resolved_cut)
 
         # --- Pre-compose validation gate ---

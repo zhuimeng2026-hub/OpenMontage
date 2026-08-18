@@ -37,6 +37,7 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+from lib.paths import REPO_ROOT
 
 
 log = logging.getLogger("hyperframes_compose")
@@ -781,6 +782,24 @@ class HyperFramesCompose(BaseTool):
             return 0.0
         return max(float(c.get("out_seconds", 0) or 0) for c in cuts)
 
+    @staticmethod
+    def _asset_abs_path(asset: dict, default: str = "") -> Path:
+        """Resolve an asset record to an on-disk absolute path.
+
+        Session-uploaded assets carry an OS-portable ``relative_path`` (posix,
+        relative to the repo root); template/workspace assets may still carry an
+        absolute ``path``. Prefer ``relative_path`` so the same record resolves
+        correctly on a different OS than the one that performed the upload.
+        """
+        rel = asset.get("relative_path")
+        if rel:
+            p = Path(rel)
+            return p if p.is_absolute() else (REPO_ROOT / rel)
+        ap = asset.get("path")
+        if ap:
+            return Path(ap)
+        return Path(default) if default else Path()
+
     def _resolve_and_stage_assets(
         self,
         cuts: list[dict],
@@ -802,7 +821,7 @@ class HyperFramesCompose(BaseTool):
             source = cut.get("source", "")
             resolved_cut = dict(cut)
             if source in asset_lookup:
-                resolved_cut["source"] = asset_lookup[source].get("path", source)
+                resolved_cut["source"] = str(self._asset_abs_path(asset_lookup[source], source))
             src_path = Path(resolved_cut["source"]) if resolved_cut.get("source") else None
             if src_path and src_path.exists() and not self._is_inside(src_path, workspace):
                 dest = assets_dir / src_path.name
@@ -828,7 +847,7 @@ class HyperFramesCompose(BaseTool):
             aid = seg.get("asset_id")
             if not aid or aid not in asset_lookup:
                 continue
-            src = Path(asset_lookup[aid].get("path", ""))
+            src = self._asset_abs_path(asset_lookup[aid])
             if not src.exists():
                 continue
             if not self._is_inside(src, workspace):
@@ -848,7 +867,7 @@ class HyperFramesCompose(BaseTool):
         music = audio.get("music", {})
         m_id = music.get("asset_id")
         if m_id and m_id in asset_lookup:
-            src = Path(asset_lookup[m_id].get("path", ""))
+            src = self._asset_abs_path(asset_lookup[m_id])
             if src.exists():
                 if not self._is_inside(src, workspace):
                     dest = assets_dir / src.name
