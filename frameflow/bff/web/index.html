@@ -2018,20 +2018,30 @@
   var DEFAULT_COMP =
 'import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing, staticFile} from "remotion";\n' +
 '\n' +
-'export const MyComposition: React.FC<{images: string[]; durationPerImage?: number}> = (\n' +
-'  {images, durationPerImage = 3}\n' +
-') => {\n' +
+'// 自定义脚本契约（DeepSeek 生成脚本请遵循）：运行时注入以下 props\n' +
+'//   images: string[]            上传图片的相对路径，必须用 staticFile(src) 引用\n' +
+'//   durationPerImage: number    每张图时长（秒），默认 3\n' +
+'//   fps: number                 合成帧率，固定 30\n' +
+'//   width / height: number      画布尺寸（如 9:16 为 1080 x 1920）\n' +
+'export const MyComposition: React.FC<{\n' +
+'  images: string[];\n' +
+'  durationPerImage?: number;\n' +
+'  fps?: number;\n' +
+'  width?: number;\n' +
+'  height?: number;\n' +
+'}> = ({images, durationPerImage = 3, fps = 30, width = 1080, height = 1920}) => {\n' +
 '  const frame = useCurrentFrame();\n' +
+'  const framesPerImage = Math.round(durationPerImage * fps);\n' +
 '  const n = Math.max(images.length, 1);\n' +
-'  const idx = Math.min(Math.floor(frame / durationPerImage), n - 1);\n' +
-'  const progress = (frame % durationPerImage) / durationPerImage;\n' +
+'  const idx = Math.min(Math.floor(frame / framesPerImage), n - 1);\n' +
+'  const progress = (frame % framesPerImage) / framesPerImage;\n' +
 '  const scale = interpolate(progress, [0, 1], [1.05, 1], {\n' +
 '    easing: Easing.inOut(Easing.cubic),\n' +
 '  });\n' +
 '  return (\n' +
 '    <AbsoluteFill style={{backgroundColor: "#05010F"}}>\n' +
 '      {images.map((src, i) => (\n' +
-'        <Sequence key={i} from={i * durationPerImage} durationInFrames={durationPerImage}>\n' +
+'        <Sequence key={i} from={i * framesPerImage} durationInFrames={framesPerImage}>\n' +
 '          <AbsoluteFill>\n' +
 '            <img\n' +
 '              src={staticFile(src)}\n' +

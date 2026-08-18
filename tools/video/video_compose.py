@@ -1445,6 +1445,30 @@ class VideoCompose(BaseTool):
 
         return render_result
 
+    def _normalize_custom_composition_props(
+        self, composition_data: dict, staged_images: list
+    ) -> dict:
+        """Build the props object consumed by the runtime-compiled CustomComposition.
+
+        MCP emits snake_case ``edit_decisions`` (``custom_code``,
+        ``duration_per_image``); the component reads camelCase props (``code``,
+        ``durationPerImage``). Map them so the user-authored TSX actually
+        receives its inputs instead of rendering an error screen. ``fps`` /
+        ``width`` / ``height`` are injected by Remotion from the composition
+        config, but we also forward them explicitly so the metadata pass and
+        scripts that read them directly get consistent values.
+        """
+        ct = ((composition_data or {}).get("metadata") or {}).get("compose_target") or {}
+        return {
+            "code": (composition_data or {}).get("custom_code", ""),
+            "images": staged_images,
+            "durationPerImage": (composition_data or {}).get("duration_per_image", 3),
+            "fps": 30,
+            "width": ct.get("width", 1080),
+            "height": ct.get("height", 1920),
+            "renderer_family": "custom-composition",
+        }
+
     def _remotion_render(self, inputs: dict[str, Any]) -> ToolResult:
         """Render via Remotion (requires Node.js + npx).
 
@@ -1526,9 +1550,13 @@ class VideoCompose(BaseTool):
                     staged_images.append(self._stage_remotion_asset(img, idx, staged_dir))
                 else:
                     staged_images.append(img)
-            props["images"] = staged_images
-            # Force composition routing to the runtime-compiled component.
-            props["renderer_family"] = "custom-composition"
+            # Replace the edit_decisions-shaped props with the component-facing
+            # contract so the user-authored TSX truly receives its inputs. MCP
+            # emits snake_case keys (custom_code / duration_per_image); the
+            # runtime-compiled CustomComposition reads camelCase props
+            # (code / durationPerImage). Without this mapping the component gets
+            # an empty `code` and renders an error screen instead of the video.
+            props = self._normalize_custom_composition_props(composition_data, staged_images)
 
         for idx, cut in enumerate(props.get("cuts", [])):
             # cuts[].source (Ken Burns / still) + background image/video layers

@@ -34,7 +34,8 @@ const calculateCustomMetadata: CalculateMetadataFunction<Record<string, unknown>
     ? ((props as { images: unknown[] }).images as unknown[])
     : [];
   const dpi = Number((props as { durationPerImage?: number }).durationPerImage) || 3;
-  const frames = Math.max(1, Math.round(images.length * dpi * 30));
+  const fps = Number((props as { fps?: number }).fps) || 30;
+  const frames = Math.max(1, Math.round(images.length * dpi * fps));
   return { durationInFrames: frames };
 };
 

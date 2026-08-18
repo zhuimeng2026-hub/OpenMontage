@@ -654,6 +654,48 @@ OpenMontage 被设计为高度可扩展的。最常见的两种贡献是：
 
 ---
 
+## 自定义脚本契约
+
+「脚本模式」允许用户提交自定义 Remotion TSX 源码（例如由 DeepSeek 生成），由 `remotion-composer/src/CustomComposition.tsx` 在运行时编译并渲染。生成或编写脚本时，请严格遵循以下 props 契约——这是组件实际注入到用户代码中的全部入参：
+
+| prop | 类型 | 含义 | 说明 |
+|------|------|------|------|
+| `images` | `string[]` | 上传图片的相对路径 | 必须用 `staticFile(src)` 引用；路径由渲染管线 staging 到 `public/_staged/<id>/` 后注入 |
+| `durationPerImage` | `number` | 每张图展示时长（秒） | 默认 `3`；由 `create_remotion_video_share` 的 `duration` 参数决定 |
+| `fps` | `number` | 合成帧率 | 固定 `30` |
+| `width` / `height` | `number` | 画布尺寸 | 如 9:16 为 `1080 × 1920`，由 `aspect_ratio` 决定 |
+
+**约定与约束：**
+
+- 用户代码须导出可渲染组件：`export const MyComposition = (props) => {...}` 或 `export default`。
+- 组件必须使用 Remotion API（`AbsoluteFill`、`useCurrentFrame`、`Sequence` 等）返回 React 元素。
+- 图片路径是相对 `public/` 的，**必须**用 `staticFile(src)` 包裹，不能用绝对路径或 `file://`。
+- 视频总时长（帧）= `images.length × durationPerImage × fps`，由 `Root.tsx` 的 `calculateCustomMetadata` 计算，用户代码无需也无法改总时长。
+- 默认模板见 BFF `web/index.html` 的 `DEFAULT_COMP`，脚本生成（如 DeepSeek）应以其为对齐范本。
+
+最小可用示例：
+
+```tsx
+import {AbsoluteFill, useCurrentFrame, Sequence, staticFile} from "remotion";
+
+export const MyComposition = ({images, durationPerImage = 3, fps = 30}) => {
+  const frame = useCurrentFrame();
+  const fpi = Math.round(durationPerImage * fps);
+  const idx = Math.min(Math.floor(frame / fpi), Math.max(images.length, 1) - 1);
+  return (
+    <AbsoluteFill>
+      {images.map((src, i) => (
+        <Sequence key={i} from={i * fpi} durationInFrames={fpi}>
+          <AbsoluteFill>
+            <img src={staticFile(src)} style={{width: "100%", height: "100%", objectFit: "cover"}} />
+          </AbsoluteFill>
+        </Sequence>
+      ))}
+    </AbsoluteFill>
+  );
+};
+```
+
 ## 测试
 
 ```bash

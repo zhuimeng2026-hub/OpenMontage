@@ -4,24 +4,32 @@ import * as Remotion from "remotion";
 
 /**
  * CustomComposition — runtime-compiles a user-authored Remotion TSX string and
- * renders it. The user code convention (see the BFF `DEFAULT_COMP` template):
+ * renders it. The user code convention (see the BFF `DEFAULT_COMP` template and
+ * the project README "自定义脚本契约" section):
  *
- *   import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing} from "remotion";
- *   export const MyComposition = ({images, durationPerImage = 3}) => { ... };
+ *   import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing, staticFile} from "remotion";
+ *   export const MyComposition = ({images, durationPerImage = 3, fps = 30, width = 1080, height = 1920}) => { ... };
  *
- * The component receives `images: string[]` (paths relative to Remotion's
- * public dir — wrap them with `staticFile(src)` inside the user code) and
- * `durationPerImage` (seconds). It must return a React element using Remotion
- * APIs. `export default` is also accepted.
+ * The component receives the following props (this IS the contract — DeepSeek
+ * generates scripts against it):
+ *   - code: string            the TSX source (supplied by the caller, not the user code)
+ *   - images: string[]        paths relative to Remotion's public dir — wrap them with `staticFile(src)`
+ *   - durationPerImage: number  seconds each image is shown (default 3)
+ *   - fps: number             composition frame rate (fixed at 30)
+ *   - width / height: number  canvas dimensions (e.g. 1080 x 1920 for 9:16)
+ *
+ * Total duration in frames = images.length * durationPerImage * fps.
+ * The user component MUST return a React element using Remotion APIs.
+ * `export default` is also accepted.
  */
 
 export interface CustomCompositionProps {
-  code: string;
-  images: string[];
-  durationPerImage: number;
-  width: number;
-  height: number;
-  fps: number;
+  code?: string;
+  images?: string[];
+  durationPerImage?: number;
+  width?: number;
+  height?: number;
+  fps?: number;
 }
 
 type AnyComp = React.FC<Record<string, unknown>>;
@@ -96,9 +104,12 @@ const ErrorScreen: React.FC<{ message: string }> = ({ message }) => {
 };
 
 export const CustomComposition: React.FC<CustomCompositionProps> = ({
-  code,
-  images,
-  durationPerImage,
+  code = "",
+  images = [],
+  durationPerImage = 3,
+  fps = 30,
+  width = 1080,
+  height = 1920,
 }) => {
   const { Component, error } = React.useMemo(
     () => compileUserComponent(code),
@@ -114,6 +125,9 @@ export const CustomComposition: React.FC<CustomCompositionProps> = ({
       <Component
         images={images}
         durationPerImage={durationPerImage}
+        fps={fps}
+        width={width}
+        height={height}
       />
     );
   } catch (e) {
