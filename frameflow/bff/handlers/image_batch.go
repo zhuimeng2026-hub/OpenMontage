@@ -16,10 +16,41 @@ import (
 
 // Named scripts are deliberately server-side choices. They map to trusted
 // Remotion compositions; arbitrary browser-supplied TSX is not executed.
-var imageScripts = map[string]string{
-	"photo-ken-burns":        "照片运镜",
-	"cinematic-montage":      "电影混剪",
-	"ecommerce-product-demo": "电商产品演示",
+//
+// `imageScripts` is a slice (not a map) because the order is part of the
+// contract: the FIRST entry is the UI's default selection. The list is served
+// in declared order by the /api/image-scripts endpoint and consumed by the
+// frontend in the same order, so callers must not switch this back to a map.
+type imageScript struct {
+	ID   string
+	Name string
+}
+
+var imageScripts = []imageScript{
+	{ID: "ecommerce-product-demo", Name: "电商产品演示"},
+	{ID: "photo-ken-burns", Name: "照片运镜"},
+	{ID: "cinematic-montage", Name: "电影混剪"},
+}
+
+// knownScript reports whether id matches one of the system scripts in
+// declared order. Used by Create() before admitting a render submission.
+func knownScript(id string) bool {
+	for _, s := range imageScripts {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// listImageScripts returns the catalog in the order the UI should render it.
+// Kept as a helper so Scripts() and the 422 response in Create() stay in sync.
+func listImageScripts() []gin.H {
+	out := make([]gin.H, 0, len(imageScripts))
+	for _, s := range imageScripts {
+		out = append(out, gin.H{"id": s.ID, "name": s.Name})
+	}
+	return out
 }
 
 func validateImageCount(count int) error {
@@ -56,11 +87,7 @@ func (h *ImageBatchHandler) ensureSession(c *gin.Context) string {
 }
 
 func (h *ImageBatchHandler) Scripts(c *gin.Context) {
-	out := make([]gin.H, 0, len(imageScripts))
-	for id, name := range imageScripts {
-		out = append(out, gin.H{"id": id, "name": name})
-	}
-	c.JSON(http.StatusOK, gin.H{"scripts": out})
+	c.JSON(http.StatusOK, gin.H{"scripts": listImageScripts()})
 }
 
 func (h *ImageBatchHandler) Create(c *gin.Context) {
@@ -76,8 +103,8 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
-	if _, ok := imageScripts[req.ScriptID]; !ok {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "unknown script_id", "scripts": imageScripts})
+	if !knownScript(req.ScriptID) {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "unknown script_id", "scripts": listImageScripts()})
 		return
 	}
 
