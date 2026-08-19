@@ -28,6 +28,15 @@ var allowedMCPTools = map[string]bool{
 	"upload_asset_chunk":          true,
 	"create_remotion_video_share": true,
 	"get_render_status":           true,
+	// Subtitle workflow: the browser composes the workflow by calling
+	// execute_tool with tool_name=transcriber|translator|subtitle_gen|
+	// remotion_caption_burn|tts_selector. The BFF's only job here is to
+	// forward the request to the upstream MCP — every authorization and
+	// resource check still happens on the upstream side.
+	"execute_tool": true,
+	"get_tool_info": true,
+	"list_tools":   true,
+	"dry_run_tool": true,
 }
 
 // MCPProxy receives { "tool": "<name>", "args": { ... } } and forwards it to the
