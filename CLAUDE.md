@@ -13,7 +13,7 @@ There are no creative-decision rules in this file — those are in `AGENT_GUIDE.
 OpenMontage is an instruction-driven, agent-first video production system. The agent itself is the orchestrator — Python is only tools and persistence. The Makefile is the source of truth for setup; targets commonly needed during development:
 
 ```bash
-make setup                # one-shot install: venv + Python deps + Remotion npm + Piper TTS + HyperFrames cache + .env
+make setup                # one-shot install: venv + Python deps + Remotion npm + demo npm + Piper TTS + HyperFrames cache + .env
 make install              # Python deps only
 make install-dev          # adds pytest, httpx2, pytest-asyncio
 make install-gpu          # adds torch/torchaudio/torchvision + diffusers (NVIDIA GPU)
