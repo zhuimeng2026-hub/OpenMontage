@@ -5,6 +5,8 @@ reach disk or logs; state writes use replace-on-same-filesystem semantics.
 """
 from __future__ import annotations
 
+import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -39,6 +41,42 @@ def require_session(session_id: str | None) -> str:
 def _lock_for(digest: str) -> threading.RLock:
     with _locks_guard:
         return _locks.setdefault(digest, threading.RLock())
+
+
+# Cross-process file lock directory. ``flock`` (POSIX advisory lock) is the
+# real safety net for multi-worker / multi-container deployments: the
+# in-process ``_locks`` RLock above only protects within a single Python
+# interpreter. Two concurrent MCP worker processes hitting the same session
+# would otherwise race on _read / _write / register_image, and the chunked
+# upload dedup path in ``asset_upload_chunk.py`` can also delete files based
+# on stale canonical metadata.
+_LOCK_DIR = STATE_DIR / ".locks"
+
+
+@contextmanager
+def _flock_for(digest: str) -> Iterator[None]:
+    """Acquire a POSIX advisory lock scoped to one session digest.
+
+    Falls back to a no-op on platforms without fcntl.flock (Windows) so the
+    import doesn't break dev workflows; the in-process RLock still applies.
+    """
+    _LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = _LOCK_DIR / f"{digest}.lock"
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except (OSError, AttributeError):
+            # Best-effort: single-process deployments still get in-process
+            # safety from ``_lock_for``. Logged at debug level only.
+            pass
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except (OSError, AttributeError):
+            pass
+        os.close(fd)
 
 
 def _state_path(digest: str) -> Path:
@@ -282,9 +320,16 @@ def get_session_assets(session_id: str | None) -> list[dict[str, Any]]:
 
 
 def register_image(session_id: str | None, project_id: str, asset: dict[str, Any]) -> dict[str, Any]:
-    """Add one completed image, deduplicating by sha/path within the open batch."""
+    """Add one completed image, deduplicating by sha/path within the open batch.
+
+    Holds BOTH an in-process RLock (cheap, nested-safe) AND a POSIX advisory
+    flock on ``.locks/<digest>.lock`` so that two MCP worker processes (or
+    multiple BFF instances) cannot race on the same session file. The flock
+    is the real cross-process safety net; the RLock prevents recursive
+    deadlock within a single worker.
+    """
     digest = require_session(session_id)
-    with _lock_for(digest):
+    with _lock_for(digest), _flock_for(digest):
         state = _read(digest)
         if state and state.get("status") == "rendering":
             raise ValueError("MCP session batch is currently rendering; upload after it completes")
@@ -316,6 +361,42 @@ def register_image(session_id: str | None, project_id: str, asset: dict[str, Any
             state["assets"].append(asset)
         _write(_state_path(digest), state)
         return state
+
+
+def replace_asset_by_sha(
+    session_id: str | None, project_id: str, asset: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Replace an existing asset entry whose sha256 matches ``asset.sha256``.
+
+    Used by the chunked-upload dedup path when the canonical file referenced
+    by an existing entry is missing on disk (cleanup job / RepoRoot mismatch
+    / earlier race): the new upload must promote itself into the same slot
+    instead of silently deleting its own bytes. ``register_image`` cannot be
+    used for this because its sha-dedup rule refuses to append a duplicate.
+
+    Returns the rewritten state on success, or None when no matching sha
+    was found (caller can fall through to register_image for a clean
+    append). Cross-process safe: same flock + RLock as register_image.
+    """
+    digest = require_session(session_id)
+    target_sha = asset.get("sha256")
+    if not target_sha:
+        return None
+    with _lock_for(digest), _flock_for(digest):
+        state = _read(digest)
+        if not state:
+            return None
+        if state.get("project_id") != project_id:
+            raise ValueError("MCP session is already collecting assets for another project")
+        assets_list = state.get("assets")
+        if not isinstance(assets_list, list):
+            return None
+        for i, item in enumerate(assets_list):
+            if isinstance(item, dict) and item.get("sha256") == target_sha:
+                assets_list[i] = asset
+                _write(_state_path(digest), state)
+                return state
+        return None
 
 
 def begin_render(session_id: str | None, project_id: str | None = None) -> tuple[str, dict[str, Any]]:

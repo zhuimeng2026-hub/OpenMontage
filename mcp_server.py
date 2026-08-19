@@ -757,6 +757,40 @@ async def upload_asset_chunk(
     return response
 
 
+@mcp.tool()
+async def read_session_asset(relative_path: str) -> dict[str, Any]:
+    """Stream a session-uploaded asset back as base64 by repo-relative path.
+
+    Exists so a BFF on a different host can serve ``<img>`` thumbnails
+    without needing a shared filesystem with this MCP server. The BFF
+    performs the owner-scope whitelist check (via ``get_session_assets``)
+    before calling this; the tool itself only enforces path safety and
+    reads the bytes. ``relative_path`` must live under ``<repo>/projects/``.
+
+    The response carries ``data_base64`` (the bytes), ``bytes`` (size),
+    ``mime_type`` (guessed from extension) and ``filename``. Errors are
+    surfaced as ``{"success": False, "error": "..."}``.
+    """
+    tool = registry.get("read_session_asset")
+    if tool is None:
+        return {"success": False, "error": "read_session_asset tool is not registered"}
+    result = await _run_tool_sync(tool, {
+        "relative_path": relative_path,
+        "mcp_session_id": get_mcp_session_id(),
+    })
+    if not result.success:
+        return {"success": False, "error": result.error or "read failed"}
+    data = result.data or {}
+    return {
+        "success": True,
+        "bytes": data.get("bytes"),
+        "data_base64": data.get("data_base64"),
+        "mime_type": data.get("mime_type"),
+        "filename": data.get("filename"),
+        "relative_path": data.get("relative_path"),
+    }
+
+
 def _resolve_session_asset_path(asset: dict) -> Path:
     """Resolve a session asset to an absolute path from its OS-portable
     ``relative_path`` (posix, relative to the repo root).
