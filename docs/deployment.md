@@ -1,6 +1,6 @@
 # Voicebox × OpenMontage MCP — Deployment Runbook
 
-> Date: 2026-08-19 · Status: **implemented locally, awaiting production deployment**
+> Date: 2026-08-19 · Status: **live locally, awaiting production deploy on VPS**
 >
 > This document is the deployment counterpart to `scenarios.md`. It records
 > exactly which files were modified, where the running artifacts live, and how
@@ -10,19 +10,33 @@
 
 ## What Was Built
 
-The IPv4-only scenario (Scenario 2 in `scenarios.md`) is fully implemented
-on this host. The chain is:
+Voicebox MCP is now served from the **same port** as OpenMontage MCP
+(8900) via an internal ASGI reverse-proxy mount. This means there is one
+IPv6 ingress (`lanes.ymxt.top:8900`), one TLS cert, one Bearer auth layer.
+The standalone `mcp-proxy-multi` Go binary is now optional fallback only —
+the main path is `BFF :8090 → lanes.ymxt.top:8900/voicebox/mcp/`.
 
 ```
 OpenClaw / Claude Code (remote)
         │
-        ├──> https://render.mengxa.com/voicebox/mcp   (or :18800 locally)
-        │       └──> [Voicebox relay :18800]
-        │              └──> http://127.0.0.1:17493/mcp/
+        ├──> https://render.mengxa.com/api/voicebox-mcp   (or :8090 locally)
+        │       └──> [FrameFlow BFF :8090, Bearer auth, stateless proxy]
+        │              └──> http://lanes.ymxt.top:8900/voicebox/mcp/
+        │                     └──> [OpenMontage :8900 internal reverse proxy]
+        │                            └──> http://127.0.0.1:17493/mcp/
         │
-        └──> https://render.mengxa.com/api/mcp-raw     (or :8090 locally)
-                └──> [FrameFlow BFF :8090, Bearer auth]
-                       └──> http://127.0.0.1:8900/mcp (or lanes.ymxt.top:8900/mcp)
+        └──> https://render.mengxa.com/api/mcp-raw       (or :8090 locally)
+                └──> [FrameFlow BFF :8090, Bearer auth, SessionStore-backed]
+                       └──> http://lanes.ymxt.top:8900/mcp
+
+Optional fallback (still wired):
+        relay :18800 (mcp-proxy-multi) — same multi-upstream capability,
+        retained as hot standby. NOT on the production hot path.
+```
+
+The full IPv6-direct path (Scenario 1) is unchanged: any IPv6 client can
+hit `lanes.ymxt.top:8900/voicebox/mcp/` or `lanes.ymxt.top:8900/mcp`
+directly with `Authorization: Bearer <MCP_API_TOKEN>` — no BFF needed.
 ```
 
 Three pieces:
