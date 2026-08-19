@@ -68,6 +68,13 @@ type Config struct {
 	// a real user store / WeChat resolver can replace this later.
 	DefaultTier   string
 	TierOverrides string
+
+	// ExternalAgentToken is a static bearer token accepted by /api/mcp-raw as
+	// an alternative to WeChat auth. When set, external CLI/agent callers can
+	// hit the BFF without a browser session. The token is hashed (SHA-256, first
+	// 16 hex) and used as the SessionStore scope key, so all calls from the same
+	// token share one upstream MCP session. Leave empty to disable the route.
+	ExternalAgentToken string
 }
 
 func Load() *Config {
@@ -106,6 +113,7 @@ func Load() *Config {
 		WeiyunAPIToken:           os.Getenv("WEIYUN_API_KEY"),
 		DefaultTier:              get("DEFAULT_TIER", "free"),
 		TierOverrides:            os.Getenv("TIER_OVERRIDES"),
+		ExternalAgentToken:       strings.TrimSpace(os.Getenv("EXTERNAL_AGENT_TOKEN")),
 	}
 }
 

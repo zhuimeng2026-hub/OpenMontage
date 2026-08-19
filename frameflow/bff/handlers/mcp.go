@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -386,4 +388,69 @@ func (h *Handlers) quotaRejectForUpload(scope, projectID string) (bool, int, gin
 		}
 	}
 	return false, 0, nil
+}
+
+// MCPRawProxy is a transparent JSON-RPC passthrough for external (non-browser)
+// callers. It accepts standard MCP JSON-RPC envelopes (initialize / tools/list
+// / tools/call) and forwards them verbatim to the upstream MCP through the
+// SessionStore's per-owner Client, returning the upstream response unchanged
+// (including SSE framing). The owner key is derived from the bearer token via
+// RequireBearer (see auth.go) and never collides with any WeChat user.
+//
+// Unlike MCPProxy which reshapes requests to {tool, args}, this endpoint
+// preserves the upstream MCP protocol — it is intended for CLI/agent callers
+// that already speak MCP and don't need the browser-friendly adapter.
+//
+// Body size cap: 256 MB. Larger payloads should not go through the BFF —
+// upload them via upload_asset_chunk or the dedicated asset endpoint instead.
+func (h *Handlers) MCPRawProxy(c *gin.Context) {
+	const maxRawBody = 256 * 1024 * 1024
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRawBody)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body exceeds 256 MB"})
+		return
+	}
+	if len(body) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty request body"})
+		return
+	}
+	// Parse just enough to log the method name. Malformed JSON still gets
+	// forwarded so the upstream produces a proper JSON-RPC -32600 error.
+	var peek struct {
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(body, &peek)
+	method := peek.Method
+	if method == "" {
+		method = "unknown"
+	}
+	// Pull the validated bearer token out of the gin Context (set by RequireBearer).
+	tokenVal, _ := c.Get("agent_token")
+	token, _ := tokenVal.(string)
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing agent token"})
+		return
+	}
+	scope := renderQueueOwnerIDForAgent(token)
+	start := time.Now()
+	status, contentType, raw, callErr := h.Store.RawCall(scope, method, body)
+	elapsed := time.Since(start).Milliseconds()
+	if callErr != nil {
+		log.Printf("[bff-mcp-raw] err method=%s scope_hash=%s elapsed_ms=%d err=%v", method, mcp.ShortHashForLog(scope), elapsed, callErr)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream mcp unavailable", "detail": callErr.Error()})
+		return
+	}
+	if status >= 400 {
+		log.Printf("[bff-mcp-raw] upstream_error method=%s scope_hash=%s elapsed_ms=%d upstream_status=%d body_len=%d",
+			method, mcp.ShortHashForLog(scope), elapsed, status, len(raw))
+	}
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	// Forward the rotating upstream Mcp-Session-Id so the client can keep using
+	// the same session across calls (essential for upload_asset_chunk ->
+	// create_remotion_video_share continuity). Also forward Content-Length.
+	c.Header("Mcp-Session-Id", h.Store.SessionIDForOwner(scope))
+	c.Data(status, contentType, raw)
 }

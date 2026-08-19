@@ -57,6 +57,50 @@ func (c *Client) SetSessionID(sid string) {
 	c.sid = sid
 }
 
+// RawSend forwards a JSON-RPC envelope verbatim to the upstream MCP and
+// returns the raw upstream response (body bytes + content-type). It is used
+// by /api/mcp-raw, the transparent proxy for external CLI/agent callers that
+// want full MCP protocol access (initialize / tools/list / tools/call) without
+// the BFF's {tool, args} reshape. The rotating Mcp-Session-Id is still
+// captured from the response header so the SAME Client can be reused across
+// calls and uploads stay bound to one upstream session.
+//
+// `method` and `body` are logged for tracing; status carries the upstream HTTP
+// status (used by the proxy to decide whether to retry on session loss).
+func (c *Client) RawSend(method string, body []byte) (status int, contentType string, rawResponse []byte, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	started := time.Now()
+	httpReq, err := http.NewRequest(http.MethodPost, c.baseURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, "", nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	if c.authHeader != "" {
+		httpReq.Header.Set(c.authHeader, c.authPrefix+c.token)
+	}
+	if c.sid != "" {
+		httpReq.Header.Set("Mcp-Session-Id", c.sid)
+	}
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		log.Printf("[mcp-raw] transport_error method=%s elapsed_ms=%d err=%v", method, time.Since(started).Milliseconds(), err)
+		return 0, "", nil, err
+	}
+	defer resp.Body.Close()
+	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
+		c.sid = sid
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, resp.Header.Get("Content-Type"), nil, err
+	}
+	log.Printf("[mcp-raw] method=%s status=%d elapsed_ms=%d sid_after=%s body_len=%d",
+		method, resp.StatusCode, time.Since(started).Milliseconds(), shortHash(c.sid), len(raw))
+	return resp.StatusCode, resp.Header.Get("Content-Type"), raw, nil
+}
+
 func NewClient(baseURL, token string) *Client {
 	return NewClientAuth(baseURL, token, "Authorization", "Bearer ")
 }

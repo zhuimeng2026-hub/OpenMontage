@@ -74,6 +74,11 @@ func main() {
 	{
 		// Expensive, upstream-facing routes: rate-limited (group) + auth-gated.
 		api.POST("/mcp", h.RequireAuth(), h.MCPProxy)
+		// External-agent transparent JSON-RPC passthrough. Mounted ONLY when
+		// EXTERNAL_AGENT_TOKEN is set; otherwise the middleware itself 503s.
+		if h.Cfg.ExternalAgentToken != "" {
+			api.POST("/mcp-raw", h.RequireBearer(), h.MCPRawProxy)
+		}
 		api.GET("/render-progress/:jobId", h.RequireAuth(), h.RenderProgress)
 		api.GET("/image-scripts", ibh.Scripts)
 		api.GET("/image-batches", h.RequireAuth(), ibh.List)

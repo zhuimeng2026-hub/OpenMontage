@@ -554,3 +554,54 @@ func (s *SessionStore) Call(sessionID, tool string, args map[string]interface{})
 	}
 	return c.CallTool(tool, args)
 }
+
+// RawCall forwards a raw JSON-RPC envelope to the upstream MCP through the
+// per-owner Client. The rotating Mcp-Session-Id is captured from the response
+// so subsequent calls land on the same upstream session. Used by /api/mcp-raw
+// for external CLI/agent callers that want full MCP protocol access.
+//
+// The caller passes the JSON-RPC method name for logging. On a session-loss
+// transport error, the store transparently drops the Client and retries once
+// with a fresh upstream session. The returned bytes are the exact upstream
+// response body (SSE framing preserved).
+func (s *SessionStore) RawCall(sessionID, method string, body []byte) (status int, contentType string, rawResponse []byte, err error) {
+	c, err := s.getOrCreate(sessionID)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	status, ct, raw, err := c.RawSend(method, body)
+	if err != nil {
+		// Transport-layer session loss -> drop, reinit, retry once.
+		if IsSessionTransportError(err) {
+			s.drop(sessionID)
+			_ = s.deletePersistedUserSession(sessionID)
+			c, err = s.getOrCreate(sessionID)
+			if err != nil {
+				return 0, "", nil, err
+			}
+			return c.RawSend(method, body)
+		}
+		return 0, "", nil, err
+	}
+	// Persist the (possibly new) upstream session id so a BFF restart can
+	// resume the same upstream session for this owner.
+	if status < 500 {
+		_ = s.persistUserSession(sessionID, c.SessionID())
+	}
+	return status, ct, raw, nil
+}
+
+// SessionIDForOwner returns the current upstream MCP session id that an owner
+// is pinned to. Returns "" when the owner has never called (no client pinned
+// yet, or the upstream hasn't sent a Mcp-Session-Id header). Used by
+// /api/mcp-raw to forward the rotating session id back to the caller so the
+// same client can send it back on subsequent calls.
+func (s *SessionStore) SessionIDForOwner(sessionID string) string {
+	s.mu.RLock()
+	c, ok := s.clients[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return ""
+	}
+	return c.SessionID()
+}
