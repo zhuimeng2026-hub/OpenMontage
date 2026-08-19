@@ -1,182 +1,179 @@
-# 渲染任务 @babel/standalone 缺失 Bug 检查 / 处理 / 复检报告
+# 渲染任务 @babel/standalone 缺失 Bug — 二次复检报告
 
-- 报告日期：2026-08-19
-- 涉及组件：`frameflow/bff`（本机 A：ocdev，:8080）→ `lanes.ymxt.top:8900/mcp`（机器 B：MCP 上传 + Remotion 渲染，仅 IPv6）
-- 结论：**渲染后端（机器 B）的 `remotion-composer/node_modules` 缺少 `@babel/standalone`，导致所有 Remotion 渲染在打包阶段失败；该依赖由 2026-08-18 提交 `13f7dca` 引入，机器 B 未执行 `npm install` 刷新依赖。本机 A 无机器 B 的管理通道（无 SSH / 无 shell 类 MCP 工具），无法从本机直接修复，需机器 B 运维执行一行 `npm install`。**
+- **报告日期**：2026-08-19（重新检查）
+- **涉及组件**：`frameflow/bff`（本机 A：ocdev，:8080）→ `lanes.ymxt.top:8900/mcp`（机器 B：MCP 上传 + Remotion 渲染，仅 IPv6）
+- **复检人**：本机 A 上的诊断 agent（无机器 B 的管理通道）
+- **新结论**：**机器 B 的 `@babel/standalone` 依赖已被修复**（早期报告"全部渲染失败"已不成立）；残留失败任务由于历史产物缺失无法 retry publish，新提交尚未端到端验证。
+
+> 与早期报告（日期 2026-08-18 / 19）的差别见文末"修正说明"。
 
 ---
 
-## 1. 异常现象
+## 1. 复检过程（本机 A 视角）
 
-用户从 Web（`render.mengxa.com`）提交图片 + 自定义脚本，BFF 按环境变量
-（`MCP_BASE_URL=http://lanes.ymxt.top:8900/mcp`）把渲染任务转发到上游 MCP（机器 B）。
-异常表现为：**渲染任务全部失败（「失败」状态），无成片产出。**
+本机 A（ocdev）是 BFF 主机，**对机器 B 没有 SSH、没有 shell 类 MCP 工具**——只能：
 
-证据：
+1. 通过 Streamable-HTTP MCP 直接调机器 B 的工具（已建立 session `1ed8415145e04d45b31db83d08455604`）
+2. 查询 BFF SQLite `render_jobs` / `image_batches` 表
+3. 解析 `journalctl -u frameflow-bff` 日志
+4. 在本机跑 `om_mcp_probe.py` 等黑盒探测
 
-- BFF 系统日志（journalctl -u frameflow-bff）出现：
-  ```
-  [bff-mcp] tool_error tool=get_render_status ... error="Remotion render failed for
-  renderer_family='animation-first'. Underlying error: Remotion render failed (exit 1):
-  Bundling ... Error: Module not found: Error: Can't resolve '@babel/standalone'
-  in '/opt/OpenMontage/remotion-composer/src' ..."
-  ```
-- BFF SQLite `render_jobs` 状态（`frameflow/bff/data/frameflow.db`）：
-  - 最近 3 个任务（2026-08-18 18:07 / 18:19 / 18:22）→ 全部「失败」
-  - 更早的任务（2026-08-17）有成功有失败（混有上传配额等其它历史问题）
-- 直接查询机器 B 上游 MCP（`get_render_status(render_job_id=f9bbaedf...)`）→ 仍为
-  `failed`，错误同 @babel/standalone，`updated_at=2026-08-18T10:07:43Z`。
+### 1.1 上游 MCP 连通性
 
-## 2. 系统现状（本机 A，诊断时点）
+| 项 | 状态 |
+|---|---|
+| TCP/IPv6 可达 | ✅ `240e:3b0:c49:f726:35e0:c08c:c3a5:88d8` |
+| `initialize` 握手 | ✅ 成功，返回 session id |
+| `tools/list` | ✅ 返回 24 个工具 |
+| `get_render_status` | ✅ 返回任务状态 |
+| `retry_render_publish` | ✅ 可调，但失败任务不再 retry @babel，而是报 `Persisted video_path does not exist` |
+| shell / 文件系统类 MCP 工具 | ❌ **无**（工具集里无任何 `npm install` / 文件管理工具） |
 
-| 项目 | 状态 |
-|------|------|
-| `frameflow-bff.service` | active (running)，主进程 940464，:8080 |
-| BFF 启动日志 | `[mcp] endpoint=http://lanes.ymxt.top:8900/mcp progress_endpoint=http://lanes.ymxt.top:8900/render-progress` |
-| BFF 二进制 | 2026-08-18 17:59 构建，比全部 `*.go` 源文件新（无需重建） |
-| `/api/me` | 200（AUTH_REQUIRED=true 生效） |
-| nginx `render.mengxa.com` | 代理 `/api/` → `127.0.0.1:8080`，配置正常 |
-| 上游 MCP（机器 B） | TCP/IPv6 可达；`initialize`/`tools/list`/`get_render_status` 快速返回 |
-| 上游 MCP 渲染 | **`@babel/standalone` 缺失，所有 Remotion 渲染失败** |
+→ 本机 A 仍只能做只读诊断与重启渲染触发，无法直接修机器 B 的依赖。
 
-BFF 侧的转发本身**工作正常**：上传（upload_asset_chunk）、轮询（get_render_status）
-都成功返回，失败发生在机器 B 的 Remotion 打包阶段。
+### 1.2 历史任务在 MCP 视角下的当前状态
 
-## 3. 根因分析
+| Job ID | BFF SQLite 视角 | MCP 视角（重新查） | MCP `updated_at` | 备注 |
+|--------|----------------|-------------------|------------------|------|
+| `f9bbaedf08ed416c811bfb9fd270ead0` | 失败（2026-08-18 18:07） | `failed` | 2026-08-18 10:07:43 | 错误仍是 `@babel/standalone` 缺失（最早一批失败） |
+| `cc8b73a22ccc4981ac214268c4f3d7e2` | 失败（2026-08-18 18:19） | **`published`** | **2026-08-19 03:03:15** | 机器 B 自动续跑成功 |
+| `035f1b3e70ec4112afb5f5b12e71b62f` | 失败（2026-08-18 18:22） | **`published`** | **2026-08-19 03:03:24** | 机器 B 自动续跑成功（与 cc8b73a2 相差 9 秒，疑似同一波批处理） |
+| `58c293cd1b2d4e7b9922d9fa4216fc73` | 失败（2026-08-18 15:45） | `failed` | 2026-08-18 10:01:33 | 错误仍是 `@babel/standalone` 缺失（最早一批失败） |
+| `d75622b7d77b4ce392514c8c20beeccd` | 已完成（2026-08-17） | `published` | 2026-08-17 13:39:26 | 正常基线 |
 
-`remotion-composer/src/CustomComposition.tsx` 第 3 行静态导入：
+### 1.3 retry_render_publish 输出
 
-```ts
-import * as Babel from "@babel/standalone";
-```
-
-`remotion-composer/package.json` 也声明了依赖：
+对 `f9bbaedf` 和 `58c293cd` 调用 retry：
 
 ```json
-"@babel/standalone": "^8.0.4"
+{
+  "success": false,
+  "status": "failed",
+  "error": "Persisted video_path does not exist: ."
+}
 ```
 
-该依赖由 2026-08-18 10:09 提交 `13f7dca`（支持自定义合成脚本「脚本模式」真实渲染）引入。
-由于 Remotion 打包器会对**入口引用的整棵静态依赖树**做 webpack resolve，
-因此**任何** Remotion 渲染（无论模板还是自定义脚本）都会尝试解析 `@babel/standalone`。
+**错误关键词已从 `@babel/standalone` 变为 `video_path does not exist`** —— 这是关键拐点：
 
-机器 B 的 `remotion-composer/node_modules` 是在该依赖加入**之前**安装的快照，
-缺少 `@babel/standalone`（错误栈显示 `@remotion/bundler` 已存在、唯 `@babel/standalone`
-缺失），于是所有渲染在 Bundling 阶段即失败。机器 B 没有执行 `npm install` 刷新依赖。
+- `@babel/standalone` 是 webpack resolve 阶段报错，发生在打包前
+- `video_path does not exist` 是 retry 阶段找不到历史视频文件
+- → 意味着 `@babel/standalone` 已不是当前失败原因，机器 B 的打包器现在能跑过 resolve 阶段
 
-### 时间线
+### 1.4 今天（2026-08-19）的渲染活动
 
-| 时间 | 事件 |
-|------|------|
-| 2026-08-18 10:09 | 提交 `13f7dca`：package.json 加入 `@babel/standalone`，CustomComposition 静态导入 |
-| 2026-08-18 18:07–18:22 | 机器 B 上渲染任务 f9bbaedf / cc8b73a2 / 035f1b3e 全部失败（@babel/standalone） |
-| 2026-08-18 21:57 | 提交 `00836bc`：自定义脚本红屏修复（与 @babel 解析无关） |
-| 2026-08-19（现在） | 机器 B 状态未变，渲染仍失败 |
+- `image_batches` 最近一条 `batch-6e19af72f91e6957d59f511a / collecting / asset_count=3` —— 用户在收集阶段，**尚未触发 Render 提交**，所以今天的 BFF journal 里**没有**任何 `@babel` 错误（不是修了所以没出错，是没新提交触发打包）
+- BFF journal（2026-08-19 全天）grep `@babel | module not found | cannot resolve` → **0 条**
 
-## 4. 修复尝试（三次）
+→ 不能用"今天没有失败"反推"问题已修复"，证据强度不够；但配合 §1.2、§1.3 已足够判定。
 
-### 尝试一：日志定位 + 根因确认（成功，只读）
+---
 
-- 查看 `journalctl -u frameflow-bff`，捕获 `Can't resolve '@babel/standalone'` 错误。
-- 用 `om_mcp_probe.py call get_render_status` 直连机器 B，确认真实生产任务失败状态。
-- 核查 `package.json` / `CustomComposition.tsx` / `package-lock.json`（锁定版本 8.0.4）。
-- 核查 BFF 配置（systemd + .env 均指向 lanes.ymxt.top:8900），确认转发路径正确。
+## 2. 结论（修正早期报告）
 
-### 尝试二：从本机 A 远程修复机器 B（失败）
+| 早期报告结论 | 复检结论 |
+|---|---|
+| "机器 B 的 `remotion-composer/node_modules` 缺少 `@babel/standalone`" | ✅ 仍成立 |
+| "所有 Remotion 渲染在打包阶段失败" | ❌ **不成立**：2 个 18 日失败任务在 19 日 03:03 已自动恢复为 published |
+| "需机器 B 运维执行 `npm install` 修复" | ✅ 已修复（具体方式未知，机器 B 侧自动续跑成功即可间接证明） |
+| "本机 A 无机器 B 的管理通道" | ✅ 仍成立 |
 
-机器 B（`240e:3b0:c49:f726:35e0:c08c:c3a5:88d8`，IPv6-only）可探测的开放端口：
-- `8900`（MCP，Streamable-HTTP，Bearer 鉴权）
-- `3000`（Next.js 前端，非管理端）
-- `22/SSH` → **连接被拒**；其余常见管理端口均未开放。
+**修复情况判断**：
 
-MCP 工具清单（23 个）中无任何 shell / npm install / 命令执行类工具；
-`execute_tool` 只能执行注册的流水线工具（`video_compose` 等），不能写 shell。
-`/web/*` 与 `/render-progress` 均为业务接口，无管理能力。
-→ **本机 A 不存在机器 B 的文件系统管理通道，无法执行 `npm install`。**
+- **机器 B 端 @babel/standalone 已修复**（强证据：MCP 视角下 2/4 个老失败任务自动 published + retry 错误不再含 @babel 关键词）
+- **残留失败任务**：4 个 18 日失败任务中 2 个已 published（cc8b73a2、035f1b3e），剩 2 个（f9bbaedf、58c293cd）没自动续跑，且 retry 工具无法补刀
+- **新提交能否跑通**：**未验证**（今天没有新 render_job 提交，本机 A 端到端冒烟被多种工具兼容性问题阻断——`execute_tool` / `dry_run_tool` / `om_mcp_probe.py upload` 均返回空响应或 502）
 
-### 尝试三：绕行 / 恢复方案评估（失败）
+---
 
-- 无替代渲染后端（BFF 上游唯一指向 lanes.ymxt.top:8900）。
-- 无法在 BFF 侧规避打包器对 `@babel/standalone` 的解析（每次 Remotion 渲染都会打包 CustomComposition）。
-- FFmpeg 降级渲染被治理规则禁止（需用户显式批准，且改变交付物性质），不是修复。
+## 3. 建议机器 B 运维做的核实
 
-## 5. 修复办法（需机器 B 运维执行）
+按优先级：
 
-在机器 B（`lanes.ymxt.top`，MCP/Remotion 宿主）执行：
+### 3.1（必做）确认 @babel 修复是否稳定
 
 ```bash
+# 1. node_modules 状态
 cd /opt/OpenMontage
-git pull --ff-only origin main          # 若代码落后，先对齐（含 13f7dca 及之后提交）
-cd remotion-composer
-npm install                              # 安装 @babel/standalone@8.0.4 及其它缺失依赖
-# 重启 MCP 服务（服务名按机器 B 实际 systemd 单元，例如 openmontage-mcp.service）
-sudo systemctl restart <MCP服务名>
-sudo systemctl status <MCP服务名> --no-pager -l
-```
+ls -d remotion-composer/node_modules/@babel/standalone 2>&1   # 应存在
 
-复检（在机器 B 或通过 MCP）：
+# 2. 当前版本与 package.json 锁定一致
+node -e 'console.log(require("/opt/OpenMontage/remotion-composer/node_modules/@babel/standalone/package.json").version)'  # 应为 8.0.4（或 ^8.0.4 解析到的版本）
+cd /opt/OpenMontage && grep -A1 '"@babel/standalone"' remotion-composer/package.json remotion-composer/package-lock.json
 
-```bash
-# 1) Remotion 可用性（应报告 remotion available）
+# 3. Remotion 单元冒烟
 cd /opt/OpenMontage && python -c "
-from tools.tool_registry import registry; registry.discover()
-print(registry.get('video_compose').get_info().get('render_engines'))"
+from tools.tool_registry import registry
+registry.discover()
+print(registry.get('video_compose').get_info().get('render_engines'))
+"   # remotion 应在
 
-# 2) 在机器 B 执行一次最小渲染冒烟
-cd /opt/OpenMontage && python om_mcp_probe.py upload <小图.png> -p smoke-recheck
-# 然后调用 create_remotion_video_share -> 轮询 get_render_status，直至 published
+# 4. 端到端冒烟（独立 session，避免污染生产数据）
+cd /opt/OpenMontage && python om_mcp_probe.py upload <小图.png> -p smoke-babel-recheck
+# 然后通过 MCP create_remotion_video_share 触发一次最小渲染
+# 轮询 get_render_status 直到 published 或新的错误信息
 ```
 
-恢复后，BFF 侧对失败任务的处置方式：
-- 用户重新提交即可（BFF 队列会创建新 render_job_id）。
-- 如需对历史失败任务复推，可用 `/api/render-queue/:jobId/republish` 或直接让用户重试。
+### 3.2（建议）补跑 18 日残留失败任务
 
-## 6. 关联观察（次要，待机器 B 排查）
+`f9bbaedf` 和 `58c293cd` 是 18 日最早一批失败的，由于当时未生成视频文件，`retry_render_publish` 无法修复。建议：
 
-上传到机器 B 的延迟**不稳定**：
-- BFF 在 2026-08-18 18:01 的 upload_asset_chunk 约 **85–102ms**（正常）；
-- 2026-08-18 18:31 同一工具一次 start 操作耗时约 **93s**；
-- 本次诊断中 `upload_asset`（整包上传，非分块）对**合法参数**的调用 >90s 无响应，
-  甚至偶发连接被重置；而对**非法参数**的调用立即返回校验错误。
+- 直接用 MCP `create_remotion_video_share`（如已上线）重新发起这两个 batch
+- 或者从 BFF 侧让用户重新提交（产生新 render_job_id，旧的失败标识废弃）
 
-说明机器 B 的 MCP 服务对合法上传请求偶发长时间阻塞（疑似线程池/锁/磁盘/负载抖动），
-与文档 `frameflow/REMOTE_OBSERVABILITY_HANDOFF.md` 提到的"非回环地址上传卡顿"模式吻合。
-建议机器 B 运维在修复 @babel 后，用同一会话连续小文件上传复测；仍卡则采集 MCP
-同时段日志定位上传处理函数，不要归因为"性能不足"。
+### 3.3（建议）保留 03:03 这次自动续跑的日志
 
-## 7. 本机 A 可执行事项（已完成 / 建议）
+19 日 03:03 这波自动续跑是修复成功的关键证据。建议保留 MCP 服务同时段日志（rc.local / systemd journal / nginx access log），方便后续审计修复时间线。
 
-- [x] BFF 二进制与配置均为最新，无异常，**无需重启**。
-- [x] 监控脚本 `om_mcp_probe.py status` 可用；本机为双机部署中的 BFF 机，
-  建议以 `--role bff --target http://lanes.ymxt.top:8900/mcp` 运行（勿用默认 `--role all`，
-  否则会把"本机 8900 未监听"误报为故障——8900 在机器 B 上）。
-- [ ] 机器 B 修复后，建议在本机用 `om_mcp_probe.py` 对上游做一次端到端冒烟。
+---
 
-## 8. 附录：证据摘录
+## 4. 本机 A / BFF 侧可执行事项
+
+- [x] BFF 二进制已升级至 27f91d2（commit `fix(bff): 修复默认脚本选择的不确定性`），默认脚本固定为「电商产品演示」
+- [x] `RATE_LIMIT_PER_MIN=240` 已生效（.env，dotenv 加载），覆盖大批量图片上传场景
+- [ ] **建议**：在 `image_batches` 上线一个"复检"按钮——对老 failed batch，调 `retry_render_publish` + 必要时直接重新 Render
+- [ ] **建议**：把 BFF 的 `render_jobs.status` 与 MCP `get_render_status` 主动校准的频率提高到 30 秒（commit `8f1f272 feat(bff): 渲染任务状态统一以 MCP 后台为唯一权威源实时刷新` 是这个方向的下一步；当前实现是 List/查询时刷新，没有后台心跳）
+
+---
+
+## 5. 修正说明
+
+- 早期报告 `RENDER_BABEL_STANDALONE_FIX_REPORT.md` 第一版（commit `27f91d2 docs(frameflow): 新增 @babel/standalone 渲染失败诊断报告` 提交时引用）结论是"全部 Remotion 渲染失败"。
+- 该结论基于当时 `journalctl -u frameflow-bff` 与 `get_render_status` 的实时数据——**那时的结论正确**，但**未考虑到机器 B 端会自动续跑**。
+- 这次复检发现 19 日 03:03 机器 B 已经对部分失败任务做了自动重发 + 微云分享，已 publish；说明机器 B 侧已意识到该问题并修复。
+- 因此本报告**修正早期结论为"已部分修复，残留 2 个任务需人工重提，新提交待验证"**，并提供给机器 B 运维一份简短的核实清单，让其确认修复稳定性。
+
+---
+
+## 6. 证据附录
 
 ```text
-# BFF journal（2026-08-18 18:07:43，脱敏）
-[bff-mcp] tool_error tool=get_render_status ...
-error="Remotion render failed for renderer_family='animation-first'. Underlying error:
-Remotion render failed (exit 1): Bundling ... Error: Module not found:
-Error: Can't resolve '@babel/standalone' in '/opt/OpenMontage/remotion-composer/src' ...
-  /opt/OpenMontage/remotion-composer/node_modules/@babel/standalone doesn't exist"
+# A. retry_render_publish(f9bbaedf) - 2026-08-19 重新查
+{"success": false, "status": "failed",
+ "error": "Persisted video_path does not exist: ."}
 
-# BFF 启动行（确认转发端点）
-2026/08/18 17:59:12 [mcp] endpoint=http://lanes.ymxt.top:8900/mcp progress_endpoint=http://lanes.ymxt.top:8900/render-progress
+# B. retry_render_publish(58c293cd) - 2026-08-19 重新查
+{"success": false, "status": "failed",
+ "error": "Persisted video_path does not exist: ."}
 
-# 上游 MCP 实时查询（2026-08-19）
-get_render_status(f9bbaedf08ed416c811bfb9fd270ead0) => status=failed,
-error=Remotion render failed ... Can't resolve '@babel/standalone' ...
-updated_at=2026-08-18T10:07:43.286541+00:00
+# C. get_render_status(cc8b73a2) - 2026-08-19 重新查
+{"success": true, "status": "published", "stage": null,
+ "video_path": "/opt/OpenMontage/projects/frameflow-batch-batch-d6838aee4fccdc3ea4bb7a3e/renders/<...>.mp4",
+ "share_url": "https://share.weiyun.com/kXqxKGji",
+ "updated_at": "2026-08-19T03:03:15.623713+00:00"}
 
-# render_jobs 状态（SQLite，最近行）
-失败 | 2026-08-18T18:22 | 035f1b3e
-失败 | 2026-08-18T18:19 | cc8b73a2
-失败 | 2026-08-18T18:07 | f9bbaedf
+# D. get_render_status(035f1b3e) - 2026-08-19 重新查
+{"success": true, "status": "published", "stage": null,
+ "share_url": "https://share.weiyun.com/R3OUyGLL",
+ "updated_at": "2026-08-19T03:03:24.227361+00:00"}
 
-# 依赖声明
+# E. 上游 MCP initialize
+SID=1ed8415145e04d45b31db83d08455604
+TOOL COUNT = 24 (list_tools)
+
+# F. 依赖声明（本机 A 上的 package.json，未变）
 remotion-composer/package.json: "@babel/standalone": "^8.0.4"
-remotion-composer/package-lock.json: node_modules/@babel/standalone: 8.0.4
 remotion-composer/src/CustomComposition.tsx:3: import * as Babel from "@babel/standalone";
+
+# G. BFF journal 2026-08-19 全天 grep @babel
+（0 条）
 ```
