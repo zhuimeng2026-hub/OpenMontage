@@ -1202,11 +1202,75 @@ async def _retry_render_publish_impl(job_id: str) -> dict[str, Any]:
     if state.get("status") == "published" and _valid_weiyun_share_url(existing_url):
         return {"success": True, "render_job_id": job_id, "status": "published", "stage": None, "share_url": existing_url, "error": None}
 
-    video_path = Path(str(state.get("video_path") or "")).expanduser()
+    # Distinguish three pre-upload conditions so the front-end can stop
+    # looping on "retry" for jobs that retry cannot recover:
+    #   * render_incomplete — render never finished (MCP killed mid-render,
+    #     render_thread crashed, or pre-render validation failed). State was
+    #     written with video_path=None and status="failed" / failure_stage
+    #     in {"render", "validation", "background_crash"}. Caller must
+    #     re-issue create_remotion_video_share to get a fresh render_job_id.
+    #   * video_missing — render claimedsuccess (status in
+    #     {rendered, uploading, sharing, published} or failure_stage in
+    #     {weiyun_upload, weiyun_share}) but the on-disk file is gone.
+    #     Retry cannot recover without re-rendering.
+    #   * otherwise — video_path is set and the file exists; proceed.
+    video_path_raw = state.get("video_path")
+    has_video_path = bool(video_path_raw and str(video_path_raw).strip())
+    failure_stage = state.get("failure_stage")
+    status = state.get("status")
+
+    if not has_video_path and (
+        status == "failed"
+        or failure_stage in {"render", "validation", "background_crash"}
+    ):
+        error = (
+            f"Render for render_job_id '{job_id}' did not complete "
+            f"(status={status!r}, failure_stage={failure_stage!r}); "
+            "re-issue create_remotion_video_share to start a fresh render."
+        )
+        _event(
+            "weiyun_publish_retry_failed",
+            request_id=request_id,
+            session_hash="job-index",
+            render_job_id=job_id,
+            status="failed",
+            stage="render_incomplete",
+            error=error,
+        )
+        return {
+            "success": False,
+            "render_job_id": job_id,
+            "status": "failed",
+            "stage": "render_incomplete",
+            "share_url": existing_url,
+            "error": error,
+            "retryable": False,
+        }
+
+    video_path = Path(str(video_path_raw or "")).expanduser()
     if not video_path.is_file():
-        error = f"Persisted video_path does not exist: {video_path}"
-        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage="validation", error=error)
-        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": "validation", "share_url": existing_url, "error": error}
+        error = (
+            f"Persisted video file is missing on disk: {video_path} "
+            f"(status={status!r}, failure_stage={failure_stage!r})"
+        )
+        _event(
+            "weiyun_publish_retry_failed",
+            request_id=request_id,
+            session_hash="job-index",
+            render_job_id=job_id,
+            status="failed",
+            stage="video_missing",
+            error=error,
+        )
+        return {
+            "success": False,
+            "render_job_id": job_id,
+            "status": "failed",
+            "stage": "video_missing",
+            "share_url": existing_url,
+            "error": error,
+            "retryable": False,
+        }
 
     project = state.get("project_id") or "openmontage"
     batch_id = state.get("batch_id") or job_id
