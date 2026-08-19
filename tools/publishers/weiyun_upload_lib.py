@@ -325,7 +325,14 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
     # 第二步 & 第三步：循环「预上传 → 上传一片」
     print(f"[2/3] 开始上传...")
     round_num = 0
-    while round_num < max_rounds:
+    # 每轮只上传一个 512KB 分块；固定 max_rounds=50 会把 >25.6MB 的视频截断
+    # （6.9 分钟 1080×1920 渲染 ≈33MB = 64 块，在 50 轮处报「超过最大上传轮数」）。
+    # 按实际分块数放大轮数上限，保证大文件能完整上传；仍设防御性上限防死循环失控。
+    block_count = len(params.get("block_sha_list") or [])
+    effective_max_rounds = max(max_rounds, block_count + 10)
+    if effective_max_rounds > 2000:
+        effective_max_rounds = 2000
+    while round_num < effective_max_rounds:
         round_num += 1
         # 预上传，获取当前需要上传的通道
         pre_rsp = mcp_call(mcp_url, headers, "weiyun.upload", pre_upload_args)
@@ -394,7 +401,7 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
                 file_id, fname = _resolve_file_id()
             print(f"[3/3] [OK] upload completed; file_id={file_id}, filename={fname}")
             return {"file_id": file_id, "filename": fname}
-    raise RuntimeError(f"超过最大上传轮数 ({max_rounds})，上传未完成")
+    raise RuntimeError(f"超过最大上传轮数 ({effective_max_rounds})，上传未完成")
 
 
 # ========== 命令行入口 ==========
