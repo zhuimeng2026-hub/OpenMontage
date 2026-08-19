@@ -26,7 +26,10 @@ func main() {
 	if err := config.Validate(cfg); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("[mcp] endpoint=%s progress_endpoint=%s", config.SafeEndpoint(cfg.MCPBaseURL), config.SafeEndpoint(cfg.MCPProgressURL))
+	log.Printf("[mcp] endpoint=%s progress_endpoint=%s voicebox_upstream=%s",
+		config.SafeEndpoint(cfg.MCPBaseURL),
+		config.SafeEndpoint(cfg.MCPProgressURL),
+		config.SafeEndpoint(cfg.VoiceboxUpstreamURL))
 	if err := os.MkdirAll(filepath.Dir(cfg.StateDBPath), 0750); err != nil {
 		log.Fatal(err)
 	}
@@ -78,6 +81,9 @@ func main() {
 		// EXTERNAL_AGENT_TOKEN is set; otherwise the middleware itself 503s.
 		if h.Cfg.ExternalAgentToken != "" {
 			api.POST("/mcp-raw", h.RequireBearer(), h.MCPRawProxy)
+			// Stateless voicebox proxy — same Bearer, no SessionStore / SQLite.
+			// Disabled whenever EXTERNAL_AGENT_TOKEN is empty, matching mcp-raw.
+			api.POST("/voicebox-mcp", h.RequireBearer(), h.VoiceboxMCPProxy)
 		}
 		api.GET("/render-progress/:jobId", h.RequireAuth(), h.RenderProgress)
 		api.GET("/image-scripts", ibh.Scripts)
