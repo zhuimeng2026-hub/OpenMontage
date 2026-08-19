@@ -107,7 +107,54 @@ func (h *ImageBatchHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// 状态一致性：以渲染后台(MCP get_render_status)为唯一权威来源，实时刷新
+	// 每个批次后再返回，避免 BFF 缓存状态与后台漂移。
+	for _, b := range batches {
+		h.refreshBatchFromUpstream(scope, b)
+	}
+	batches, err = h.Batches.List(scope)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"batches": batches})
+}
+
+// refreshBatchFromUpstream 以渲染后台 get_render_status 为唯一权威来源刷新批次
+// 状态（含 render_job 回填）。终态「published」批次不再查询，其余一律实时取。
+func (h *ImageBatchHandler) refreshBatchFromUpstream(scope string, b *imagebatch.Batch) {
+	if b == nil || b.RenderJobID == "" || b.Status == "published" {
+		return
+	}
+	if err := h.ensureBatchSession(scope, b); err != nil {
+		return
+	}
+	res, err := h.Sessions.CallBatch(scope, b.ID, b.ProjectID, "get_render_status", map[string]interface{}{"render_job_id": b.RenderJobID})
+	if err != nil {
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(digString(res, "status")))
+	switch status {
+	case "queued", "queue", "pending", "waiting":
+		h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "queued" })
+	case "rendering", "running", "processing", "in_progress", "progress":
+		h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering" })
+	case "published", "done", "success", "succeeded", "completed", "finished":
+		shareURL := digString(res, "share_url")
+		if validHTTPURL(shareURL) {
+			h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = shareURL })
+			h.Sessions.UpdateJobResult(scope, b.RenderJobID, "已完成", shareURL)
+			h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
+		} else {
+			h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = "微云分享链接缺失" })
+			h.Sessions.UpdateJobResult(scope, b.RenderJobID, "失败", "")
+			h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
+		}
+	case "failed", "error":
+		h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = digString(res, "error") })
+		h.Sessions.UpdateJobResult(scope, b.RenderJobID, "失败", "")
+		h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
+	}
 }
 
 func (h *ImageBatchHandler) Get(c *gin.Context) {
@@ -122,36 +169,7 @@ func (h *ImageBatchHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "image batch not found"})
 		return
 	}
-	if b.RenderJobID != "" && (b.Status == "queued" || b.Status == "rendering" || b.Status == "collecting") {
-		if err := h.ensureBatchSession(scope, b); err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-			return
-		}
-		if res, err := h.Sessions.CallBatch(scope, b.ID, b.ProjectID, "get_render_status", map[string]interface{}{"render_job_id": b.RenderJobID}); err == nil {
-			status := strings.ToLower(strings.TrimSpace(digString(res, "status")))
-			switch status {
-			case "queued", "queue", "pending", "waiting":
-				h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "queued" })
-			case "rendering", "running", "processing", "in_progress", "progress":
-				h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering" })
-			case "published", "done", "success", "succeeded", "completed", "finished":
-				shareURL := digString(res, "share_url")
-				if validHTTPURL(shareURL) {
-					h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = shareURL })
-					h.Sessions.UpdateJobResult(scope, b.RenderJobID, "已完成", shareURL)
-					h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
-				} else {
-					h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = "微云分享链接缺失" })
-					h.Sessions.UpdateJobResult(scope, b.RenderJobID, "失败", "")
-					h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
-				}
-			case "failed", "error":
-				h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = digString(res, "error") })
-				h.Sessions.UpdateJobResult(scope, b.RenderJobID, "失败", "")
-				h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
-			}
-		}
-	}
+	h.refreshBatchFromUpstream(scope, b)
 	current, err := h.Batches.Get(scope, b.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

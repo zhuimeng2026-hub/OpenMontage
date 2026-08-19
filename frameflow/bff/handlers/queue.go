@@ -17,32 +17,34 @@ import (
 // on any machine. The route is auth-gated in main.go so an unauthenticated
 // caller is rejected before reaching here.
 //
-// In-flight jobs (渲染中/排队) are refreshed asynchronously against the upstream
-// get_render_status so terminal states (已完成/失败) land in the store without
-// blocking this response; the frontend's poll + SSE then surface them shortly.
+// 状态一致性：渲染任务状态以渲染后台（MCP get_render_status）为唯一权威来源。
+// 这里对每个 job 同步实时取上游状态并回填存储后再返回，避免 BFF 本地缓存
+// 状态与后台漂移（例如后台已 published，BFF 仍显示失败）。
 func (h *Handlers) RenderQueue(c *gin.Context) {
 	sid := h.ensureSession(c)
 	// Scope by the stable WeChat identity (or device session when anonymous) so a
 	// user's render queue is consistent across machines.
 	scope := renderQueueOwnerID(sid)
 	jobs := h.Store.ListJobs(scope)
-	go h.refreshJobStatuses(scope, jobs)
+	h.refreshJobStatuses(scope, jobs)
+	// 刷新后重新读取，确保响应反映渲染后台的最新状态（jobStore 路径下
+	// UpdateJobResult 只写库、不回填本次切片）。
+	jobs = h.Store.ListJobs(scope)
 	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
 }
 
-// refreshJobStatuses backfills terminal states for in-flight jobs. It runs
-// best-effort in the background and never fails the request; the frontend's
-// 5s poll (and the SSE stream) will pick up the update on the next cycle.
+// refreshJobStatuses backfills the authoritative render status from the upstream
+// MCP for ALL owned jobs (not just in-flight ones), so the store always mirrors
+// the render backend. It runs best-effort and never fails the request; the
+// frontend's 5s poll (and the SSE stream) will pick up the update.
 func (h *Handlers) refreshJobStatuses(scope string, jobs []*mcp.RenderJob) {
-	const maxRefresh = 5 // cap upstream calls per cycle to keep the store light
+	const maxRefresh = 20 // cap upstream calls per cycle to keep the store light
 	refreshed := 0
 	for _, j := range jobs {
 		if refreshed >= maxRefresh {
 			break
 		}
-		if j.Status != "渲染中" && j.Status != "排队" && !(j.Status == "已完成" && j.ShareURL == "") {
-			continue
-		}
+		// 不再跳过「失败」等终态：任何 job 都向渲染后台实时取状态。
 		refreshed++
 		args := map[string]interface{}{"render_job_id": j.JobID}
 		var res map[string]interface{}
