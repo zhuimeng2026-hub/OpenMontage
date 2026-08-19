@@ -337,6 +337,18 @@
   .ct-badge.rendering{background:rgba(79,216,255,0.16);color:#9fe9ff;}
   .ct-badge.queued{background:rgba(255,190,92,0.16);color:#ffce8a;}
   .ct-badge.done{background:rgba(52,211,153,0.16);color:#7be0b0;}
+
+  /* ============ 本次提交的任务（图+脚本整包，切页不丢，直到开新任务） ============ */
+  .current-task{
+    background:linear-gradient(180deg,rgba(124,92,255,0.10),rgba(124,92,255,0.03));
+    border:1px solid rgba(124,92,255,0.35);border-radius:14px;padding:16px 18px;margin:0 0 18px;
+  }
+  .current-task .ct-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;}
+  .current-task .ct-title{font-size:14px;font-weight:600;color:var(--text-primary);}
+  .current-task .ct-meta{font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;}
+  .current-task .ct-meta a{color:var(--accent);text-decoration:none;}
+  .current-task .ct-meta a:hover{text-decoration:underline;}
+  .current-task .ct-badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;flex:none;}
   .ct-badge.failed{background:rgba(255,90,90,0.16);color:#ff9b9b;}
   .create-tasks .ct-empty{font-size:12px;color:var(--text-tertiary);padding:4px 2px;}
   .create-tasks .ct-viewall{font-size:12px;color:var(--primary);cursor:pointer;margin-top:4px;display:inline-block;}
@@ -636,6 +648,16 @@
         <div class="create-tabs">
           <div class="ctab active" data-mode="template">模板模式</div>
           <div class="ctab" data-mode="script">脚本模式</div>
+        </div>
+
+        <!-- 本次提交的任务：图 + 脚本整包，切页不丢，直到「再来一组」开新任务 -->
+        <div class="current-task" id="current-task-card" style="display:none">
+          <div class="ct-head">
+            <span class="ct-title">📦 本次提交的任务</span>
+            <span class="ct-badge" id="current-task-badge"></span>
+          </div>
+          <div class="ct-meta" id="current-task-meta"></div>
+          <div class="thumb-grid" id="current-task-thumbs"></div>
         </div>
 
         <!-- 当前会话已上传图片：可勾选，避免上传失败后重复上传 -->
@@ -1117,6 +1139,7 @@
       document.querySelector('.content').scrollTop = 0;
       if (view === 'create') {
         refreshQuota(); loadScriptPicker(); refreshSessionAssets();
+        paintCurrentTask(); // 进入创建页即恢复「本次提交的任务」卡片（切页不丢）
         loadCreateTasks(); // 进入创建页即刷新「我的渲染任务」
         if (createTasksTimer) clearInterval(createTasksTimer);
         createTasksTimer = setInterval(loadCreateTasks, 5000); // 多任务实时可见
@@ -1785,6 +1808,11 @@
   // /api/quota so the hint and the guard stay aligned with the user's tier.
   var maxFilesPerSubmission = 10;
   var minFilesPerSubmission = 5;
+  // 本次会话已提交任务（含图片快照）。切页不丢：只有「再来一组」开新任务时才从展示中替换。
+  // 每个元素：{jobId, mode:'template'|'script', images:[{url,name}], templateName, scriptName, status, statusClass, progress, shareUrl, submittedAt}
+  var submittedTasks = [];
+  var currentTask = null;     // 最近一次提交的任务（持久化展示在创建页顶部卡片）
+  var batchSubmitted = false; // 当前批次是否已提交（防止重复提交同一消耗批次）
 
   async function ensureImageBatch(){
     if (currentImageBatch) return currentImageBatch;
@@ -2098,6 +2126,7 @@
 
   if (renderBtn){
     renderBtn.addEventListener('click', async function(){
+      if (batchSubmitted){ showToast('当前批次已提交，请点「再来一组」开始新任务'); return; }
       if (!(window.FFMCP && window.FFMCP.demo)) {
         var freshCount = await fetchBatchAssetCount();
         if (freshCount != null) uploadedCount = freshCount;
@@ -2123,18 +2152,30 @@
         setCreateProgress(true, 0, '已提交，任务号 ' + jobId + (submittedQueued ? ' · 排队中…' : ' · 渲染中…'));
         showToast('已提交渲染任务 ' + jobId);
         loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
-        // 本轮提交已结束：后端会话计数已被 ResetAsset 清零，前端同步重置展示态，
-        // 使「已上传 N 张」与后端「本轮提交」语义对齐，便于用户开始下一轮上传。
-        uploadedCount = 0;
-        lastBatchId = null;
-        currentImageBatch = null;
-        clearUploadedImages(); // 本轮提交结束：清掉缩略图预览并释放 object URL
+        // —— A：任务持久化（切页不丢，直到「再来一组」开新任务）——
+        // 不再立即清空已上传图片/批次，而是把本次提交快照成「本次任务」整包（图+脚本）
+        // 保留在创建页；当前批次已提交，禁止重复提交同一批次。
+        batchSubmitted = true;
+        currentTask = {
+          jobId: jobId,
+          mode: 'template',
+          images: uploadedImages.map(function(im){ return { url: im.url, name: im.name }; }),
+          templateName: (function(){ var t = document.querySelector('.tmpl.sel .tn'); return t ? t.textContent : '—'; })(),
+          scriptName: (previewScript ? previewScript.textContent : '') || '',
+          status: submittedQueued ? '排队中' : '渲染中',
+          statusClass: submittedQueued ? 'queued' : 'rendering',
+          progress: 0,
+          shareUrl: null,
+          submittedAt: Date.now()
+        };
+        submittedTasks.unshift(currentTask);
+        paintCurrentTask();
+        if (previewBox) previewBox.style.display = 'none'; // 原始上传缩略图交给「本次任务」卡片展示，避免重复
         refreshQuota();
-        // 多任务：立即开放「再来一组」，让用户在新任务渲染的同时上传下一组图片。
-        // 历史任务仍在「我的渲染任务」/「渲染队列」中可见，不会因本轮重置而丢失。
         if (restartBtn){ restartBtn.style.display = ''; restartBtn.disabled = false; }
         if (createTasksBox) createTasksBox.style.display = '';
-        renderBtn.disabled = false; // 放开按钮，配合下方 min 张数守卫即可连续发起新任务
+        renderBtn.disabled = true; // 当前批次已提交，需「再来一组」开新任务
+        renderBtn.textContent = '已提交 · 点「再来一组」开始新任务';
         loadCreateTasks(); // 把刚提交的任务刷进创建页「我的渲染任务」
         var subJobId = jobId;
         window.FFMCP.subscribeProgress(jobId, function(ev){
@@ -2143,12 +2184,14 @@
           if (ev && ev.status === 'published'){
             setCreateProgress(true, 100, '渲染完成 · 分享链接：' + (ev.share_url || '(见控制台)'));
             showToast('渲染完成！');
-            renderBtn.disabled = false;
+            if (currentTask){ currentTask.status = '已完成'; currentTask.statusClass = 'done'; currentTask.progress = 100; currentTask.shareUrl = ev.share_url || null; paintCurrentTask(); }
           } else if (ev && ev.status === 'queued') {
             var queuePosition = ev.position || ev.queue_position;
             setCreateProgress(true, pct, '排队中' + (queuePosition ? ' · 第 ' + queuePosition + ' 位' : '') + '…');
+            if (currentTask){ currentTask.status = '排队中'; currentTask.statusClass = 'queued'; currentTask.progress = pct; paintCurrentTask(); }
           } else {
             setCreateProgress(true, pct, '渲染中 ' + pct + '%');
+            if (currentTask){ currentTask.status = '渲染中'; currentTask.statusClass = 'rendering'; currentTask.progress = pct; paintCurrentTask(); }
           }
         }, function(){
           setCreateProgress(true, null, '进度订阅异常，将改用轮询');
@@ -2171,12 +2214,15 @@
     uploadedCount = 0;
     currentImageBatch = null;
     lastBatchId = null;
+    batchSubmitted = false;
     currentProgressJobId = null; // 旧任务进度交给「我的渲染任务」列表，不再占用本面板
     clearUploadedImages();
     setCreateProgress(false);
     renderBtn.disabled = false;
+    renderBtn.textContent = '开始渲染';
     if (restartBtn) restartBtn.disabled = false;
-    showToast('已开始新的一组：上传新图片后可再次点「开始渲染」。上一次任务仍在「我的渲染任务」中可见。');
+    // 上一次提交的任务不清除：继续保留在「本次提交的任务」卡片中，直到新任务提交才替换。
+    showToast('已开始新的一组：上传新图片后可再次点「开始渲染」。上一次任务仍保留在上方卡片。');
     loadCreateTasks();
   }
   if (restartBtn) restartBtn.addEventListener('click', restartForNewGroup);
@@ -2222,6 +2268,40 @@
         + '<span class="ct-badge ' + cls + '">' + esc(j.status || '排队') + '</span>' + link + '</div>';
     }).join('');
     createTasksBody.innerHTML = html;
+  }
+
+  // 把最近一次提交的任务渲染成「本次提交的任务」卡片（图 + 脚本/模板 + 状态 + 进度）。
+  // 卡片在创建页 DOM 中常驻，切页不丢；只有「再来一组」开新任务提交后才会被替换。
+  function paintCurrentTask(){
+    var card = document.getElementById('current-task-card');
+    var badge = document.getElementById('current-task-badge');
+    var meta = document.getElementById('current-task-meta');
+    var grid = document.getElementById('current-task-thumbs');
+    if (!card) return;
+    if (!currentTask){ card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    if (badge){ badge.textContent = currentTask.status || ''; badge.className = 'ct-badge ' + (currentTask.statusClass || ''); }
+    if (meta){
+      var scriptLine = currentTask.mode === 'script'
+        ? '脚本：' + esc(currentTask.scriptName || '未命名')
+        : ('模板：' + esc(currentTask.templateName || '—') + (currentTask.scriptName ? ' · 脚本：' + esc(currentTask.scriptName) : ''));
+      var prog = (currentTask.progress != null) ? ' · 进度 ' + currentTask.progress + '%' : '';
+      var link = currentTask.shareUrl
+        ? ' · <a href="' + escAttr(currentTask.shareUrl) + '" target="_blank" rel="noopener noreferrer">查看成片</a>'
+        : '';
+      meta.innerHTML = '任务号 <b>' + esc(currentTask.jobId || '') + '</b> · ' + scriptLine + prog + link;
+    }
+    if (grid){
+      grid.innerHTML = '';
+      (currentTask.images || []).forEach(function(im, idx){
+        var cell = document.createElement('div'); cell.className = 'thumb';
+        var img = document.createElement('img'); img.src = im.url; img.alt = im.name || '';
+        var ix = document.createElement('span'); ix.className = 'idx'; ix.textContent = String(idx + 1);
+        var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = im.name || '';
+        cell.appendChild(img); cell.appendChild(ix); cell.appendChild(nm);
+        grid.appendChild(cell);
+      });
+    }
   }
   // 「我的渲染任务」→ 完整队列 跳转
   var ctViewAll = document.querySelector('#create-tasks .ct-viewall');
@@ -2581,10 +2661,26 @@
       st.textContent = '已提交，任务号 ' + jobId + ' · 渲染中…';
       showToast('已提交渲染任务 ' + jobId);
       loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
+      // —— A：任务持久化（切页不丢，直到开新任务）——
+      currentProgressJobId = jobId;
+      currentTask = {
+        jobId: jobId, mode: 'script',
+        images: scriptUploadedImages.map(function(im){ return { url: im.url, name: im.name }; }),
+        scriptName: name, templateName: '',
+        status: '渲染中', statusClass: 'rendering', progress: 0, shareUrl: null, submittedAt: Date.now()
+      };
+      submittedTasks.unshift(currentTask);
+      paintCurrentTask();
+      var spv = document.getElementById('script-upload-preview'); if (spv) spv.style.display = 'none'; // 原始缩略图交给「本次任务」卡片展示
       window.FFMCP.subscribeProgress(jobId, function(ev){
         var pct = ev && (ev.percent || ev.progress || 0);
-        if (ev && ev.status === 'published'){ fill.style.width = '100%'; st.textContent = '渲染完成 · 链接：' + (ev.share_url || '(见控制台)'); showToast('渲染完成！'); btn.disabled = false; scriptUploaded = 0; clearScriptUploadedImages(); }
-        else { fill.style.width = pct + '%'; st.textContent = '渲染中 ' + pct + '%'; }
+        if (ev && ev.status === 'published'){
+          fill.style.width = '100%'; st.textContent = '渲染完成 · 链接：' + (ev.share_url || '(见控制台)'); showToast('渲染完成！'); btn.disabled = false;
+          if (currentTask){ currentTask.status = '已完成'; currentTask.statusClass = 'done'; currentTask.progress = 100; currentTask.shareUrl = ev.share_url || null; paintCurrentTask(); }
+          // 保留已上传图片，不立即清空（A：切页不丢，直到开新任务）
+        }
+        else { fill.style.width = pct + '%'; st.textContent = '渲染中 ' + pct + '%';
+          if (currentTask){ currentTask.status = '渲染中'; currentTask.statusClass = 'rendering'; currentTask.progress = pct; paintCurrentTask(); } }
       }, function(){ st.textContent = '进度订阅异常，将改用轮询'; });
     } catch (e){ st.textContent = '提交失败：' + e.message; btn.disabled = false; }
   });
