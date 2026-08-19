@@ -41,9 +41,116 @@ Header: Content-Type: application/json
 
 The tool (`tools/graphics/minimax_image.py`) handles **all three response shapes** (sync-URL, sync-base64, async-task-id). Any unrecognized shape returns a `ToolResult(success=False, error="Unrecognized response shape: ...")` so callers can diagnose.
 
-### Video Generation (via fal.ai gateway — pre-existing)
+### Video Generation — direct MiniMax REST API (preferred)
 
-The video path is **not** part of this skill's scope. See `tools/video/minimax_video.py` and the existing `FAL_KEY` setup. MiniMax video is accessible as `fal-ai/minimax/video-01` (Hailuo model family).
+`tools/video/minimax_video_direct.py` is the canonical MiniMax video path. Bypasses the fal.ai gateway — billed by MiniMax directly, no gateway markup.
+
+```text
+POST https://api.minimaxi.com/v1/video_generation
+Header: Authorization: Bearer $MINIMAX_API_KEY
+Header: Content-Type: application/json
+```
+
+- Models known to this skill (confirmed live 2026-08):
+  - `MiniMax-Hailuo-2.3` — current production model
+  - `MiniMax-Hailuo-2.3-Fast` — cheaper, lower latency, same prompt grammar
+- Body (text-to-video):
+  ```json
+  {
+    "model": "MiniMax-Hailuo-2.3",
+    "prompt": "A red apple on a white table, soft daylight, shallow depth of field",
+    "duration": 6,
+    "resolution": "768P",
+    "prompt_optimizer": true
+  }
+  ```
+- Submit response (sync, observed live): `{ "task_id": "...", "base_resp": { "status_code": 0, "status_msg": "success" } }`
+  - **Do not re-poll on `task_id`** — submit is already synchronous; the `task_id` is the handle for the *next* step.
+- Status polling: `GET https://api.minimaxi.com/v1/query/video_generation?task_id=<task_id>`
+  - Status flow: `Preparing → Queueing → Processing → Success | Fail`
+  - Success payload includes `file_id` and the final `video_width` / `video_height`.
+- File retrieval: `GET https://api.minimaxi.com/v1/files/retrieve?file_id=<file_id>`
+  - Returns `{ "download_url": "https://..." }`. Direct `GET /v1/files/{id}/content` returns **403**; only the retrieve-then-redirect pattern works.
+
+#### Hard rules (verified live 2026-08)
+
+- `resolution` MUST be uppercase `"768P"` or `"1080P"`. Lowercase `"768p"` returns `base_resp.status_code=2013 ("invalid params, model ... does not support resolution 768p")`.
+- `duration` must be one of `[6, 10]` (seconds).
+- If `base_resp.status_code != 0` on submit, **do not enter the poll loop** — the request was rejected and there is nothing to wait for.
+- The download URL from `/v1/files/retrieve` is short-lived (typically minutes). Retrieve → GET immediately; don't stage.
+
+#### OpenMontage Usage
+
+```python
+from tools.video.minimax_video_direct import MiniMaxVideoDirect
+
+tool = MiniMaxVideoDirect()
+print(tool.get_status())  # ToolStatus.AVAILABLE if MINIMAX_API_KEY is set
+
+result = tool.execute({
+    "prompt": "A stack of old books on a wooden desk, slow cinematic dolly-in",
+    "model": "MiniMax-Hailuo-2.3",
+    "duration": 6,
+    "resolution": "768P",
+    "prompt_optimizer": True,
+    "output_path": "projects/my-video/assets/video/clip.mp4",
+    "poll_interval_seconds": 5,
+    "timeout_seconds": 600,
+})
+# result.data keys: provider, model, operation, prompt, duration, resolution,
+#                   task_id, file_id, output, bytes_written
+# result.artifacts: list of written file paths
+```
+
+Via the video selector (preferred — auto-routes from prompt):
+
+```python
+from tools.video.video_selector import VideoSelector
+
+result = VideoSelector().execute({
+    "preferred_provider": "minimax_direct",
+    "prompt": "...",
+    "output_path": "projects/my-video/assets/video/clip.mp4",
+})
+```
+
+#### image_to_video (confirmed live 2026-08)
+
+`MiniMax-Hailuo-2.3` accepts a `first_frame_image` field on the same `/v1/video_generation` endpoint. The full three-step flow (submit → poll → retrieve) works identically to text-to-video. Just attach `first_frame_image` to the payload; the tool auto-derives `operation: "image_to_video"`.
+
+```python
+result = tool.execute({
+    "prompt": "the camera slowly dollies forward, golden light shifts across the brick",
+    "first_frame_image": "https://...signed-oss-url.../ref.jpeg",
+    "model": "MiniMax-Hailuo-2.3",
+    "duration": 6,
+    "resolution": "768P",
+    "output_path": "projects/.../assets/video/clip_i2v.mp4",
+})
+```
+
+**Why `first_frame_image` and not `image_url`?** The MiniMax API distinguishes T2V vs I2V by the **presence of the `first_frame_image` field on submit** — not by an `operation` flag. Without `first_frame_image` in the payload, the request is treated as T2V even when `image_url` is present. The legacy `image_url` field still works on the standard `MiniMax-Hailuo-2.3` model (it was accepted via the older validation path) but `MiniMax-Hailuo-2.3-Fast` rejects it with `does not support Text-to-Video mode`. The tool accepts both keys, but **always sends `first_frame_image` to the API**, and emits a deprecation warning if `image_url` was used.
+
+**Requirements for `first_frame_image`:**
+- Must be a publicly fetchable HTTPS URL (the model server downloads the image itself, not from the agent's filesystem).
+- The MiniMax image tool (`minimax_image`) returns an Alibaba OSS signed URL (`hailuo-image-algeng-data.oss-cn-wulanchabu.aliyuncs.com/...`) that works out of the box — long-expiry signature, no extra auth needed.
+- If you generate the image elsewhere (S3, fal.ai, etc.), use a signed URL or a CDN URL with the same accessibility profile.
+
+**Known limits:**
+- No multi-image / reference-set support on this endpoint (unlike Seedance 2.0).
+- Output resolution is fixed by the request (`768P` / `1080P`); it does not adapt to the input image's aspect ratio. For 16:9 input, `768P` yields a 1366×768 clip. For other aspect ratios, the model letterboxes / pillarboxes.
+
+### Video Generation (via fal.ai gateway — pre-existing, alternative)
+
+`tools/video/minimax_video.py` (provider `minimax`, requires `FAL_KEY`) is the
+older fal.ai-gated path. Use it when you don't have a MiniMax API key but
+have a fal.ai subscription. MiniMax video is accessible there as
+`fal-ai/minimax/video-01` (older model — only `video-01`; the Hailuo-2.3
+family is **not** exposed on the fal.ai path as of 2026-08).
+
+The direct path is preferred when `MINIMAX_API_KEY` is set — it's cheaper,
+supports the current model family, and the agent has full control over
+`model_variant`, `duration`, and `resolution`.
 
 ## OpenMontage Usage
 
