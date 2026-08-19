@@ -2156,6 +2156,7 @@ async def _voicebox_proxy_handler(scope, receive, send):
 
     # Forward via httpx with streaming response so SSE stays live.
     timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
+    upstream_resp = None
     try:
         async with httpx.AsyncClient(timeout=timeout) as hx:
             upstream_req = hx.build_request(
@@ -2165,6 +2166,29 @@ async def _voicebox_proxy_handler(scope, receive, send):
                 content=bytes(body),
             )
             upstream_resp = await hx.send(upstream_req, stream=True)
+
+            # Forward response headers, stripping hop-by-hop.
+            response_headers: list[tuple[bytes, bytes]] = []
+            for name, value in upstream_resp.headers.raw:
+                if name.lower() in _VOICEBOX_HOP_BY_HOP:
+                    continue
+                response_headers.append((name, value))
+
+            await send({
+                "type": "http.response.start",
+                "status": upstream_resp.status_code,
+                "headers": response_headers,
+            })
+
+            # Stream upstream body back unchanged (preserves SSE framing).
+            async for chunk in upstream_resp.aiter_raw():
+                if not chunk:
+                    continue
+                await send({
+                    "type": "http.response.body",
+                    "body": chunk,
+                    "more_body": True,
+                })
     except httpx.RequestError as exc:
         _log.warning(
             "voicebox_proxy: 502 upstream_unreachable client=%s url=%s err=%s",
@@ -2176,32 +2200,12 @@ async def _voicebox_proxy_handler(scope, receive, send):
             "detail": str(exc),
         })
         return
-
-    # Forward response headers, stripping hop-by-hop.
-    response_headers: list[tuple[bytes, bytes]] = []
-    for name, value in upstream_resp.headers.raw:
-        if name.lower() in _VOICEBOX_HOP_BY_HOP:
-            continue
-        response_headers.append((name, value))
-
-    await send({
-        "type": "http.response.start",
-        "status": upstream_resp.status_code,
-        "headers": response_headers,
-    })
-
-    # Stream upstream body back unchanged (preserves SSE framing).
-    try:
-        async for chunk in upstream_resp.aiter_raw():
-            if not chunk:
-                continue
-            await send({
-                "type": "http.response.body",
-                "body": chunk,
-                "more_body": True,
-            })
     finally:
-        await upstream_resp.aclose()
+        if upstream_resp is not None:
+            try:
+                await upstream_resp.aclose()
+            except Exception:
+                pass
 
     await send({
         "type": "http.response.body",
