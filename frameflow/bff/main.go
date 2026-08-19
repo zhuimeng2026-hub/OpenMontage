@@ -97,7 +97,12 @@ func main() {
 		// DEV-ONLY: bootstraps a logged-in session without a real WeChat IdP,
 		// for verifying per-user queue isolation. 404 unless AuthRequired +
 		// DevLoginAllowed + WechatAppID are all set (see Handlers.DevLogin).
-		api.GET("/_dev_login", h.DevLogin)
+		// Route is only registered when DevLoginAllowed is on, so a misconfigured
+		// production deploy (DEV_LOGIN_ALLOWED=true shipped by accident) does not
+		// expose the endpoint at all. The handler itself still 404s as belt-and-braces.
+		if h.Cfg.DevLoginAllowed {
+			api.GET("/_dev_login", h.DevLogin)
+		}
 		// Custom Remotion composition editor surface (save/list/get are local;
 		// render is upstream-facing and auth-gated).
 		api.GET("/compositions", ch.List)

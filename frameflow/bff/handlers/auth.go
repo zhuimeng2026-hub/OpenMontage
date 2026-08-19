@@ -158,6 +158,15 @@ func loadUserMap(sid string) map[string]interface{} {
 			userStore.Lock()
 			userStore.m[sid] = u
 			userStore.Unlock()
+			// Belt-and-braces re-check after the cache write: between findPersistedUser
+			// and the lock/unlock above, the persisted row could already be expired
+			// (TTL crossed, or another goroutine just deleted it). Without this, an
+			// in-flight expiry would land a stale user in the hot cache until the
+			// next cache miss. Microsecond cost; locks down the invariant.
+			if isExpired(u) {
+				dropUserMap(sid)
+				return nil
+			}
 			return u
 		}
 	}

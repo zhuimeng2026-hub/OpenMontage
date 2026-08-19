@@ -529,7 +529,7 @@
         <rect x="2.5" y="7" width="13" height="11" rx="5.5"/>
         <rect x="8.5" y="3" width="13" height="11" rx="5.5"/>
       </svg>
-      微信服务号登录
+      微信扫码登录
     </button>
     <div class="divider"><span>或</span></div>
     <button class="btn-ghost">使用 Google 账号继续</button>
@@ -942,8 +942,8 @@
     fetch(bffBase() + '/api/logout', {method:'POST', credentials:'include'})
       .catch(function(){})
       .then(function(){
-        window.__ffUser = null;
-        renderUserInfo();
+        // 走 setCurrentUser 单一入口：会自动 reset 上一个用户的本地状态。
+        setCurrentUser(null);
         clearLoginExpired();
         var lv = document.getElementById('login-view'); if(lv) lv.style.display = '';
         var app = document.getElementById('app-shell'); if(app) app.classList.remove('active');
@@ -956,13 +956,91 @@
     if(b) b.style.display = 'none';
   }
   function onSessionLost(){
-    window.__ffUser = null;
+    // 走 setCurrentUser 单一入口：会自动 reset 上一个用户的本地状态（防止同 tab 切换
+    // 用户后旧 currentTask / uploadedImages 泄漏给新用户）。
+    setCurrentUser(null);
     var b = document.getElementById('login-expired-banner');
     if(b) b.style.display = 'block';
     var lv = document.getElementById('login-view');
     if(lv) lv.style.display = '';
     var app = document.getElementById('app-shell');
     if(app) app.classList.remove('active');
+  }
+  // 清空「上一个用户」在浏览器标签内残留的本地状态，避免新用户在同 tab 看到旧用户的
+  // 图片/任务/脚本。幂等。可在登出、登录失效、同 tab 切换账号时调用。
+  // 注意：uploadedImages / scriptUploadedImages 仍通过 clearUploadedImages /
+  // clearScriptUploadedImages 走 URL.revokeObjectURL，避免内存泄漏。
+  function resetClientStateForAuthChange(){
+    // 1) 已上传图片 blob：释放 object URL 并清空数组。
+    try { clearUploadedImages(); } catch(e){}
+    try { clearScriptUploadedImages(); } catch(e){}
+    // 2) 模块作用域的 per-user 变量全部回到默认值。
+    submittedTasks = [];
+    currentTask = null;
+    batchSubmitted = false;
+    currentImageBatch = null;
+    lastBatchId = null;
+    uploadedCount = 0;
+    currentProgressJobId = null;
+    sessionAssets = [];
+    savedScriptContent = {};
+    pendingScriptContent = null;
+    selectedScript = { id: '', name: '', kind: 'system' };
+    // 3) 渲染队列：清空数据 + 关闭所有 SSE/poll 订阅。
+    QUEUE_JOBS = [];
+    Object.keys(queueSubs).forEach(function(k){
+      try { if (queueSubs[k]) queueSubs[k](); } catch(e){}
+      queueSubs[k] = null;
+    });
+    queueSubs = {};
+    // 4) 关闭三个计时器（queue/createTasks 由视图进入再次启动；心跳由 setCurrentUser
+    //    在登录后再次启动）。
+    if (queueTimer)       { clearInterval(queueTimer);       queueTimer = null; }
+    if (createTasksTimer) { clearInterval(createTasksTimer); createTasksTimer = null; }
+    if (window.__ffSessionCheckTimer){
+      clearInterval(window.__ffSessionCheckTimer);
+      window.__ffSessionCheckTimer = null;
+    }
+    if (window.__qrPoll){ clearInterval(window.__qrPoll); window.__qrPoll = null; }
+    // 5) UI 立即隐藏：当前任务卡片、两个进度面板、上传预览。
+    var card = document.getElementById('current-task-card');
+    if (card) card.style.display = 'none';
+    var prog = document.getElementById('create-progress'); if (prog) prog.style.display = 'none';
+    var sb = document.getElementById('script-progress');   if (sb)  sb.style.display  = 'none';
+    if (previewBox) previewBox.style.display = 'none';
+    var sBox = document.getElementById('script-upload-preview');
+    if (sBox) sBox.style.display = 'none';
+    var sGrid = document.getElementById('script-thumb-grid');
+    if (sGrid) sGrid.innerHTML = '';
+    if (thumbGrid) thumbGrid.innerHTML = '';
+    // 6) Monaco 编辑器：恢复到默认模板，并清空暂存待灌入的内容。
+    if (typeof ffMonaco !== 'undefined' && ffMonaco && typeof DEFAULT_COMP !== 'undefined'){
+      try { ffMonaco.setValue(DEFAULT_COMP); } catch(e){}
+    }
+    pendingScriptContent = null;
+    // 7) 清掉跨请求的合成 ID（独立 fetch，无 server-of-truth 兜底）。
+    window.__ffCompId = null;
+  }
+  // 单一入口修改 window.__ffUser。openid 变化时自动 reset 旧用户本地状态；
+  // 同用户仅刷新视图，避免破坏「切页不丢」语义。heartbeat timer 在登录后启动、
+  // resetClientStateForAuthChange 中关闭。
+  function setCurrentUser(user){
+    var prevOpenid = (window.__ffUser && window.__ffUser.openid) || null;
+    var nextOpenid = (user && user.openid) || null;
+    if (prevOpenid === nextOpenid){
+      window.__ffUser = user;
+      renderUserInfo();
+      return;
+    }
+    // 真切换（含登出 → null）：先清旧状态再切新。
+    if (prevOpenid !== null){ resetClientStateForAuthChange(); }
+    window.__ffUser = user;
+    renderUserInfo();
+    if (user){
+      if (!window.__ffSessionCheckTimer){
+        window.__ffSessionCheckTimer = setInterval(checkSessionAlive, 60000);
+      }
+    }
   }
   // 右上角头像下拉：点击头像弹出菜单，选择「退出登录」使登录状态失效。
   (function(){
@@ -1001,7 +1079,7 @@
         }
       }).catch(function(){});
   }
-  setInterval(checkSessionAlive, 60000);
+  // 心跳 timer 已在页面加载时通过 setCurrentUser/守卫启动，避免重复创建。
   function startWechatLogin(){
     // 微信内置浏览器：直接跳转服务号网页授权；桌面浏览器：弹窗扫码登录。
     var remo = (window.FF_CONFIG && window.FF_CONFIG.remotion) || {};
@@ -1050,8 +1128,8 @@
             fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
               if(u && u.authenticated && u.user){
                 clearLoginExpired();
-                window.__ffUser = u.user;
-                renderUserInfo(); // 问候语/左下角/设置页账号同步微信登录信息
+                // 单一入口：若 openid 变化，自动 reset 前一个用户的本地状态。
+                setCurrentUser(u.user);
                 loadQueue(); // 用真实登录身份刷新渲染队列（与微信回调路径一致）
                 showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
               }
@@ -1092,8 +1170,8 @@
             fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
               if(u && u.authenticated && u.user){
                 clearLoginExpired();
-                window.__ffUser = u.user;
-            renderUserInfo(); // 同步工作台问候语与账号信息
+                // 单一入口：若 openid 变化，自动 reset 前一个用户的本地状态。
+                setCurrentUser(u.user);
             loadQueue(); // 用真实登录身份重新过滤渲染队列
             showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
           }
@@ -1107,8 +1185,8 @@
         fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
           if(u && u.authenticated && u.user){
             clearLoginExpired();
-            window.__ffUser = u.user;
-            renderUserInfo(); // 刷新页面后同步已登录账号信息
+            // 单一入口：若 openid 变化，自动 reset 前一个用户的本地状态。
+            setCurrentUser(u.user);
             enterApp();
           } else if(/(\b|^)ff_sid=/.test(document.cookie || '')){
             // 浏览器仍带 ff_sid，但后端已无该会话（过期 / 实例漂移 / BFF 重启）→ 提示失效
@@ -1140,6 +1218,7 @@
       if (view === 'create') {
         refreshQuota(); loadScriptPicker(); refreshSessionAssets();
         paintCurrentTask(); // 进入创建页即恢复「本次提交的任务」卡片（切页不丢）
+        reconcileCurrentTask(); // 兜底：本地 jobId 不再被服务器认识则清掉，防跨用户残留
         loadCreateTasks(); // 进入创建页即刷新「我的渲染任务」
         if (createTasksTimer) clearInterval(createTasksTimer);
         createTasksTimer = setInterval(loadCreateTasks, 5000); // 多任务实时可见
@@ -2270,6 +2349,25 @@
     createTasksBody.innerHTML = html;
   }
 
+  // 服务端反查：若本地 currentTask.jobId 已不在当前用户的渲染队列里，说明它属于上一个
+  // 用户，必须清空。这是 resetClientStateForAuthChange 漏掉状态时的兜底，正常路径下
+  // 同一用户的 jobId 始终在服务端列表中，本函数 no-op。
+  async function reconcileCurrentTask(){
+    if (!window.__ffUser || !currentTask || !currentTask.jobId) return;
+    if (window.FFMCP && window.FFMCP.demo) return;
+    try {
+      var r = await fetch(queueBase() + '/api/render-queue', { credentials: 'include' });
+      if (!r.ok) return;
+      var data = await r.json();
+      var jobs = (data && (data.jobs || data.QUEUE_JOBS)) || [];
+      var found = jobs.some(function(j){ return (j && (j.job_id || j.id)) === currentTask.jobId; });
+      if (!found){
+        currentTask = null;
+        submittedTasks = [];
+        paintCurrentTask();
+      }
+    } catch(e){ /* 下一次进入创建页或 5s 轮询会再次尝试 */ }
+  }
   // 把最近一次提交的任务渲染成「本次提交的任务」卡片（图 + 脚本/模板 + 状态 + 进度）。
   // 卡片在创建页 DOM 中常驻，切页不丢；只有「再来一组」开新任务提交后才会被替换。
   function paintCurrentTask(){
@@ -2278,7 +2376,9 @@
     var meta = document.getElementById('current-task-meta');
     var grid = document.getElementById('current-task-thumbs');
     if (!card) return;
-    if (!currentTask){ card.style.display = 'none'; return; }
+    // 守门：未登录用户不能看到「当前任务」卡片。这是跨用户泄漏的最后一道闸口
+    // ——即使 reset 漏掉了某个变量，也不会把上一个用户的 currentTask 渲染到新用户。
+    if (!window.__ffUser || !currentTask){ card.style.display = 'none'; return; }
     card.style.display = 'block';
     if (badge){ badge.textContent = currentTask.status || ''; badge.className = 'ct-badge ' + (currentTask.statusClass || ''); }
     if (meta){

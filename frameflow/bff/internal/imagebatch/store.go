@@ -113,6 +113,11 @@ func (s *Store) Update(sessionID, id string, fn func(*Batch)) (*Batch, error) {
 	if err != nil {
 		return nil, err
 	}
+	// scope 过滤未命中（cross-scope 调用）：不调用 fn，避免对 nil Batch 解引用
+	// panic；同时不执行 UPDATE。这是 Get 的 (nil, nil) 约定。
+	if b == nil {
+		return nil, nil
+	}
 	fn(b)
 	b.UpdatedAt = time.Now().UTC()
 	_, err = s.db.Exec(`UPDATE image_batches SET status=?,asset_count=?,render_job_id=?,video_url=?,error=?,updated_at=? WHERE session_id=? AND id=?`, b.Status, b.AssetCount, b.RenderJobID, b.VideoURL, b.Error, b.UpdatedAt.Format(time.RFC3339Nano), sessionID, id)
