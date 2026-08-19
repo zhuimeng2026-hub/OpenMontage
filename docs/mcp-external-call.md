@@ -1,6 +1,6 @@
 # OpenMontage MCP 外部调用文档
 
-> 本文档说明如何从 **FrameFlow BFF**（`POST /api/mcp`）或**直连 MCP**（`POST /mcp`）调用 OpenMontage 渲染管线。机器 B（`lanes.ymxt.top:8900`）渲染失败的已知问题见末尾「⚠️ Babel/Standalone 已知问题」。
+> 本文档说明如何从 **FrameFlow BFF**（`POST /api/mcp`）或**直连 MCP**（`POST /mcp`）调用 OpenMontage 渲染管线。渲染状态见「✅ Babel/Standalone 问题 — 已解决」段落。
 
 ---
 
@@ -412,38 +412,34 @@ done
 
 ---
 
-## ⚠️ Babel/Standalone 已知问题
+## ✅ Babel/Standalone 问题 — 已解决（2026-08-18）
 
-### 问题描述
+### 问题回顾
 
-当调用 `create_remotion_video_share` 且 `script_id=photo-ken-burns`（`renderer_family=animation-first`）或自定义合成时，Remotion 渲染阶段报错：
+2026-08-18 早间，渲染任务报错：
 
 ```
-Module not found: @babel/standalone
+Error: Module not found: Can't resolve '@babel/standalone'
 ```
 
 ### 根因
 
-`remotion-composer/package.json` 依赖 `@babel/standalone`，本机 `node_modules` 已正确安装（BFF 所在的机器 A），渲染正常。
+`remotion-composer/package.json` 声明了 `@babel/standalone`，但本机（`lanes.ymxt.top:8900`）的 `node_modules` 中缺失该包。Remotion webpack bundler 在打包阶段找不到此模块。
 
-机器 B（`lanes.ymxt.top:8900`）的 `node_modules` 缺失此包，导致在该机器执行的渲染任务失败。
+### 修复
 
-### 修复方法
+已在机器 B 执行 `npm install`（`Aug 18 22:02`）。
 
-在机器 B 执行：
+### 当前状态确认（2026-08-19 实测）
 
-```bash
-cd /path/to/remotion-composer
-npm install
-```
+| 检查项 | 状态 |
+|---|---|
+| `node_modules/@babel/standalone/` 存在 | ✅ |
+| 渲染任务正常完成 | ✅（22:05、22:20、22:38、22:41、23:12、00:52、02:09 UTC+8） |
+| 微云发布正常 | ✅ |
+| BFF 转发正常 | ✅ |
 
-BFF 重启**不会**修复此问题（BFF 只是转发器，不执行渲染）。
-
-### 当前状态确认
-
-- **机器 A**（BFF / 本机 `/opt/OpenMontage`）：✅ `node_modules/@babel/standalone/` 存在，渲染正常
-- **机器 B**（`lanes.ymxt.top:8900`）：❌ 需运维执行 `npm install`
-- **BFF 侧代码**：✅ 无问题，转发正常
+> ⚠️ 仍有少量任务在渲染完成后因微云上传超时（超过 50 轮限制）失败，与 babel 无关。
 
 ---
 

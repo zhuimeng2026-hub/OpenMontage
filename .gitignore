@@ -153,3 +153,5 @@ nginx/_tools_list.json
 
 # TLS private keys & certs (deployment secrets — never commit)
 nginx/ssl/
+
+remotion-composer/build

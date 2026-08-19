@@ -1,0 +1,626 @@
+[mcp_server] Registered weiyun video upload tool: ['weiyun_video_upload']
+[mcp_server] Registered 12 weiyun tools: weiyun.list, weiyun.list_by_category, weiyun.download, weiyun.delete, weiyun.upload, weiyun.gen_share_link, weiyun.rename_file, weiyun.rename_dir, weiyun.create_dir, weiyun.move_file, weiyun.move_dir, check_skill_update
+[mcp_server] Discovered 124 tools (63 available)
+[06:08:51] INFO Starting OpenMontage MCP server on port 8900 (transport=streamable-http)
+Starting OpenMontage MCP server on port 8900 (transport=streamable-http)
+[06:08:51] INFO 63/124 tools available
+63/124 tools available
+[06:08:51] INFO Bearer token auth ENABLED — clients must send 'Authorization: Bearer <MCP_API_TOKEN>'
+Bearer token auth ENABLED — clients must send 'Authorization: Bearer <MCP_API_TOKEN>'
+INFO:     Started server process [4171615]
+INFO:     Waiting for application startup.
+StreamableHTTP session manager started
+INFO:     Application startup complete.
+INFO:     Uvicorn running on socket ('::', 8900, 0, 0) (Press CTRL+C to quit)
+[06:24:06] INFO Request: POST /mcp from ::ffff:192.168.20.1:52786 auth=YES session_hash=None request_id=b257dbb122d1bdbc12cd0db835655e0d
+Request: POST /mcp from ::ffff:192.168.20.1:52786 auth=YES session_hash=None request_id=b257dbb122d1bdbc12cd0db835655e0d
+[06:24:06] INFO Body received from ::ffff:192.168.20.1:52786 bytes=172 session_hash=None request_id=b257dbb122d1bdbc12cd0db835655e0d
+Body received from ::ffff:192.168.20.1:52786 bytes=172 session_hash=None request_id=b257dbb122d1bdbc12cd0db835655e0d
+[06:24:06] INFO Auth OK: ::ffff:192.168.20.1:52786
+Auth OK: ::ffff:192.168.20.1:52786
+Created new transport with session ID: 25d618cf6c9544acbb6c0a04729a5736
+INFO:     ::ffff:192.168.20.1:52786 - "POST /mcp HTTP/1.1" 200 OK
+[06:24:08] INFO Request: POST /mcp from ::ffff:192.168.20.1:52786 auth=YES session_hash=2e8b56ef7744f88c request_id=f8af202d81b6d91fac8abc3b709f13ba
+Request: POST /mcp from ::ffff:192.168.20.1:52786 auth=YES session_hash=2e8b56ef7744f88c request_id=f8af202d81b6d91fac8abc3b709f13ba
+[06:24:08] INFO Body received from ::ffff:192.168.20.1:52786 bytes=57 session_hash=2e8b56ef7744f88c request_id=f8af202d81b6d91fac8abc3b709f13ba
+Body received from ::ffff:192.168.20.1:52786 bytes=57 session_hash=2e8b56ef7744f88c request_id=f8af202d81b6d91fac8abc3b709f13ba
+[06:24:08] INFO Auth OK: ::ffff:192.168.20.1:52786
+Auth OK: ::ffff:192.168.20.1:52786
+INFO:     ::ffff:192.168.20.1:52786 - "POST /mcp HTTP/1.1" 202 Accepted
+[06:24:09] INFO Request: POST /mcp from ::ffff:192.168.20.1:52786 auth=YES session_hash=2e8b56ef7744f88c request_id=9ab6c739261c7db9edd6d1a8c5042918
+Request: POST /mcp from ::ffff:192.168.20.1:52786 auth=YES session_hash=2e8b56ef7744f88c request_id=9ab6c739261c7db9edd6d1a8c5042918
+[06:24:09] INFO Body received from ::ffff:192.168.20.1:52786 bytes=196 session_hash=2e8b56ef7744f88c request_id=9ab6c739261c7db9edd6d1a8c5042918
+Body received from ::ffff:192.168.20.1:52786 bytes=196 session_hash=2e8b56ef7744f88c request_id=9ab6c739261c7db9edd6d1a8c5042918
+[06:24:09] INFO Auth OK: ::ffff:192.168.20.1:52786
+Auth OK: ::ffff:192.168.20.1:52786
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:52786 - "POST /mcp HTTP/1.1" 200 OK
+[06:24:10] INFO Request: POST /mcp from ::ffff:192.168.20.1:60382 auth=YES session_hash=None request_id=e839b3f51124834977aa8f9007466a1d
+Request: POST /mcp from ::ffff:192.168.20.1:60382 auth=YES session_hash=None request_id=e839b3f51124834977aa8f9007466a1d
+[06:24:10] INFO Body received from ::ffff:192.168.20.1:60382 bytes=172 session_hash=None request_id=e839b3f51124834977aa8f9007466a1d
+Body received from ::ffff:192.168.20.1:60382 bytes=172 session_hash=None request_id=e839b3f51124834977aa8f9007466a1d
+[06:24:10] INFO Auth OK: ::ffff:192.168.20.1:60382
+Auth OK: ::ffff:192.168.20.1:60382
+Created new transport with session ID: ba42a111613b45ada5faf23f142c317f
+INFO:     ::ffff:192.168.20.1:60382 - "POST /mcp HTTP/1.1" 200 OK
+[06:24:12] INFO Request: POST /mcp from ::ffff:192.168.20.1:60382 auth=YES session_hash=5184bc694bb90bf8 request_id=e2c6d28891819ba7554d2d52741e535f
+Request: POST /mcp from ::ffff:192.168.20.1:60382 auth=YES session_hash=5184bc694bb90bf8 request_id=e2c6d28891819ba7554d2d52741e535f
+[06:24:12] INFO Body received from ::ffff:192.168.20.1:60382 bytes=57 session_hash=5184bc694bb90bf8 request_id=e2c6d28891819ba7554d2d52741e535f
+Body received from ::ffff:192.168.20.1:60382 bytes=57 session_hash=5184bc694bb90bf8 request_id=e2c6d28891819ba7554d2d52741e535f
+[06:24:12] INFO Auth OK: ::ffff:192.168.20.1:60382
+Auth OK: ::ffff:192.168.20.1:60382
+INFO:     ::ffff:192.168.20.1:60382 - "POST /mcp HTTP/1.1" 202 Accepted
+[06:24:13] INFO Request: POST /mcp from ::ffff:192.168.20.1:60382 auth=YES session_hash=5184bc694bb90bf8 request_id=702e45525855a5255a3264a0d68972be
+Request: POST /mcp from ::ffff:192.168.20.1:60382 auth=YES session_hash=5184bc694bb90bf8 request_id=702e45525855a5255a3264a0d68972be
+[06:24:13] INFO Body received from ::ffff:192.168.20.1:60382 bytes=283 session_hash=5184bc694bb90bf8 request_id=702e45525855a5255a3264a0d68972be
+Body received from ::ffff:192.168.20.1:60382 bytes=283 session_hash=5184bc694bb90bf8 request_id=702e45525855a5255a3264a0d68972be
+[06:24:13] INFO Auth OK: ::ffff:192.168.20.1:60382
+Auth OK: ::ffff:192.168.20.1:60382
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:60382 - "POST /mcp HTTP/1.1" 200 OK
+[06:24:15] INFO Request: POST /mcp from ::ffff:192.168.20.1:60382 auth=YES session_hash=5184bc694bb90bf8 request_id=0697f02529ae5d80f88125d8af539fc4
+Request: POST /mcp from ::ffff:192.168.20.1:60382 auth=YES session_hash=5184bc694bb90bf8 request_id=0697f02529ae5d80f88125d8af539fc4
+[06:24:15] INFO Body received from ::ffff:192.168.20.1:60382 bytes=215 session_hash=5184bc694bb90bf8 request_id=0697f02529ae5d80f88125d8af539fc4
+Body received from ::ffff:192.168.20.1:60382 bytes=215 session_hash=5184bc694bb90bf8 request_id=0697f02529ae5d80f88125d8af539fc4
+[06:24:15] INFO Auth OK: ::ffff:192.168.20.1:60382
+Auth OK: ::ffff:192.168.20.1:60382
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:60382 - "POST /mcp HTTP/1.1" 200 OK
+[08:50:40] INFO Request: POST /mcp from ::ffff:192.168.20.1:57790 auth=YES session_hash=None request_id=090728b28259a93dc3d812321cb02687
+Request: POST /mcp from ::ffff:192.168.20.1:57790 auth=YES session_hash=None request_id=090728b28259a93dc3d812321cb02687
+[08:50:40] INFO Body received from ::ffff:192.168.20.1:57790 bytes=154 session_hash=None request_id=090728b28259a93dc3d812321cb02687
+Body received from ::ffff:192.168.20.1:57790 bytes=154 session_hash=None request_id=090728b28259a93dc3d812321cb02687
+[08:50:40] INFO Auth OK: ::ffff:192.168.20.1:57790
+Auth OK: ::ffff:192.168.20.1:57790
+Created new transport with session ID: 078520915238471184fa03ce26f4d0ae
+INFO:     ::ffff:192.168.20.1:57790 - "POST /mcp HTTP/1.1" 200 OK
+[08:51:55] INFO Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=None request_id=d34ec98f5c4ae216030be6cfd541c988
+Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=None request_id=d34ec98f5c4ae216030be6cfd541c988
+[08:51:55] INFO Body received from ::ffff:192.168.20.1:49996 bytes=169 session_hash=None request_id=d34ec98f5c4ae216030be6cfd541c988
+Body received from ::ffff:192.168.20.1:49996 bytes=169 session_hash=None request_id=d34ec98f5c4ae216030be6cfd541c988
+[08:51:55] INFO Auth OK: ::ffff:192.168.20.1:49996
+Auth OK: ::ffff:192.168.20.1:49996
+Created new transport with session ID: 73799ff026ac495a9d4d560d8f400fd4
+INFO:     ::ffff:192.168.20.1:49996 - "POST /mcp HTTP/1.1" 200 OK
+[08:51:56] INFO Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=4f2f357c574f9d40 request_id=7ce4700edd273fc46ee6009c2ac0f2ac
+Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=4f2f357c574f9d40 request_id=7ce4700edd273fc46ee6009c2ac0f2ac
+[08:51:56] INFO Body received from ::ffff:192.168.20.1:49996 bytes=57 session_hash=4f2f357c574f9d40 request_id=7ce4700edd273fc46ee6009c2ac0f2ac
+Body received from ::ffff:192.168.20.1:49996 bytes=57 session_hash=4f2f357c574f9d40 request_id=7ce4700edd273fc46ee6009c2ac0f2ac
+[08:51:56] INFO Auth OK: ::ffff:192.168.20.1:49996
+Auth OK: ::ffff:192.168.20.1:49996
+INFO:     ::ffff:192.168.20.1:49996 - "POST /mcp HTTP/1.1" 202 Accepted
+[08:51:56] INFO Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=4f2f357c574f9d40 request_id=dbb85b5e3c87f925be85e272014f5f44
+Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=4f2f357c574f9d40 request_id=dbb85b5e3c87f925be85e272014f5f44
+[08:51:56] INFO Body received from ::ffff:192.168.20.1:49996 bytes=65 session_hash=4f2f357c574f9d40 request_id=dbb85b5e3c87f925be85e272014f5f44
+Body received from ::ffff:192.168.20.1:49996 bytes=65 session_hash=4f2f357c574f9d40 request_id=dbb85b5e3c87f925be85e272014f5f44
+[08:51:56] INFO Auth OK: ::ffff:192.168.20.1:49996
+Auth OK: ::ffff:192.168.20.1:49996
+Processing request of type ListToolsRequest
+INFO:     ::ffff:192.168.20.1:49996 - "POST /mcp HTTP/1.1" 200 OK
+[08:51:56] INFO Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=4f2f357c574f9d40 request_id=5ea689460b88885cb01d4a12e9afbacc
+Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=4f2f357c574f9d40 request_id=5ea689460b88885cb01d4a12e9afbacc
+[08:51:56] INFO Body received from ::ffff:192.168.20.1:49996 bytes=69 session_hash=4f2f357c574f9d40 request_id=5ea689460b88885cb01d4a12e9afbacc
+Body received from ::ffff:192.168.20.1:49996 bytes=69 session_hash=4f2f357c574f9d40 request_id=5ea689460b88885cb01d4a12e9afbacc
+[08:51:56] INFO Auth OK: ::ffff:192.168.20.1:49996
+Auth OK: ::ffff:192.168.20.1:49996
+Processing request of type ListResourcesRequest
+INFO:     ::ffff:192.168.20.1:49996 - "POST /mcp HTTP/1.1" 200 OK
+[08:51:56] INFO Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=4f2f357c574f9d40 request_id=f6c4b2a23aee99f17a00f6523dcaf231
+Request: POST /mcp from ::ffff:192.168.20.1:49996 auth=YES session_hash=4f2f357c574f9d40 request_id=f6c4b2a23aee99f17a00f6523dcaf231
+[08:51:56] INFO Body received from ::ffff:192.168.20.1:49996 bytes=67 session_hash=4f2f357c574f9d40 request_id=f6c4b2a23aee99f17a00f6523dcaf231
+Body received from ::ffff:192.168.20.1:49996 bytes=67 session_hash=4f2f357c574f9d40 request_id=f6c4b2a23aee99f17a00f6523dcaf231
+[08:51:56] INFO Auth OK: ::ffff:192.168.20.1:49996
+Auth OK: ::ffff:192.168.20.1:49996
+Processing request of type ListPromptsRequest
+INFO:     ::ffff:192.168.20.1:49996 - "POST /mcp HTTP/1.1" 200 OK
+[08:52:37] INFO Request: POST /mcp from ::ffff:192.168.20.1:60812 auth=YES session_hash=None request_id=0d4893d8ec8114417a2d4f79aad3cfae
+Request: POST /mcp from ::ffff:192.168.20.1:60812 auth=YES session_hash=None request_id=0d4893d8ec8114417a2d4f79aad3cfae
+[08:52:37] INFO Body received from ::ffff:192.168.20.1:60812 bytes=169 session_hash=None request_id=0d4893d8ec8114417a2d4f79aad3cfae
+Body received from ::ffff:192.168.20.1:60812 bytes=169 session_hash=None request_id=0d4893d8ec8114417a2d4f79aad3cfae
+[08:52:37] INFO Auth OK: ::ffff:192.168.20.1:60812
+Auth OK: ::ffff:192.168.20.1:60812
+Created new transport with session ID: ce2396574fe4404cb650929d479d5770
+INFO:     ::ffff:192.168.20.1:60812 - "POST /mcp HTTP/1.1" 200 OK
+[08:52:37] INFO Request: POST /mcp from ::ffff:192.168.20.1:60812 auth=YES session_hash=805a2a870fa34ff1 request_id=3286223f5d01d2e105f8726433195692
+Request: POST /mcp from ::ffff:192.168.20.1:60812 auth=YES session_hash=805a2a870fa34ff1 request_id=3286223f5d01d2e105f8726433195692
+[08:52:37] INFO Body received from ::ffff:192.168.20.1:60812 bytes=57 session_hash=805a2a870fa34ff1 request_id=3286223f5d01d2e105f8726433195692
+Body received from ::ffff:192.168.20.1:60812 bytes=57 session_hash=805a2a870fa34ff1 request_id=3286223f5d01d2e105f8726433195692
+[08:52:37] INFO Auth OK: ::ffff:192.168.20.1:60812
+Auth OK: ::ffff:192.168.20.1:60812
+INFO:     ::ffff:192.168.20.1:60812 - "POST /mcp HTTP/1.1" 202 Accepted
+[08:52:38] INFO Request: POST /mcp from ::ffff:192.168.20.1:60812 auth=YES session_hash=805a2a870fa34ff1 request_id=991d9ecc5753539ba9a1b189163b754a
+Request: POST /mcp from ::ffff:192.168.20.1:60812 auth=YES session_hash=805a2a870fa34ff1 request_id=991d9ecc5753539ba9a1b189163b754a
+[08:52:38] INFO Body received from ::ffff:192.168.20.1:60812 bytes=108 session_hash=805a2a870fa34ff1 request_id=991d9ecc5753539ba9a1b189163b754a
+Body received from ::ffff:192.168.20.1:60812 bytes=108 session_hash=805a2a870fa34ff1 request_id=991d9ecc5753539ba9a1b189163b754a
+[08:52:38] INFO Auth OK: ::ffff:192.168.20.1:60812
+Auth OK: ::ffff:192.168.20.1:60812
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:60812 - "POST /mcp HTTP/1.1" 200 OK
+[08:52:39] INFO Request: POST /mcp from ::ffff:192.168.20.1:60812 auth=YES session_hash=805a2a870fa34ff1 request_id=c4d722bf63d1508d6452740e0075f957
+Request: POST /mcp from ::ffff:192.168.20.1:60812 auth=YES session_hash=805a2a870fa34ff1 request_id=c4d722bf63d1508d6452740e0075f957
+[08:52:39] INFO Body received from ::ffff:192.168.20.1:60812 bytes=106 session_hash=805a2a870fa34ff1 request_id=c4d722bf63d1508d6452740e0075f957
+Body received from ::ffff:192.168.20.1:60812 bytes=106 session_hash=805a2a870fa34ff1 request_id=c4d722bf63d1508d6452740e0075f957
+[08:52:39] INFO Auth OK: ::ffff:192.168.20.1:60812
+Auth OK: ::ffff:192.168.20.1:60812
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:60812 - "POST /mcp HTTP/1.1" 200 OK
+[08:53:19] INFO Request: POST /mcp from ::ffff:192.168.20.1:45046 auth=YES session_hash=None request_id=ed9f13ed425b64700caa62251018cd98
+Request: POST /mcp from ::ffff:192.168.20.1:45046 auth=YES session_hash=None request_id=ed9f13ed425b64700caa62251018cd98
+[08:53:19] INFO Body received from ::ffff:192.168.20.1:45046 bytes=161 session_hash=None request_id=ed9f13ed425b64700caa62251018cd98
+Body received from ::ffff:192.168.20.1:45046 bytes=161 session_hash=None request_id=ed9f13ed425b64700caa62251018cd98
+[08:53:19] INFO Auth OK: ::ffff:192.168.20.1:45046
+Auth OK: ::ffff:192.168.20.1:45046
+Created new transport with session ID: 82c6a85627ac4020be1abc2acc370d21
+INFO:     ::ffff:192.168.20.1:45046 - "POST /mcp HTTP/1.1" 200 OK
+[08:53:33] INFO Request: POST /mcp from ::ffff:192.168.20.1:49130 auth=YES session_hash=None request_id=fc6355d4ab7770839a3315c9b5a08dc7
+Request: POST /mcp from ::ffff:192.168.20.1:49130 auth=YES session_hash=None request_id=fc6355d4ab7770839a3315c9b5a08dc7
+[08:53:33] INFO Body received from ::ffff:192.168.20.1:49130 bytes=161 session_hash=None request_id=fc6355d4ab7770839a3315c9b5a08dc7
+Body received from ::ffff:192.168.20.1:49130 bytes=161 session_hash=None request_id=fc6355d4ab7770839a3315c9b5a08dc7
+[08:53:33] INFO Auth OK: ::ffff:192.168.20.1:49130
+Auth OK: ::ffff:192.168.20.1:49130
+Created new transport with session ID: c060e39917b34edb957c506616ef8cd9
+INFO:     ::ffff:192.168.20.1:49130 - "POST /mcp HTTP/1.1" 200 OK
+[08:53:34] INFO Request: POST /mcp from ::ffff:192.168.20.1:49130 auth=YES session_hash=bcbe1cde06a9d0e6 request_id=ef211e6aaf93f9b010c1788c8fafb8ce
+Request: POST /mcp from ::ffff:192.168.20.1:49130 auth=YES session_hash=bcbe1cde06a9d0e6 request_id=ef211e6aaf93f9b010c1788c8fafb8ce
+[08:53:34] INFO Body received from ::ffff:192.168.20.1:49130 bytes=57 session_hash=bcbe1cde06a9d0e6 request_id=ef211e6aaf93f9b010c1788c8fafb8ce
+Body received from ::ffff:192.168.20.1:49130 bytes=57 session_hash=bcbe1cde06a9d0e6 request_id=ef211e6aaf93f9b010c1788c8fafb8ce
+[08:53:34] INFO Auth OK: ::ffff:192.168.20.1:49130
+Auth OK: ::ffff:192.168.20.1:49130
+INFO:     ::ffff:192.168.20.1:49130 - "POST /mcp HTTP/1.1" 202 Accepted
+[08:53:34] INFO Request: POST /mcp from ::ffff:192.168.20.1:49130 auth=YES session_hash=bcbe1cde06a9d0e6 request_id=414b5a31630d02c9a3fdd3ddeee97ecf
+Request: POST /mcp from ::ffff:192.168.20.1:49130 auth=YES session_hash=bcbe1cde06a9d0e6 request_id=414b5a31630d02c9a3fdd3ddeee97ecf
+[08:53:34] INFO Body received from ::ffff:192.168.20.1:49130 bytes=106 session_hash=bcbe1cde06a9d0e6 request_id=414b5a31630d02c9a3fdd3ddeee97ecf
+Body received from ::ffff:192.168.20.1:49130 bytes=106 session_hash=bcbe1cde06a9d0e6 request_id=414b5a31630d02c9a3fdd3ddeee97ecf
+[08:53:34] INFO Auth OK: ::ffff:192.168.20.1:49130
+Auth OK: ::ffff:192.168.20.1:49130
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:49130 - "POST /mcp HTTP/1.1" 200 OK
+[08:53:34] INFO Request: POST /mcp from ::ffff:192.168.20.1:49130 auth=YES session_hash=bcbe1cde06a9d0e6 request_id=e335770e5631100af66f1ef5d87b0968
+Request: POST /mcp from ::ffff:192.168.20.1:49130 auth=YES session_hash=bcbe1cde06a9d0e6 request_id=e335770e5631100af66f1ef5d87b0968
+[08:53:34] INFO Body received from ::ffff:192.168.20.1:49130 bytes=123 session_hash=bcbe1cde06a9d0e6 request_id=e335770e5631100af66f1ef5d87b0968
+Body received from ::ffff:192.168.20.1:49130 bytes=123 session_hash=bcbe1cde06a9d0e6 request_id=e335770e5631100af66f1ef5d87b0968
+[08:53:34] INFO Auth OK: ::ffff:192.168.20.1:49130
+Auth OK: ::ffff:192.168.20.1:49130
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:49130 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:00] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=None request_id=1610f2345c543c30e5520657bb497397
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=None request_id=1610f2345c543c30e5520657bb497397
+[09:05:00] INFO Body received from ::ffff:192.168.20.1:51708 bytes=161 session_hash=None request_id=1610f2345c543c30e5520657bb497397
+Body received from ::ffff:192.168.20.1:51708 bytes=161 session_hash=None request_id=1610f2345c543c30e5520657bb497397
+[09:05:00] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Created new transport with session ID: d66ad711c97a41779424d7344691e8a7
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:00] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=f3bd58fe762e53180753f188fb8ac125
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=f3bd58fe762e53180753f188fb8ac125
+[09:05:00] INFO Body received from ::ffff:192.168.20.1:51708 bytes=57 session_hash=a489ac3b4e00dd7b request_id=f3bd58fe762e53180753f188fb8ac125
+Body received from ::ffff:192.168.20.1:51708 bytes=57 session_hash=a489ac3b4e00dd7b request_id=f3bd58fe762e53180753f188fb8ac125
+[09:05:00] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 202 Accepted
+[09:05:00] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=2ca4ce5ce05fe66581fbf5021be398c7
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=2ca4ce5ce05fe66581fbf5021be398c7
+[09:05:00] INFO Body received from ::ffff:192.168.20.1:51708 bytes=135 session_hash=a489ac3b4e00dd7b request_id=2ca4ce5ce05fe66581fbf5021be398c7
+Body received from ::ffff:192.168.20.1:51708 bytes=135 session_hash=a489ac3b4e00dd7b request_id=2ca4ce5ce05fe66581fbf5021be398c7
+[09:05:00] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:00] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=aac870a0e77e28c7f2c590d2646346a1
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=aac870a0e77e28c7f2c590d2646346a1
+[09:05:00] INFO Body received from ::ffff:192.168.20.1:51708 bytes=135 session_hash=a489ac3b4e00dd7b request_id=aac870a0e77e28c7f2c590d2646346a1
+Body received from ::ffff:192.168.20.1:51708 bytes=135 session_hash=a489ac3b4e00dd7b request_id=aac870a0e77e28c7f2c590d2646346a1
+[09:05:00] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:01] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=91e783a968029a7b0bfdc7f731a12928
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=91e783a968029a7b0bfdc7f731a12928
+[09:05:01] INFO Body received from ::ffff:192.168.20.1:51708 bytes=131 session_hash=a489ac3b4e00dd7b request_id=91e783a968029a7b0bfdc7f731a12928
+Body received from ::ffff:192.168.20.1:51708 bytes=131 session_hash=a489ac3b4e00dd7b request_id=91e783a968029a7b0bfdc7f731a12928
+[09:05:01] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:01] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=0b17f2f47ec2da896071971fbbaf075f
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=0b17f2f47ec2da896071971fbbaf075f
+[09:05:01] INFO Body received from ::ffff:192.168.20.1:51708 bytes=133 session_hash=a489ac3b4e00dd7b request_id=0b17f2f47ec2da896071971fbbaf075f
+Body received from ::ffff:192.168.20.1:51708 bytes=133 session_hash=a489ac3b4e00dd7b request_id=0b17f2f47ec2da896071971fbbaf075f
+[09:05:01] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:01] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=d64aa09279a4e57457062db6b0b4fda5
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=d64aa09279a4e57457062db6b0b4fda5
+[09:05:01] INFO Body received from ::ffff:192.168.20.1:51708 bytes=139 session_hash=a489ac3b4e00dd7b request_id=d64aa09279a4e57457062db6b0b4fda5
+Body received from ::ffff:192.168.20.1:51708 bytes=139 session_hash=a489ac3b4e00dd7b request_id=d64aa09279a4e57457062db6b0b4fda5
+[09:05:01] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:01] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=2bee3e062f6865b5e881745fc910f89b
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=2bee3e062f6865b5e881745fc910f89b
+[09:05:01] INFO Body received from ::ffff:192.168.20.1:51708 bytes=148 session_hash=a489ac3b4e00dd7b request_id=2bee3e062f6865b5e881745fc910f89b
+Body received from ::ffff:192.168.20.1:51708 bytes=148 session_hash=a489ac3b4e00dd7b request_id=2bee3e062f6865b5e881745fc910f89b
+[09:05:01] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:01] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=f67683528451d5ceae34cb884edea735
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=f67683528451d5ceae34cb884edea735
+[09:05:01] INFO Body received from ::ffff:192.168.20.1:51708 bytes=134 session_hash=a489ac3b4e00dd7b request_id=f67683528451d5ceae34cb884edea735
+Body received from ::ffff:192.168.20.1:51708 bytes=134 session_hash=a489ac3b4e00dd7b request_id=f67683528451d5ceae34cb884edea735
+[09:05:01] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:01] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=3ab95a97758e3b773042875e7b664776
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=3ab95a97758e3b773042875e7b664776
+[09:05:01] INFO Body received from ::ffff:192.168.20.1:51708 bytes=142 session_hash=a489ac3b4e00dd7b request_id=3ab95a97758e3b773042875e7b664776
+Body received from ::ffff:192.168.20.1:51708 bytes=142 session_hash=a489ac3b4e00dd7b request_id=3ab95a97758e3b773042875e7b664776
+[09:05:01] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:01] INFO Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=40ecd8afd1a605ec4b093db5988db318
+Request: POST /mcp from ::ffff:192.168.20.1:51708 auth=YES session_hash=a489ac3b4e00dd7b request_id=40ecd8afd1a605ec4b093db5988db318
+[09:05:01] INFO Body received from ::ffff:192.168.20.1:51708 bytes=133 session_hash=a489ac3b4e00dd7b request_id=40ecd8afd1a605ec4b093db5988db318
+Body received from ::ffff:192.168.20.1:51708 bytes=133 session_hash=a489ac3b4e00dd7b request_id=40ecd8afd1a605ec4b093db5988db318
+[09:05:01] INFO Auth OK: ::ffff:192.168.20.1:51708
+Auth OK: ::ffff:192.168.20.1:51708
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:51708 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:39] INFO Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=None request_id=8c3516686c3ebd5e951e6eddc37dde42
+Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=None request_id=8c3516686c3ebd5e951e6eddc37dde42
+[09:05:39] INFO Body received from ::ffff:192.168.20.1:58802 bytes=161 session_hash=None request_id=8c3516686c3ebd5e951e6eddc37dde42
+Body received from ::ffff:192.168.20.1:58802 bytes=161 session_hash=None request_id=8c3516686c3ebd5e951e6eddc37dde42
+[09:05:39] INFO Auth OK: ::ffff:192.168.20.1:58802
+Auth OK: ::ffff:192.168.20.1:58802
+Created new transport with session ID: 97773d0940e44213b03ac8953da0ed1e
+INFO:     ::ffff:192.168.20.1:58802 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:39] INFO Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=5ea42c1a4cc253cc924c416cbd053626
+Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=5ea42c1a4cc253cc924c416cbd053626
+[09:05:39] INFO Body received from ::ffff:192.168.20.1:58802 bytes=57 session_hash=96283722d38f880a request_id=5ea42c1a4cc253cc924c416cbd053626
+Body received from ::ffff:192.168.20.1:58802 bytes=57 session_hash=96283722d38f880a request_id=5ea42c1a4cc253cc924c416cbd053626
+[09:05:39] INFO Auth OK: ::ffff:192.168.20.1:58802
+Auth OK: ::ffff:192.168.20.1:58802
+INFO:     ::ffff:192.168.20.1:58802 - "POST /mcp HTTP/1.1" 202 Accepted
+[09:05:39] INFO Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=1d818c67b8483e706ac4d37ba83ba613
+Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=1d818c67b8483e706ac4d37ba83ba613
+[09:05:39] INFO Body received from ::ffff:192.168.20.1:58802 bytes=135 session_hash=96283722d38f880a request_id=1d818c67b8483e706ac4d37ba83ba613
+Body received from ::ffff:192.168.20.1:58802 bytes=135 session_hash=96283722d38f880a request_id=1d818c67b8483e706ac4d37ba83ba613
+[09:05:39] INFO Auth OK: ::ffff:192.168.20.1:58802
+Auth OK: ::ffff:192.168.20.1:58802
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:58802 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:39] INFO Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=91abd1f035c2db136eebc7ca04eb3499
+Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=91abd1f035c2db136eebc7ca04eb3499
+[09:05:39] INFO Body received from ::ffff:192.168.20.1:58802 bytes=148 session_hash=96283722d38f880a request_id=91abd1f035c2db136eebc7ca04eb3499
+Body received from ::ffff:192.168.20.1:58802 bytes=148 session_hash=96283722d38f880a request_id=91abd1f035c2db136eebc7ca04eb3499
+[09:05:39] INFO Auth OK: ::ffff:192.168.20.1:58802
+Auth OK: ::ffff:192.168.20.1:58802
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:58802 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:39] INFO Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=39bf6a5a6262bfdceff144f943acb228
+Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=39bf6a5a6262bfdceff144f943acb228
+[09:05:39] INFO Body received from ::ffff:192.168.20.1:58802 bytes=134 session_hash=96283722d38f880a request_id=39bf6a5a6262bfdceff144f943acb228
+Body received from ::ffff:192.168.20.1:58802 bytes=134 session_hash=96283722d38f880a request_id=39bf6a5a6262bfdceff144f943acb228
+[09:05:39] INFO Auth OK: ::ffff:192.168.20.1:58802
+Auth OK: ::ffff:192.168.20.1:58802
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:58802 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:39] INFO Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=8435684fbcfb70cc69cc1b09abf749e9
+Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=8435684fbcfb70cc69cc1b09abf749e9
+[09:05:39] INFO Body received from ::ffff:192.168.20.1:58802 bytes=142 session_hash=96283722d38f880a request_id=8435684fbcfb70cc69cc1b09abf749e9
+Body received from ::ffff:192.168.20.1:58802 bytes=142 session_hash=96283722d38f880a request_id=8435684fbcfb70cc69cc1b09abf749e9
+[09:05:39] INFO Auth OK: ::ffff:192.168.20.1:58802
+Auth OK: ::ffff:192.168.20.1:58802
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:58802 - "POST /mcp HTTP/1.1" 200 OK
+[09:05:39] INFO Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=2309e22c542cd304a96f8cd638b9208a
+Request: POST /mcp from ::ffff:192.168.20.1:58802 auth=YES session_hash=96283722d38f880a request_id=2309e22c542cd304a96f8cd638b9208a
+[09:05:39] INFO Body received from ::ffff:192.168.20.1:58802 bytes=139 session_hash=96283722d38f880a request_id=2309e22c542cd304a96f8cd638b9208a
+Body received from ::ffff:192.168.20.1:58802 bytes=139 session_hash=96283722d38f880a request_id=2309e22c542cd304a96f8cd638b9208a
+[09:05:39] INFO Auth OK: ::ffff:192.168.20.1:58802
+Auth OK: ::ffff:192.168.20.1:58802
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:58802 - "POST /mcp HTTP/1.1" 200 OK
+[09:06:54] INFO Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=None request_id=e522ec3f745a2870068178fed5bcc818
+Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=None request_id=e522ec3f745a2870068178fed5bcc818
+[09:06:54] INFO Body received from ::ffff:192.168.20.1:59492 bytes=161 session_hash=None request_id=e522ec3f745a2870068178fed5bcc818
+Body received from ::ffff:192.168.20.1:59492 bytes=161 session_hash=None request_id=e522ec3f745a2870068178fed5bcc818
+[09:06:54] INFO Auth OK: ::ffff:192.168.20.1:59492
+Auth OK: ::ffff:192.168.20.1:59492
+Created new transport with session ID: b535b030083b41938ea7f5a549f4eca8
+INFO:     ::ffff:192.168.20.1:59492 - "POST /mcp HTTP/1.1" 200 OK
+[09:06:54] INFO Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=568a1bb6ba5d698cbc57ff531510cb03
+Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=568a1bb6ba5d698cbc57ff531510cb03
+[09:06:54] INFO Body received from ::ffff:192.168.20.1:59492 bytes=57 session_hash=b8d922c3921645f7 request_id=568a1bb6ba5d698cbc57ff531510cb03
+Body received from ::ffff:192.168.20.1:59492 bytes=57 session_hash=b8d922c3921645f7 request_id=568a1bb6ba5d698cbc57ff531510cb03
+[09:06:54] INFO Auth OK: ::ffff:192.168.20.1:59492
+Auth OK: ::ffff:192.168.20.1:59492
+INFO:     ::ffff:192.168.20.1:59492 - "POST /mcp HTTP/1.1" 202 Accepted
+[09:06:54] INFO Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=bd3a4ef73d8a76c84668b4ce443d4f4c
+Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=bd3a4ef73d8a76c84668b4ce443d4f4c
+[09:06:54] INFO Body received from ::ffff:192.168.20.1:59492 bytes=420 session_hash=b8d922c3921645f7 request_id=bd3a4ef73d8a76c84668b4ce443d4f4c
+Body received from ::ffff:192.168.20.1:59492 bytes=420 session_hash=b8d922c3921645f7 request_id=bd3a4ef73d8a76c84668b4ce443d4f4c
+[09:06:54] INFO Auth OK: ::ffff:192.168.20.1:59492
+Auth OK: ::ffff:192.168.20.1:59492
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:59492 - "POST /mcp HTTP/1.1" 200 OK
+[09:06:54] INFO Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=0d6da8f27055c7f2d774ab96d94bfa61
+Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=0d6da8f27055c7f2d774ab96d94bfa61
+[09:06:54] INFO Body received from ::ffff:192.168.20.1:59492 bytes=420 session_hash=b8d922c3921645f7 request_id=0d6da8f27055c7f2d774ab96d94bfa61
+Body received from ::ffff:192.168.20.1:59492 bytes=420 session_hash=b8d922c3921645f7 request_id=0d6da8f27055c7f2d774ab96d94bfa61
+[09:06:54] INFO Auth OK: ::ffff:192.168.20.1:59492
+Auth OK: ::ffff:192.168.20.1:59492
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:59492 - "POST /mcp HTTP/1.1" 200 OK
+[09:06:54] INFO Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=aec7c773cddb5464ce1941520bd6522e
+Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=aec7c773cddb5464ce1941520bd6522e
+[09:06:54] INFO Body received from ::ffff:192.168.20.1:59492 bytes=420 session_hash=b8d922c3921645f7 request_id=aec7c773cddb5464ce1941520bd6522e
+Body received from ::ffff:192.168.20.1:59492 bytes=420 session_hash=b8d922c3921645f7 request_id=aec7c773cddb5464ce1941520bd6522e
+[09:06:54] INFO Auth OK: ::ffff:192.168.20.1:59492
+Auth OK: ::ffff:192.168.20.1:59492
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:59492 - "POST /mcp HTTP/1.1" 200 OK
+[09:06:54] INFO Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=25d83bfd7b932891912a133694e8a8dc
+Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=25d83bfd7b932891912a133694e8a8dc
+[09:06:54] INFO Body received from ::ffff:192.168.20.1:59492 bytes=147 session_hash=b8d922c3921645f7 request_id=25d83bfd7b932891912a133694e8a8dc
+Body received from ::ffff:192.168.20.1:59492 bytes=147 session_hash=b8d922c3921645f7 request_id=25d83bfd7b932891912a133694e8a8dc
+[09:06:54] INFO Auth OK: ::ffff:192.168.20.1:59492
+Auth OK: ::ffff:192.168.20.1:59492
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:59492 - "POST /mcp HTTP/1.1" 200 OK
+[09:06:54] INFO Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=c5be62859c4d708bb116c01084f7ad59
+Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=c5be62859c4d708bb116c01084f7ad59
+[09:06:54] INFO Body received from ::ffff:192.168.20.1:59492 bytes=140 session_hash=b8d922c3921645f7 request_id=c5be62859c4d708bb116c01084f7ad59
+Body received from ::ffff:192.168.20.1:59492 bytes=140 session_hash=b8d922c3921645f7 request_id=c5be62859c4d708bb116c01084f7ad59
+[09:06:54] INFO Auth OK: ::ffff:192.168.20.1:59492
+Auth OK: ::ffff:192.168.20.1:59492
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:59492 - "POST /mcp HTTP/1.1" 200 OK
+[09:06:55] INFO Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=b65ab4098a2a1766f5cdc8e160ae598e
+Request: POST /mcp from ::ffff:192.168.20.1:59492 auth=YES session_hash=b8d922c3921645f7 request_id=b65ab4098a2a1766f5cdc8e160ae598e
+[09:06:55] INFO Body received from ::ffff:192.168.20.1:59492 bytes=120 session_hash=b8d922c3921645f7 request_id=b65ab4098a2a1766f5cdc8e160ae598e
+Body received from ::ffff:192.168.20.1:59492 bytes=120 session_hash=b8d922c3921645f7 request_id=b65ab4098a2a1766f5cdc8e160ae598e
+[09:06:55] INFO Auth OK: ::ffff:192.168.20.1:59492
+Auth OK: ::ffff:192.168.20.1:59492
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:59492 - "POST /mcp HTTP/1.1" 200 OK
+[09:08:05] INFO Request: POST /mcp from ::ffff:192.168.20.1:36590 auth=YES session_hash=None request_id=e70e8f6a629088842ded9b69d8726e88
+Request: POST /mcp from ::ffff:192.168.20.1:36590 auth=YES session_hash=None request_id=e70e8f6a629088842ded9b69d8726e88
+[09:08:05] INFO Body received from ::ffff:192.168.20.1:36590 bytes=146 session_hash=None request_id=e70e8f6a629088842ded9b69d8726e88
+Body received from ::ffff:192.168.20.1:36590 bytes=146 session_hash=None request_id=e70e8f6a629088842ded9b69d8726e88
+[09:08:05] INFO Auth OK: ::ffff:192.168.20.1:36590
+Auth OK: ::ffff:192.168.20.1:36590
+Created new transport with session ID: 17db3640af854b7b90d6442a89a5aaaf
+INFO:     ::ffff:192.168.20.1:36590 - "POST /mcp HTTP/1.1" 200 OK
+[09:08:05] INFO Request: POST /mcp from ::ffff:192.168.20.1:36590 auth=YES session_hash=23f099dca3a415cd request_id=95251bd94f9eb62843846b609fb066cf
+Request: POST /mcp from ::ffff:192.168.20.1:36590 auth=YES session_hash=23f099dca3a415cd request_id=95251bd94f9eb62843846b609fb066cf
+[09:08:05] INFO Body received from ::ffff:192.168.20.1:36590 bytes=54 session_hash=23f099dca3a415cd request_id=95251bd94f9eb62843846b609fb066cf
+Body received from ::ffff:192.168.20.1:36590 bytes=54 session_hash=23f099dca3a415cd request_id=95251bd94f9eb62843846b609fb066cf
+[09:08:05] INFO Auth OK: ::ffff:192.168.20.1:36590
+Auth OK: ::ffff:192.168.20.1:36590
+INFO:     ::ffff:192.168.20.1:36590 - "POST /mcp HTTP/1.1" 202 Accepted
+[09:08:06] INFO Request: POST /mcp from ::ffff:192.168.20.1:36590 auth=YES session_hash=23f099dca3a415cd request_id=ae27abe4845c4f560971d5af67e6f2b9
+Request: POST /mcp from ::ffff:192.168.20.1:36590 auth=YES session_hash=23f099dca3a415cd request_id=ae27abe4845c4f560971d5af67e6f2b9
+[09:08:06] INFO Body received from ::ffff:192.168.20.1:36590 bytes=264 session_hash=23f099dca3a415cd request_id=ae27abe4845c4f560971d5af67e6f2b9
+Body received from ::ffff:192.168.20.1:36590 bytes=264 session_hash=23f099dca3a415cd request_id=ae27abe4845c4f560971d5af67e6f2b9
+[09:08:06] INFO Auth OK: ::ffff:192.168.20.1:36590
+Auth OK: ::ffff:192.168.20.1:36590
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:36590 - "POST /mcp HTTP/1.1" 200 OK
+[09:09:03] INFO Request: POST /mcp from ::ffff:192.168.20.1:38004 auth=YES session_hash=None request_id=d8788617ba8e919062c71cc223861ff9
+Request: POST /mcp from ::ffff:192.168.20.1:38004 auth=YES session_hash=None request_id=d8788617ba8e919062c71cc223861ff9
+[09:09:03] INFO Body received from ::ffff:192.168.20.1:38004 bytes=146 session_hash=None request_id=d8788617ba8e919062c71cc223861ff9
+Body received from ::ffff:192.168.20.1:38004 bytes=146 session_hash=None request_id=d8788617ba8e919062c71cc223861ff9
+[09:09:03] INFO Auth OK: ::ffff:192.168.20.1:38004
+Auth OK: ::ffff:192.168.20.1:38004
+Created new transport with session ID: 3b22888fdaf947bd9c7c4d6ec9ac25e1
+INFO:     ::ffff:192.168.20.1:38004 - "POST /mcp HTTP/1.1" 200 OK
+[09:09:04] INFO Request: POST /mcp from ::ffff:192.168.20.1:38004 auth=YES session_hash=88b4682bc9d05d81 request_id=72aaf26ff595f7b064a8b74a68554b6b
+Request: POST /mcp from ::ffff:192.168.20.1:38004 auth=YES session_hash=88b4682bc9d05d81 request_id=72aaf26ff595f7b064a8b74a68554b6b
+[09:09:04] INFO Body received from ::ffff:192.168.20.1:38004 bytes=54 session_hash=88b4682bc9d05d81 request_id=72aaf26ff595f7b064a8b74a68554b6b
+Body received from ::ffff:192.168.20.1:38004 bytes=54 session_hash=88b4682bc9d05d81 request_id=72aaf26ff595f7b064a8b74a68554b6b
+[09:09:04] INFO Auth OK: ::ffff:192.168.20.1:38004
+Auth OK: ::ffff:192.168.20.1:38004
+INFO:     ::ffff:192.168.20.1:38004 - "POST /mcp HTTP/1.1" 202 Accepted
+[09:09:05] INFO Request: POST /mcp from ::ffff:192.168.20.1:38004 auth=YES session_hash=88b4682bc9d05d81 request_id=edff7faa509f837090292139db0ba145
+Request: POST /mcp from ::ffff:192.168.20.1:38004 auth=YES session_hash=88b4682bc9d05d81 request_id=edff7faa509f837090292139db0ba145
+[09:09:05] INFO Body received from ::ffff:192.168.20.1:38004 bytes=98 session_hash=88b4682bc9d05d81 request_id=edff7faa509f837090292139db0ba145
+Body received from ::ffff:192.168.20.1:38004 bytes=98 session_hash=88b4682bc9d05d81 request_id=edff7faa509f837090292139db0ba145
+[09:09:05] INFO Auth OK: ::ffff:192.168.20.1:38004
+Auth OK: ::ffff:192.168.20.1:38004
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:38004 - "POST /mcp HTTP/1.1" 200 OK
+[09:09:06] INFO Request: POST /mcp from ::ffff:192.168.20.1:38016 auth=YES session_hash=88b4682bc9d05d81 request_id=b617f2455d45a613c80eec25ea385cdc
+Request: POST /mcp from ::ffff:192.168.20.1:38016 auth=YES session_hash=88b4682bc9d05d81 request_id=b617f2455d45a613c80eec25ea385cdc
+[09:09:06] INFO Body received from ::ffff:192.168.20.1:38016 bytes=264 session_hash=88b4682bc9d05d81 request_id=b617f2455d45a613c80eec25ea385cdc
+Body received from ::ffff:192.168.20.1:38016 bytes=264 session_hash=88b4682bc9d05d81 request_id=b617f2455d45a613c80eec25ea385cdc
+[09:09:06] INFO Auth OK: ::ffff:192.168.20.1:38016
+Auth OK: ::ffff:192.168.20.1:38016
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:38016 - "POST /mcp HTTP/1.1" 200 OK
+[09:09:06] INFO Request: POST /mcp from ::ffff:192.168.20.1:38016 auth=YES session_hash=88b4682bc9d05d81 request_id=0f61343cef9db7841ae482f9df11f537
+Request: POST /mcp from ::ffff:192.168.20.1:38016 auth=YES session_hash=88b4682bc9d05d81 request_id=0f61343cef9db7841ae482f9df11f537
+[09:09:06] INFO Body received from ::ffff:192.168.20.1:38016 bytes=264 session_hash=88b4682bc9d05d81 request_id=0f61343cef9db7841ae482f9df11f537
+Body received from ::ffff:192.168.20.1:38016 bytes=264 session_hash=88b4682bc9d05d81 request_id=0f61343cef9db7841ae482f9df11f537
+[09:09:06] INFO Auth OK: ::ffff:192.168.20.1:38016
+Auth OK: ::ffff:192.168.20.1:38016
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:38016 - "POST /mcp HTTP/1.1" 200 OK
+[09:09:47] INFO Request: POST /mcp from ::ffff:192.168.20.1:39618 auth=YES session_hash=None request_id=75c3c70da74edcb492744f8e257d981c
+Request: POST /mcp from ::ffff:192.168.20.1:39618 auth=YES session_hash=None request_id=75c3c70da74edcb492744f8e257d981c
+[09:09:47] INFO Body received from ::ffff:192.168.20.1:39618 bytes=161 session_hash=None request_id=75c3c70da74edcb492744f8e257d981c
+Body received from ::ffff:192.168.20.1:39618 bytes=161 session_hash=None request_id=75c3c70da74edcb492744f8e257d981c
+[09:09:47] INFO Auth OK: ::ffff:192.168.20.1:39618
+Auth OK: ::ffff:192.168.20.1:39618
+Created new transport with session ID: 3cb7298f5e894419b965feb84d1c41f6
+INFO:     ::ffff:192.168.20.1:39618 - "POST /mcp HTTP/1.1" 200 OK
+[09:09:47] INFO Request: POST /mcp from ::ffff:192.168.20.1:39618 auth=YES session_hash=9eafec1cf76f4d7e request_id=9da1e43b21c446d1add5c9eeadca9e91
+Request: POST /mcp from ::ffff:192.168.20.1:39618 auth=YES session_hash=9eafec1cf76f4d7e request_id=9da1e43b21c446d1add5c9eeadca9e91
+[09:09:47] INFO Body received from ::ffff:192.168.20.1:39618 bytes=57 session_hash=9eafec1cf76f4d7e request_id=9da1e43b21c446d1add5c9eeadca9e91
+Body received from ::ffff:192.168.20.1:39618 bytes=57 session_hash=9eafec1cf76f4d7e request_id=9da1e43b21c446d1add5c9eeadca9e91
+[09:09:47] INFO Auth OK: ::ffff:192.168.20.1:39618
+Auth OK: ::ffff:192.168.20.1:39618
+INFO:     ::ffff:192.168.20.1:39618 - "POST /mcp HTTP/1.1" 202 Accepted
+[09:09:47] INFO Request: POST /mcp from ::ffff:192.168.20.1:39618 auth=YES session_hash=9eafec1cf76f4d7e request_id=ea0777b934ed052aae485adc5212b222
+Request: POST /mcp from ::ffff:192.168.20.1:39618 auth=YES session_hash=9eafec1cf76f4d7e request_id=ea0777b934ed052aae485adc5212b222
+[09:09:47] INFO Body received from ::ffff:192.168.20.1:39618 bytes=279 session_hash=9eafec1cf76f4d7e request_id=ea0777b934ed052aae485adc5212b222
+Body received from ::ffff:192.168.20.1:39618 bytes=279 session_hash=9eafec1cf76f4d7e request_id=ea0777b934ed052aae485adc5212b222
+[09:09:47] INFO Auth OK: ::ffff:192.168.20.1:39618
+Auth OK: ::ffff:192.168.20.1:39618
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:39618 - "POST /mcp HTTP/1.1" 200 OK
+[09:10:56] INFO Request: POST /mcp from ::ffff:192.168.20.1:36028 auth=YES session_hash=None request_id=16439fdc60ed8c9e84d2a4a1995e79b4
+Request: POST /mcp from ::ffff:192.168.20.1:36028 auth=YES session_hash=None request_id=16439fdc60ed8c9e84d2a4a1995e79b4
+[09:10:56] INFO Body received from ::ffff:192.168.20.1:36028 bytes=161 session_hash=None request_id=16439fdc60ed8c9e84d2a4a1995e79b4
+Body received from ::ffff:192.168.20.1:36028 bytes=161 session_hash=None request_id=16439fdc60ed8c9e84d2a4a1995e79b4
+[09:10:56] INFO Auth OK: ::ffff:192.168.20.1:36028
+Auth OK: ::ffff:192.168.20.1:36028
+Created new transport with session ID: 9a7e39ccee0f49e9964e6a1cba2d1cea
+INFO:     ::ffff:192.168.20.1:36028 - "POST /mcp HTTP/1.1" 200 OK
+[09:10:56] INFO Request: POST /mcp from ::ffff:192.168.20.1:36028 auth=YES session_hash=63f6050732a54c4c request_id=93dfeaa213f6fd44b514dfd6e762f885
+Request: POST /mcp from ::ffff:192.168.20.1:36028 auth=YES session_hash=63f6050732a54c4c request_id=93dfeaa213f6fd44b514dfd6e762f885
+[09:10:56] INFO Body received from ::ffff:192.168.20.1:36028 bytes=57 session_hash=63f6050732a54c4c request_id=93dfeaa213f6fd44b514dfd6e762f885
+Body received from ::ffff:192.168.20.1:36028 bytes=57 session_hash=63f6050732a54c4c request_id=93dfeaa213f6fd44b514dfd6e762f885
+[09:10:56] INFO Auth OK: ::ffff:192.168.20.1:36028
+Auth OK: ::ffff:192.168.20.1:36028
+INFO:     ::ffff:192.168.20.1:36028 - "POST /mcp HTTP/1.1" 202 Accepted
+[09:10:56] INFO Request: POST /mcp from ::ffff:192.168.20.1:36028 auth=YES session_hash=63f6050732a54c4c request_id=d37ddecab82b1689271c679e89c543e1
+Request: POST /mcp from ::ffff:192.168.20.1:36028 auth=YES session_hash=63f6050732a54c4c request_id=d37ddecab82b1689271c679e89c543e1
+[09:10:56] INFO Body received from ::ffff:192.168.20.1:36028 bytes=231 session_hash=63f6050732a54c4c request_id=d37ddecab82b1689271c679e89c543e1
+Body received from ::ffff:192.168.20.1:36028 bytes=231 session_hash=63f6050732a54c4c request_id=d37ddecab82b1689271c679e89c543e1
+[09:10:56] INFO Auth OK: ::ffff:192.168.20.1:36028
+Auth OK: ::ffff:192.168.20.1:36028
+Processing request of type CallToolRequest
+INFO:     ::ffff:192.168.20.1:36028 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+StreamableHTTP session manager shutting down
+INFO:     Application shutdown complete.
+INFO:     Finished server process [4171615]
+[mcp_server] Registered weiyun video upload tool: ['weiyun_video_upload']
+[mcp_server] Registered 12 weiyun tools: weiyun.list, weiyun.list_by_category, weiyun.download, weiyun.delete, weiyun.upload, weiyun.gen_share_link, weiyun.rename_file, weiyun.rename_dir, weiyun.create_dir, weiyun.move_file, weiyun.move_dir, check_skill_update
+[mcp_server] Discovered 125 tools (64 available)
+[14:56:05] INFO Starting OpenMontage MCP server on port 8900 (transport=streamable-http)
+Starting OpenMontage MCP server on port 8900 (transport=streamable-http)
+[14:56:05] INFO 64/125 tools available
+64/125 tools available
+[14:56:05] INFO Bearer token auth ENABLED — clients must send 'Authorization: Bearer <MCP_API_TOKEN>'
+Bearer token auth ENABLED — clients must send 'Authorization: Bearer <MCP_API_TOKEN>'
+INFO:     Started server process [1283773]
+INFO:     Waiting for application startup.
+StreamableHTTP session manager started
+INFO:     Application startup complete.
+INFO:     Uvicorn running on socket ('::', 8900, 0, 0) (Press CTRL+C to quit)
+[14:56:11] INFO Request: POST /mcp from ::ffff:127.0.0.1:49532 auth=YES session_hash=None request_id=0e4f0a171e424dd8874d031a5db3dffa
+Request: POST /mcp from ::ffff:127.0.0.1:49532 auth=YES session_hash=None request_id=0e4f0a171e424dd8874d031a5db3dffa
+[14:56:11] INFO Body received from ::ffff:127.0.0.1:49532 bytes=58 session_hash=None request_id=0e4f0a171e424dd8874d031a5db3dffa
+Body received from ::ffff:127.0.0.1:49532 bytes=58 session_hash=None request_id=0e4f0a171e424dd8874d031a5db3dffa
+[14:56:11] INFO Auth OK: ::ffff:127.0.0.1:49532
+Auth OK: ::ffff:127.0.0.1:49532
+Created new transport with session ID: 72e4788582e346828142cd426b7e05f9
+INFO:     ::ffff:127.0.0.1:49532 - "POST /mcp HTTP/1.1" 406 Not Acceptable
+[14:56:14] INFO Request: POST /mcp from ::ffff:127.0.0.1:53118 auth=YES session_hash=None request_id=51ad32ae48b741bba178e298c2a37840
+Request: POST /mcp from ::ffff:127.0.0.1:53118 auth=YES session_hash=None request_id=51ad32ae48b741bba178e298c2a37840
+[14:56:14] INFO Body received from ::ffff:127.0.0.1:53118 bytes=58 session_hash=None request_id=51ad32ae48b741bba178e298c2a37840
+Body received from ::ffff:127.0.0.1:53118 bytes=58 session_hash=None request_id=51ad32ae48b741bba178e298c2a37840
+[14:56:14] INFO Auth OK: ::ffff:127.0.0.1:53118
+Auth OK: ::ffff:127.0.0.1:53118
+Created new transport with session ID: ca057f6ff617449491fb57341f5f4049
+INFO:     ::ffff:127.0.0.1:53118 - "POST /mcp HTTP/1.1" 400 Bad Request
+[14:56:18] INFO Request: POST /mcp from ::ffff:127.0.0.1:53134 auth=YES session_hash=None request_id=d738bd49312e43cbb0a3bf1fc21f664f
+Request: POST /mcp from ::ffff:127.0.0.1:53134 auth=YES session_hash=None request_id=d738bd49312e43cbb0a3bf1fc21f664f
+[14:56:18] INFO Body received from ::ffff:127.0.0.1:53134 bytes=58 session_hash=None request_id=d738bd49312e43cbb0a3bf1fc21f664f
+Body received from ::ffff:127.0.0.1:53134 bytes=58 session_hash=None request_id=d738bd49312e43cbb0a3bf1fc21f664f
+[14:56:18] INFO Auth OK: ::ffff:127.0.0.1:53134
+Auth OK: ::ffff:127.0.0.1:53134
+Created new transport with session ID: 33f8cdf85c514139be2fe9bb5da0fd84
+INFO:     ::ffff:127.0.0.1:53134 - "POST /mcp HTTP/1.1" 400 Bad Request
+[14:56:21] INFO Request: POST /mcp from ::ffff:127.0.0.1:53148 auth=YES session_hash=None request_id=2e4f838f959a4d0684f1c3e61b476bc9
+Request: POST /mcp from ::ffff:127.0.0.1:53148 auth=YES session_hash=None request_id=2e4f838f959a4d0684f1c3e61b476bc9
+[14:56:21] INFO Body received from ::ffff:127.0.0.1:53148 bytes=151 session_hash=None request_id=2e4f838f959a4d0684f1c3e61b476bc9
+Body received from ::ffff:127.0.0.1:53148 bytes=151 session_hash=None request_id=2e4f838f959a4d0684f1c3e61b476bc9
+[14:56:21] INFO Auth OK: ::ffff:127.0.0.1:53148
+Auth OK: ::ffff:127.0.0.1:53148
+Created new transport with session ID: 5660243d194d47978fafd00cd034f3f1
+INFO:     ::ffff:127.0.0.1:53148 - "POST /mcp HTTP/1.1" 200 OK
+[14:56:26] INFO Request: POST /mcp from ::ffff:127.0.0.1:48696 auth=YES session_hash=None request_id=b8a6015b36224678a554b780a07bb95a
+Request: POST /mcp from ::ffff:127.0.0.1:48696 auth=YES session_hash=None request_id=b8a6015b36224678a554b780a07bb95a
+[14:56:26] INFO Body received from ::ffff:127.0.0.1:48696 bytes=151 session_hash=None request_id=b8a6015b36224678a554b780a07bb95a
+Body received from ::ffff:127.0.0.1:48696 bytes=151 session_hash=None request_id=b8a6015b36224678a554b780a07bb95a
+[14:56:26] INFO Auth OK: ::ffff:127.0.0.1:48696
+Auth OK: ::ffff:127.0.0.1:48696
+Created new transport with session ID: ec6a55eb54ac4447a9496fcecc07ed04
+INFO:     ::ffff:127.0.0.1:48696 - "POST /mcp HTTP/1.1" 200 OK
+[14:56:26] INFO Request: POST /mcp from ::ffff:127.0.0.1:48708 auth=YES session_hash=None request_id=243c6bfc28554464a8c6398d2c129ef1
+Request: POST /mcp from ::ffff:127.0.0.1:48708 auth=YES session_hash=None request_id=243c6bfc28554464a8c6398d2c129ef1
+[14:56:26] INFO Body received from ::ffff:127.0.0.1:48708 bytes=58 session_hash=None request_id=243c6bfc28554464a8c6398d2c129ef1
+Body received from ::ffff:127.0.0.1:48708 bytes=58 session_hash=None request_id=243c6bfc28554464a8c6398d2c129ef1
+[14:56:26] INFO Auth OK: ::ffff:127.0.0.1:48708
+Auth OK: ::ffff:127.0.0.1:48708
+Created new transport with session ID: 0d7f00e3365a438d9c171bee62d30711
+INFO:     ::ffff:127.0.0.1:48708 - "POST /mcp HTTP/1.1" 400 Bad Request
+[14:56:43] INFO Request: POST /mcp from ::ffff:127.0.0.1:59338 auth=YES session_hash=None request_id=8367eef9b4c2425fb934dd46b9dfdf78
+Request: POST /mcp from ::ffff:127.0.0.1:59338 auth=YES session_hash=None request_id=8367eef9b4c2425fb934dd46b9dfdf78
+[14:56:43] INFO Body received from ::ffff:127.0.0.1:59338 bytes=151 session_hash=None request_id=8367eef9b4c2425fb934dd46b9dfdf78
+Body received from ::ffff:127.0.0.1:59338 bytes=151 session_hash=None request_id=8367eef9b4c2425fb934dd46b9dfdf78
+[14:56:43] INFO Auth OK: ::ffff:127.0.0.1:59338
+Auth OK: ::ffff:127.0.0.1:59338
+Created new transport with session ID: e738149ec07a4d3a8edd0c40916c1483
+INFO:     ::ffff:127.0.0.1:59338 - "POST /mcp HTTP/1.1" 200 OK
+[14:56:44] INFO Request: POST /mcp from ::ffff:127.0.0.1:59342 auth=YES session_hash=None request_id=c12b6add5de94ef3aee9c4f3fbf9b0b5
+Request: POST /mcp from ::ffff:127.0.0.1:59342 auth=YES session_hash=None request_id=c12b6add5de94ef3aee9c4f3fbf9b0b5
+[14:56:44] INFO Body received from ::ffff:127.0.0.1:59342 bytes=151 session_hash=None request_id=c12b6add5de94ef3aee9c4f3fbf9b0b5
+Body received from ::ffff:127.0.0.1:59342 bytes=151 session_hash=None request_id=c12b6add5de94ef3aee9c4f3fbf9b0b5
+[14:56:44] INFO Auth OK: ::ffff:127.0.0.1:59342
+Auth OK: ::ffff:127.0.0.1:59342
+Created new transport with session ID: 1bceac4f215041e6a59bff331f42d3fb
+INFO:     ::ffff:127.0.0.1:59342 - "POST /mcp HTTP/1.1" 200 OK
+[14:56:49] INFO Request: POST /mcp from ::ffff:127.0.0.1:59346 auth=YES session_hash=None request_id=efc49bc491df405497340c0e7483b4a5
+Request: POST /mcp from ::ffff:127.0.0.1:59346 auth=YES session_hash=None request_id=efc49bc491df405497340c0e7483b4a5
+[14:56:49] INFO Body received from ::ffff:127.0.0.1:59346 bytes=151 session_hash=None request_id=efc49bc491df405497340c0e7483b4a5
+Body received from ::ffff:127.0.0.1:59346 bytes=151 session_hash=None request_id=efc49bc491df405497340c0e7483b4a5
+[14:56:49] INFO Auth OK: ::ffff:127.0.0.1:59346
+Auth OK: ::ffff:127.0.0.1:59346
+Created new transport with session ID: ac6ba463572342a7a671f8007215752b
+INFO:     ::ffff:127.0.0.1:59346 - "POST /mcp HTTP/1.1" 200 OK
+[14:56:53] INFO Request: POST /mcp from ::ffff:127.0.0.1:39738 auth=YES session_hash=c34ec62043ec6ec7 request_id=de735df423cf45c18ce20b8a96444d33
+Request: POST /mcp from ::ffff:127.0.0.1:39738 auth=YES session_hash=c34ec62043ec6ec7 request_id=de735df423cf45c18ce20b8a96444d33
+[14:56:53] INFO Body received from ::ffff:127.0.0.1:39738 bytes=58 session_hash=c34ec62043ec6ec7 request_id=de735df423cf45c18ce20b8a96444d33
+Body received from ::ffff:127.0.0.1:39738 bytes=58 session_hash=c34ec62043ec6ec7 request_id=de735df423cf45c18ce20b8a96444d33
+[14:56:53] INFO Auth OK: ::ffff:127.0.0.1:39738
+Auth OK: ::ffff:127.0.0.1:39738
+Processing request of type ListToolsRequest
+INFO:     ::ffff:127.0.0.1:39738 - "POST /mcp HTTP/1.1" 200 OK
+[15:11:53] INFO Request: POST /mcp from ::ffff:192.168.20.1:47730 auth=YES session_hash=None request_id=9b0c63e7fd9915ac7c49d9f1b84ebff7
+Request: POST /mcp from ::ffff:192.168.20.1:47730 auth=YES session_hash=None request_id=9b0c63e7fd9915ac7c49d9f1b84ebff7
+[15:11:53] INFO Body received from ::ffff:192.168.20.1:47730 bytes=150 session_hash=None request_id=9b0c63e7fd9915ac7c49d9f1b84ebff7
+Body received from ::ffff:192.168.20.1:47730 bytes=150 session_hash=None request_id=9b0c63e7fd9915ac7c49d9f1b84ebff7
+[15:11:53] INFO Auth OK: ::ffff:192.168.20.1:47730
+Auth OK: ::ffff:192.168.20.1:47730
+Created new transport with session ID: 072535bc906e488f911206931af91cf2
+INFO:     ::ffff:192.168.20.1:47730 - "POST /mcp HTTP/1.1" 200 OK
+[15:11:54] INFO Request: POST /mcp from ::ffff:192.168.20.1:47730 auth=YES session_hash=2e3b4c9447d62000 request_id=7af19bcdfe06f24840bf01a054aa87b1
+Request: POST /mcp from ::ffff:192.168.20.1:47730 auth=YES session_hash=2e3b4c9447d62000 request_id=7af19bcdfe06f24840bf01a054aa87b1
+[15:11:54] INFO Body received from ::ffff:192.168.20.1:47730 bytes=58 session_hash=2e3b4c9447d62000 request_id=7af19bcdfe06f24840bf01a054aa87b1
+Body received from ::ffff:192.168.20.1:47730 bytes=58 session_hash=2e3b4c9447d62000 request_id=7af19bcdfe06f24840bf01a054aa87b1
+[15:11:54] INFO Auth OK: ::ffff:192.168.20.1:47730
+Auth OK: ::ffff:192.168.20.1:47730
+Processing request of type ListToolsRequest
+INFO:     ::ffff:192.168.20.1:47730 - "POST /mcp HTTP/1.1" 200 OK
+[16:24:54] INFO Request: POST /mcp from ::ffff:127.0.0.1:37446 auth=YES session_hash=None request_id=a5770cfc6ab64775bba8976f9036ac51
+Request: POST /mcp from ::ffff:127.0.0.1:37446 auth=YES session_hash=None request_id=a5770cfc6ab64775bba8976f9036ac51
+[16:24:54] INFO Body received from ::ffff:127.0.0.1:37446 bytes=58 session_hash=None request_id=a5770cfc6ab64775bba8976f9036ac51
+Body received from ::ffff:127.0.0.1:37446 bytes=58 session_hash=None request_id=a5770cfc6ab64775bba8976f9036ac51
+[16:24:54] INFO Auth OK: ::ffff:127.0.0.1:37446
+Auth OK: ::ffff:127.0.0.1:37446
+Created new transport with session ID: 0b38fe8d975343139e0954bfa2e73f27
+INFO:     ::ffff:127.0.0.1:37446 - "POST /mcp HTTP/1.1" 406 Not Acceptable
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+StreamableHTTP session manager shutting down
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1283773]
