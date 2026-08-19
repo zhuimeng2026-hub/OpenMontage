@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.asset_upload import UploadAsset, _ALLOWED_EXTENSIONS, _max_upload_bytes
-from lib.workbuddy_session import register_image, require_session
+from lib.workbuddy_session import register_image, replace_asset_by_sha, require_session
 from tools.base_tool import BaseTool, ResourceProfile, ToolResult, ToolRuntime, ToolStability, ToolTier
 
 
@@ -150,7 +150,40 @@ class UploadAssetChunk(BaseTool):
                 canonical_asset = next((item for item in batch.get("assets", []) if item.get("sha256") == digest), asset)
                 deduplicated = canonical_asset.get("relative_path") != asset["relative_path"]
                 if deduplicated:
-                    target.unlink(missing_ok=True)
+                    # Before deleting the file we just moved, verify that the
+                    # canonical asset it would shadow is actually present on
+                    # disk AND still has the recorded sha256. If the canonical
+                    # file vanished (cleanup job / RepoRoot mismatch / earlier
+                    # race), our copy IS the new truth: promote it into the
+                    # same sha slot via ``replace_asset_by_sha`` so the SPA
+                    # never serves a 404 for a file the session thinks exists.
+                    # Both functions hold the cross-process flock on the same
+                    # session digest, so the read-modify-write below is
+                    # serialized against any other worker.
+                    canonical_target = (root.parent / canonical_asset["relative_path"]).resolve()
+                    promote_self = True
+                    if canonical_target.exists() and canonical_target.is_file():
+                        try:
+                            existing_digest = hashlib.sha256(canonical_target.read_bytes()).hexdigest()
+                            if existing_digest == canonical_asset.get("sha256"):
+                                promote_self = False
+                        except OSError:
+                            promote_self = True
+                    if promote_self:
+                        promoted = replace_asset_by_sha(current_session, state["project_id"], asset)
+                        if promoted is not None:
+                            batch = promoted
+                            canonical_asset = asset
+                            deduplicated = False
+                        else:
+                            # No matching sha entry found — fall through to
+                            # safe behavior of unlinking our copy rather than
+                            # corrupting state. The caller can retry with a
+                            # fresh upload.
+                            target.unlink(missing_ok=True)
+                            deduplicated = True
+                    else:
+                        target.unlink(missing_ok=True)
             state_path.unlink(missing_ok=True)
             canonical_target = (root.parent / canonical_asset["relative_path"]).resolve()
             return ToolResult(True, {"asset": canonical_asset, "asset_manifest": {"assets": [canonical_asset]}, "upload_id": upload_id, "deduplicated": deduplicated, **({"batch": batch} if batch else {})}, [str(canonical_target)], duration_seconds=time.monotonic()-started)
