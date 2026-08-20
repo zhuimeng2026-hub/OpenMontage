@@ -237,8 +237,20 @@ class NLLBTranslator(BaseTool):
             import torch
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-            tokenizer = AutoTokenizer.from_pretrained(model_size)
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_size)
+            # Resolve the repo_id to a local snapshot directory when one
+            # is cached on disk. Loading from the snapshot path bypasses
+            # `from_pretrained`'s mandatory HEAD against huggingface.co/api
+            # for model metadata, which fails in offline / firewalled
+            # environments even with `local_files_only=True`. Falls back
+            # to the regular `from_pretrained` (network) call when no
+            # snapshot is cached.
+            local_path = self._resolve_local_snapshot(model_size)
+            if local_path is not None:
+                tokenizer = AutoTokenizer.from_pretrained(local_path)
+                model = AutoModelForSeq2SeqLM.from_pretrained(local_path)
+            else:
+                tokenizer = AutoTokenizer.from_pretrained(model_size, local_files_only=True)
+                model = AutoModelForSeq2SeqLM.from_pretrained(model_size, local_files_only=True)
 
             # CPU/GPU dispatch: keep it simple. If torch sees CUDA, use it
             # with float16; otherwise CPU with float32 (int8 quantization
@@ -252,6 +264,47 @@ class NLLBTranslator(BaseTool):
             NLLBTranslator._model = model
             NLLBTranslator._device = device
             NLLBTranslator._loaded_for = model_size
+
+    @staticmethod
+    def _resolve_local_snapshot(repo_id: str) -> Optional[str]:
+        """Return the path to a cached snapshot of `repo_id`, or None.
+
+        Looks under the standard HF cache layout (`~/.cache/huggingface/hub/`)
+        honoring `HF_HOME` / `HF_HUB_CACHE` overrides. Returns the snapshot
+        directory containing all expected files; if multiple snapshots exist,
+        prefers the one pointed at by `refs/main`, then the most recently
+        modified snapshot.
+        """
+        import os
+        from pathlib import Path
+
+        cache_root = os.environ.get("HF_HUB_CACHE") or os.path.join(
+            os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")),
+            "hub",
+        )
+        repo_dir = Path(cache_root) / f"models--{repo_id.replace('/', '--')}"
+        snapshots_dir = repo_dir / "snapshots"
+        if not snapshots_dir.is_dir():
+            return None
+
+        # Prefer refs/<branch> resolution (default branch = "main").
+        refs_file = repo_dir / "refs" / "main"
+        if refs_file.exists():
+            sha = refs_file.read_text().strip()
+            candidate = snapshots_dir / sha
+            if candidate.is_dir() and any(candidate.iterdir()):
+                return str(candidate)
+
+        # Fallback: any snapshot directory with content, newest mtime first.
+        candidates = sorted(
+            (p for p in snapshots_dir.iterdir() if p.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for cand in candidates:
+            if any(cand.iterdir()):
+                return str(cand)
+        return None
 
     def _translate_one(
         self,
