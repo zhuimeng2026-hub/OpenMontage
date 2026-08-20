@@ -3,11 +3,13 @@ package handlers
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -94,7 +96,9 @@ func randHex(n int) string {
 
 // renderQueueOwnerID returns an opaque, stable fairness key. A WeChat user
 // keeps the same key across browser sessions; anonymous/dev flows fall back to
-// the BFF session. The raw openid/session cookie is never sent upstream.
+// the BFF session. External agent callers (Bearer auth, see RequireBearer)
+// get their own "agent:<token-hash>" prefix so they don't collide with any
+// WeChat user. The raw openid/session cookie/token is never sent upstream.
 func renderQueueOwnerID(sid string) string {
 	identity := "session:" + sid
 	if u := loadUserMap(sid); u != nil {
@@ -104,6 +108,47 @@ func renderQueueOwnerID(sid string) string {
 	}
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
+}
+
+// renderQueueOwnerIDForAgent returns the owner key for a Bearer-authenticated
+// external agent. The token's first 16 hex of SHA-256 uniquely identifies the
+// caller; all calls with the same token share one upstream MCP session.
+func renderQueueOwnerIDForAgent(token string) string {
+	sum := sha256.Sum256([]byte("agent:" + strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:])
+}
+
+// RequireBearer authenticates external (non-browser) callers using a static
+// Bearer token configured via EXTERNAL_AGENT_TOKEN. Unlike RequireAuth it
+// does NOT depend on WeChat or a browser session. The validated token is
+// stashed in the gin Context as "agent_token" for downstream handlers.
+//
+// It is a no-op when EXTERNAL_AGENT_TOKEN is empty — the route is essentially
+// disabled in that case (and the route itself should not be registered; see
+// main.go). Returns 401 if the header is missing/malformed/wrong.
+func (h *Handlers) RequireBearer() gin.HandlerFunc {
+	expected := h.Cfg.ExternalAgentToken
+	if expected == "" {
+		return func(c *gin.Context) {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "external agent auth is not configured"})
+		}
+	}
+	return func(c *gin.Context) {
+		auth := c.GetHeader("Authorization")
+		const prefix = "Bearer "
+		if !strings.HasPrefix(auth, prefix) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+			return
+		}
+		token := strings.TrimPrefix(auth, prefix)
+		if subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+			// Don't leak whether the header was well-formed; just deny.
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid bearer token"})
+			return
+		}
+		c.Set("agent_token", token)
+		c.Next()
+	}
 }
 
 // userStore is the in-memory hot-cache for WeChat login state. It speeds up the

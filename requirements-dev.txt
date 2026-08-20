@@ -3,3 +3,4 @@
 pytest>=8.0
 pytest-asyncio>=0.23
 httpx2>=2.0
+psutil>=5.9   # required by om_mcp_probe.py status checks (CPU/mem/disk/process)

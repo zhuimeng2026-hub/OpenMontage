@@ -58,6 +58,11 @@ setup: ensure-venv
 	@echo "==> Installing Remotion composer..."
 	cd remotion-composer && npm install
 	@echo ""
+	@echo "==> Installing Remotion demo (cross-import target for Root.tsx)..."
+	@echo "    remotion-composer/src/Root.tsx imports ../../demo/src/EcommerceProductDemo,"
+	@echo "    so this workspace must have its own node_modules for 'npx tsc --noEmit' to pass."
+	cd demo && npm install
+	@echo ""
 	@echo "==> Installing free offline TTS (Piper)..."
 	$(PIP) install piper-tts || echo "  [skip] piper-tts install failed — TTS will use cloud providers instead"
 	@echo ""

@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+import httpx
+
 # Ensure OpenMontage project root is on sys.path so tools/ and lib/ resolve.
 _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -1236,11 +1238,75 @@ async def _retry_render_publish_impl(job_id: str) -> dict[str, Any]:
     if state.get("status") == "published" and _valid_weiyun_share_url(existing_url):
         return {"success": True, "render_job_id": job_id, "status": "published", "stage": None, "share_url": existing_url, "error": None}
 
-    video_path = Path(str(state.get("video_path") or "")).expanduser()
+    # Distinguish three pre-upload conditions so the front-end can stop
+    # looping on "retry" for jobs that retry cannot recover:
+    #   * render_incomplete — render never finished (MCP killed mid-render,
+    #     render_thread crashed, or pre-render validation failed). State was
+    #     written with video_path=None and status="failed" / failure_stage
+    #     in {"render", "validation", "background_crash"}. Caller must
+    #     re-issue create_remotion_video_share to get a fresh render_job_id.
+    #   * video_missing — render claimedsuccess (status in
+    #     {rendered, uploading, sharing, published} or failure_stage in
+    #     {weiyun_upload, weiyun_share}) but the on-disk file is gone.
+    #     Retry cannot recover without re-rendering.
+    #   * otherwise — video_path is set and the file exists; proceed.
+    video_path_raw = state.get("video_path")
+    has_video_path = bool(video_path_raw and str(video_path_raw).strip())
+    failure_stage = state.get("failure_stage")
+    status = state.get("status")
+
+    if not has_video_path and (
+        status == "failed"
+        or failure_stage in {"render", "validation", "background_crash"}
+    ):
+        error = (
+            f"Render for render_job_id '{job_id}' did not complete "
+            f"(status={status!r}, failure_stage={failure_stage!r}); "
+            "re-issue create_remotion_video_share to start a fresh render."
+        )
+        _event(
+            "weiyun_publish_retry_failed",
+            request_id=request_id,
+            session_hash="job-index",
+            render_job_id=job_id,
+            status="failed",
+            stage="render_incomplete",
+            error=error,
+        )
+        return {
+            "success": False,
+            "render_job_id": job_id,
+            "status": "failed",
+            "stage": "render_incomplete",
+            "share_url": existing_url,
+            "error": error,
+            "retryable": False,
+        }
+
+    video_path = Path(str(video_path_raw or "")).expanduser()
     if not video_path.is_file():
-        error = f"Persisted video_path does not exist: {video_path}"
-        _event("weiyun_publish_retry_failed", request_id=request_id, session_hash="job-index", render_job_id=job_id, status="failed", stage="validation", error=error)
-        return {"success": False, "render_job_id": job_id, "status": "failed", "stage": "validation", "share_url": existing_url, "error": error}
+        error = (
+            f"Persisted video file is missing on disk: {video_path} "
+            f"(status={status!r}, failure_stage={failure_stage!r})"
+        )
+        _event(
+            "weiyun_publish_retry_failed",
+            request_id=request_id,
+            session_hash="job-index",
+            render_job_id=job_id,
+            status="failed",
+            stage="video_missing",
+            error=error,
+        )
+        return {
+            "success": False,
+            "render_job_id": job_id,
+            "status": "failed",
+            "stage": "video_missing",
+            "share_url": existing_url,
+            "error": error,
+            "retryable": False,
+        }
 
     project = state.get("project_id") or "openmontage"
     batch_id = state.get("batch_id") or job_id
@@ -1964,6 +2030,191 @@ def _http_keep_alive_seconds() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Voicebox reverse-proxy (/voicebox/mcp/{path} → voicebox :17493/mcp/{path})
+# ---------------------------------------------------------------------------
+# Multiplexes voicebox's FastMCP server onto the OpenMontage :8900 origin so
+# clients only need one upstream + one Bearer credential. Bearer auth is
+# enforced at :8900 by BearerTokenAuthMiddleware; this proxy strips the
+# Authorization header before forwarding because voicebox uses
+# X-Voicebox-Client-Id for identity and rejects unknown auth. Loopback hop to
+# voicebox's own 127.0.0.1:17493 is trusted because :8900 already gated entry.
+# SSE is preserved by streaming the upstream response back unbuffered.
+
+_VOICEBOX_MAX_BODY_BYTES = 256 * 1024 * 1024  # 256 MB ASGI-layer cap
+_VOICEBOX_HOP_BY_HOP = frozenset({
+    b"connection", b"keep-alive", b"proxy-authenticate", b"proxy-authorization",
+    b"te", b"trailers", b"transfer-encoding", b"upgrade", b"content-length",
+    b"host",
+})
+
+
+async def _voicebox_proxy_send_json(send, status: int, payload: dict) -> None:
+    """Emit a minimal JSON error response at the ASGI layer."""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    })
+    await send({
+        "type": "http.response.body",
+        "body": body,
+        "more_body": False,
+    })
+
+
+class _VoiceboxProxyApp:
+    """ASGI reverse-proxy class wrapper.
+
+    Starlette's Route treats plain functions as request endpoints (``f(request)``),
+    not raw ASGI apps. Wrapping the proxy in a class instance forces the ASGI
+    ``(scope, receive, send)`` dispatch path so we can stream the request body
+    with our own 256 MB cap.
+    """
+
+    async def __call__(self, scope, receive, send):
+        return await _voicebox_proxy_handler(scope, receive, send)
+
+
+async def _voicebox_proxy_handler(scope, receive, send):
+    """ASGI reverse-proxy: forward /voicebox/mcp/{path} → voicebox :17493."""
+    if scope["type"] != "http":
+        return  # Lifespan / websocket passthrough (none expected on this route)
+
+    inbound_path = scope.get("path", "") or ""
+    if inbound_path.startswith("/voicebox"):
+        suffix = inbound_path[len("/voicebox"):]
+    else:
+        suffix = inbound_path
+
+    # FastMCP requires a trailing slash on the /mcp mount itself.
+    if suffix == "/mcp":
+        suffix = "/mcp/"
+
+    # Read VOICEBOX_UPSTREAM_URL lazily so voicebox restarts are picked up
+    # without a process restart on the OpenMontage side.
+    upstream_base = (
+        os.environ.get("VOICEBOX_UPSTREAM_URL", "http://127.0.0.1:17493")
+        .rstrip("/")
+    )
+    upstream_url = f"{upstream_base}{suffix}"
+
+    # Stream-read the request body with the ASGI-layer 256 MB cap.
+    body = bytearray()
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            break
+        chunk = message.get("body", b"") or b""
+        if chunk:
+            body.extend(chunk)
+        if len(body) > _VOICEBOX_MAX_BODY_BYTES:
+            _log.warning(
+                "voicebox_proxy: 413 payload_too_large path=%s bytes=%d",
+                inbound_path, len(body),
+            )
+            await _voicebox_proxy_send_json(send, 413, {
+                "error": "payload_too_large",
+                "max_bytes": _VOICEBOX_MAX_BODY_BYTES,
+            })
+            return
+        if not message.get("more_body", False):
+            break
+
+    # Build outbound headers: strip Authorization, set Accept, ensure
+    # X-Voicebox-Client-Id, preserve Mcp-Session-Id.
+    inbound_headers = scope.get("headers") or []
+    outbound_headers: list[tuple[bytes, bytes]] = []
+    has_accept = False
+    has_client_id = False
+    for name, value in inbound_headers:
+        lname = name.lower()
+        if lname == b"authorization":
+            # Voicebox uses X-Voicebox-Client-Id; :8900 already authenticated.
+            continue
+        if lname == b"accept":
+            has_accept = True
+        if lname == b"x-voicebox-client-id":
+            has_client_id = True
+        if lname in _VOICEBOX_HOP_BY_HOP:
+            continue
+        outbound_headers.append((name, value))
+
+    if not has_client_id:
+        outbound_headers.append((b"x-voicebox-client-id", b"voicebox-relay"))
+    if not has_accept:
+        outbound_headers.append(
+            (b"accept", b"application/json, text/event-stream")
+        )
+
+    method = scope.get("method", "GET")
+    client = scope.get("client")
+    client_str = f"{client[0]}:{client[1]}" if client else "unknown"
+
+    # Forward via httpx with streaming response so SSE stays live.
+    timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
+    upstream_resp = None
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as hx:
+            upstream_req = hx.build_request(
+                method=method,
+                url=upstream_url,
+                headers=outbound_headers,
+                content=bytes(body),
+            )
+            upstream_resp = await hx.send(upstream_req, stream=True)
+
+            # Forward response headers, stripping hop-by-hop.
+            response_headers: list[tuple[bytes, bytes]] = []
+            for name, value in upstream_resp.headers.raw:
+                if name.lower() in _VOICEBOX_HOP_BY_HOP:
+                    continue
+                response_headers.append((name, value))
+
+            await send({
+                "type": "http.response.start",
+                "status": upstream_resp.status_code,
+                "headers": response_headers,
+            })
+
+            # Stream upstream body back unchanged (preserves SSE framing).
+            async for chunk in upstream_resp.aiter_raw():
+                if not chunk:
+                    continue
+                await send({
+                    "type": "http.response.body",
+                    "body": chunk,
+                    "more_body": True,
+                })
+    except httpx.RequestError as exc:
+        _log.warning(
+            "voicebox_proxy: 502 upstream_unreachable client=%s url=%s err=%s",
+            client_str, upstream_url, exc,
+        )
+        await _voicebox_proxy_send_json(send, 502, {
+            "error": "upstream_unreachable",
+            "upstream": upstream_base,
+            "detail": str(exc),
+        })
+        return
+    finally:
+        if upstream_resp is not None:
+            try:
+                await upstream_resp.aclose()
+            except Exception:
+                pass
+
+    await send({
+        "type": "http.response.body",
+        "body": b"",
+        "more_body": False,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -2019,6 +2270,19 @@ if __name__ == "__main__":
         # inherits the Bearer auth middleware applied just below.
         app.router.add_route(
             "/render-progress/{job_id}", render_progress_sse, methods=["GET"]
+        )
+        # Voicebox MCP reverse-proxy. Multiplexes the voicebox FastMCP server
+        # (loopback :17493) onto the OpenMontage :8900 origin at
+        # /voicebox/mcp/{path}. Bearer auth is enforced by
+        # BearerTokenAuthMiddleware just below; this handler strips the
+        # Authorization header before forwarding (voicebox uses
+        # X-Voicebox-Client-Id instead), and trusts the loopback hop because
+        # :8900 already gated the entry. SSE is preserved by streaming the
+        # upstream response back unbuffered.
+        app.router.add_route(
+            "/voicebox/mcp/{path:path}",
+            _VoiceboxProxyApp(),
+            methods=["GET", "POST", "DELETE"],
         )
         if _api_token:
             app = BearerTokenAuthMiddleware(app, _api_token)

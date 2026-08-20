@@ -301,6 +301,14 @@
   .thumb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:10px;margin-top:10px;}
   .thumb{position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;background:rgba(255,255,255,0.05);border:1px solid var(--border-soft);}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  /* Subtitle view */
+  .sub-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 18px;padding:12px 14px;background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-card);}
+  .sub-toolbar .btn-primary,.sub-toolbar .btn-ghost{font-size:13px;}
+  .sub-toolbar .sub-status{margin-left:auto;font-size:12px;color:var(--text-secondary);}
+  .sub-card{background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-card);padding:14px 16px;margin-bottom:14px;}
+  .sub-card h4{font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:8px;}
+  .sub-card #sub-srt-download{font-size:12px;color:var(--accent);text-decoration:none;padding:4px 10px;border:1px solid var(--border-soft);border-radius:6px;}
+  .sub-card #sub-srt-download:hover{background:rgba(124,92,255,0.12);}
   .thumb .idx{position:absolute;left:6px;top:6px;font-size:10px;font-weight:600;color:#fff;background:rgba(0,0,0,.55);border-radius:9px;padding:1px 6px;line-height:1.5;}
   .thumb .nm{position:absolute;left:0;right:0;bottom:0;font-size:10px;line-height:1.3;padding:3px 5px;background:linear-gradient(transparent,rgba(0,0,0,.72));color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .tmpl{height:150px;border-radius:12px;position:relative;cursor:pointer;border:2px solid transparent;transition:transform .15s ease;}
@@ -595,6 +603,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13l-2 2 2 2"/><path d="M15 13l2 2-2 2"/></svg>
         定义视频脚本
       </div>
+      <div class="nav-item" data-view="subtitles">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 11h10M7 15h6"/></svg>
+        字幕
+      </div>
       <div class="nav-item nav-logout" data-view="logout">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
         退出系统
@@ -807,6 +819,51 @@
           <div class="vcard" data-tmpl="tech"><div class="thumb" style="background:linear-gradient(135deg,#34D399,#4FD8FF)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">科技发布会</div><div class="m">5 个变体</div></div></div>
           <div class="vcard" data-tmpl="food"><div class="thumb" style="background:linear-gradient(135deg,#FBBD23,#F87171)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">美食记录</div><div class="m">9 个变体</div></div></div>
           <div class="vcard" data-tmpl="city"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#34D399)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">城市延时</div><div class="m">4 个变体</div></div></div>
+        </div>
+      </section>
+
+      <!-- SUBTITLES -->
+      <section class="view" id="view-subtitles">
+        <div class="gsub">上传音视频 → 自动转写 → 翻译 → 生成双语字幕 → 烧录到视频</div>
+
+        <div class="sub-toolbar">
+          <input type="file" id="sub-file" accept="audio/*,video/*" style="display:none">
+          <button class="btn-primary" id="sub-pick-file">① 选择音视频</button>
+          <button class="btn-ghost" id="sub-transcribe" disabled>② 转写</button>
+          <button class="btn-ghost" id="sub-translate" disabled>③ 翻译为中文</button>
+          <button class="btn-ghost" id="sub-srt" disabled>④ 生成双语字幕</button>
+          <button class="btn-ghost" id="sub-burn" disabled>⑤ 烧录到视频</button>
+          <span class="sub-status" id="sub-status">就绪</span>
+        </div>
+
+        <div class="sub-card" id="sub-card-file">
+          <h4>① 选择源文件</h4>
+          <div id="sub-file-name" style="color:var(--text-tertiary);font-size:13px">尚未选择文件</div>
+          <div id="sub-file-meta" style="color:var(--text-tertiary);font-size:12px;margin-top:4px"></div>
+        </div>
+
+        <div class="sub-card" id="sub-card-transcript">
+          <h4>② 转写结果</h4>
+          <div id="sub-transcript" style="font-size:13px;color:var(--text-secondary);max-height:280px;overflow:auto;white-space:pre-wrap">点击「② 转写」开始识别(本地 faster-whisper,默认 base 模型;长视频请耐心等待)</div>
+        </div>
+
+        <div class="sub-card" id="sub-card-translation">
+          <h4>③ 中文翻译</h4>
+          <div id="sub-translation" style="font-size:13px;color:var(--text-secondary);max-height:240px;overflow:auto;white-space:pre-wrap">点击「③ 翻译为中文」(Argos 离线模型,已自动禁用 stanza 网络下载)</div>
+        </div>
+
+        <div class="sub-card" id="sub-card-srt">
+          <h4>④ 双语字幕</h4>
+          <div id="sub-srt-preview" style="font-family:monospace;font-size:12px;color:var(--text-secondary);max-height:240px;overflow:auto;white-space:pre-wrap">点击「④ 生成双语字幕」生成 .srt 文件</div>
+          <div id="sub-srt-actions" style="margin-top:8px;display:none">
+            <a id="sub-srt-download" class="btn-ghost" download>下载 SRT</a>
+          </div>
+        </div>
+
+        <div class="sub-card" id="sub-card-burn">
+          <h4>⑤ 烧录结果</h4>
+          <div id="sub-burn-result" style="font-size:13px;color:var(--text-secondary)">点击「⑤ 烧录到视频」生成中英文字幕烧录的 mp4(英文上,中文下)</div>
+          <video id="sub-burn-video" controls style="display:none;margin-top:12px;max-width:100%;border-radius:8px"></video>
         </div>
       </section>
 
@@ -1201,7 +1258,7 @@
   var titles = {
     'dashboard':'工作台','create':'创建视频','gallery':'我的视频',
     'queue':'渲染队列','templates':'模板市场','design-system':'设计系统','settings':'设置',
-    'script-def':'定义视频脚本','logout':'退出系统'
+    'script-def':'定义视频脚本','subtitles':'字幕','logout':'退出系统'
   };
   var navItems = document.querySelectorAll('.nav-item');
   navItems.forEach(function(item){
@@ -1227,6 +1284,7 @@
       }
       if (view === 'gallery') { loadGallery(); }
       if (view === 'script-def') { loadScriptDefList(); }
+      if (view === 'subtitles') { initSubtitlesView(); }
     });
   });
 
@@ -2784,6 +2842,276 @@
       }, function(){ st.textContent = '进度订阅异常，将改用轮询'; });
     } catch (e){ st.textContent = '提交失败：' + e.message; btn.disabled = false; }
   });
+
+  // ---- 字幕视图 ----
+  // 工作流由浏览器编排：选文件 → 转写 → 翻译 → 生成双语字幕 → 烧录。
+  // 每一步通过 /api/mcp 调用上游 MCP 的 execute_tool,工具名作为
+  // tool_name 入参。MCP 在 8900 端口,字幕能力(transcriber/translator/
+  // subtitle_gen/remotion_caption_burn)已在 mcp_server.py 中注册。
+  var subState = {
+    file: null,
+    fileAbsPath: null,   // 由后端 /api/upload 等路径回传(当前流程用 data URL 直传)
+    transcriptSegments: null,
+    translatedSegments: null,
+    srtText: null,
+    srtPath: null,
+    burnedVideoPath: null,
+  };
+
+  function setSubStatus(text) {
+    var el = document.getElementById('sub-status');
+    if (el) el.textContent = text;
+  }
+  function setSubBtn(id, enabled) {
+    var el = document.getElementById(id);
+    if (el) el.disabled = !enabled;
+  }
+
+  // 通用 MCP 调用代理。BFF 已在 allowedMCPTools 增加 execute_tool。
+  function callMCP(toolName, args) {
+    var payload = { tool: 'execute_tool', args: { tool_name: toolName, inputs: args || {} } };
+    return fetch('/api/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
+      return r.json();
+    });
+  }
+
+  function initSubtitlesView() {
+    var fileInput = document.getElementById('sub-file');
+    var pickBtn = document.getElementById('sub-pick-file');
+    if (pickBtn && !pickBtn._wired) {
+      pickBtn._wired = true;
+      pickBtn.addEventListener('click', function () { fileInput.click(); });
+      fileInput.addEventListener('change', function (e) {
+        var f = e.target.files && e.target.files[0];
+        if (!f) return;
+        subState.file = f;
+        document.getElementById('sub-file-name').textContent = f.name + '  (' + Math.round(f.size / 1024) + ' KB)';
+        document.getElementById('sub-file-meta').textContent = '上传到 MCP 后即可开始转写';
+        setSubBtn('sub-transcribe', true);
+        setSubStatus('已选择: ' + f.name);
+      });
+    }
+    wireSubtitleHandlers();
+  }
+
+  function wireSubtitleHandlers() {
+    var t = document.getElementById('sub-transcribe');
+    var tr = document.getElementById('sub-translate');
+    var sg = document.getElementById('sub-srt');
+    var br = document.getElementById('sub-burn');
+    if (t && !t._wired) {
+      t._wired = true;
+      t.addEventListener('click', function () {
+        if (!subState.file) return;
+        runTranscribe(subState.file);
+      });
+    }
+    if (tr && !tr._wired) {
+      tr._wired = true;
+      tr.addEventListener('click', function () {
+        if (!subState.transcriptSegments) return;
+        runTranslate(subState.transcriptSegments);
+      });
+    }
+    if (sg && !sg._wired) {
+      sg._wired = true;
+      sg.addEventListener('click', function () {
+        if (!subState.translatedSegments) return;
+        runSubtitleGen();
+      });
+    }
+    if (br && !br._wired) {
+      br._wired = true;
+      br.addEventListener('click', function () {
+        if (!subState.srtText || !subState.file) return;
+        runBurn();
+      });
+    }
+  }
+
+  // 1. 把选中的文件上传到 MCP 会话(走 BFF 转发),得到上游 asset 路径
+  function uploadFileToMCP(file) {
+    return new Promise(function (resolve, reject) {
+      callMCP('upload_asset_chunk', {
+        operation: 'start',
+        filename: 'subtitle_input_' + Date.now() + '_' + file.name,
+        total_bytes: file.size,
+        project_id: 'subtitle-viewer',
+      }).then(function (start) {
+        // Chunked upload — split into 1 MiB chunks
+        var chunkSize = 1024 * 1024;
+        var uploaded = 0;
+        var uploadId = (start && (start.upload_id || start.asset_id)) || ('unknown-' + Date.now());
+        function uploadNext() {
+          if (uploaded >= file.size) {
+            callMCP('upload_asset_chunk', {
+              operation: 'complete',
+              upload_id: uploadId,
+            }).then(resolve).catch(reject);
+            return;
+          }
+          var slice = file.slice(uploaded, Math.min(uploaded + chunkSize, file.size));
+          var sliceReader = new FileReader();
+          sliceReader.onload = function () {
+            var chunkB64 = sliceReader.result.split(',')[1];
+            callMCP('upload_asset_chunk', {
+              operation: 'append',
+              upload_id: uploadId,
+              offset: uploaded,
+              chunk_base64: chunkB64,
+            }).then(function () {
+              uploaded += slice.size;
+              uploadNext();
+            }).catch(reject);
+          };
+          sliceReader.onerror = reject;
+          sliceReader.readAsDataURL(slice);
+        }
+        uploadNext();
+      }).catch(reject);
+    });
+  }
+
+  // 直接读 file 为 ArrayBuffer → base64,用 execute_tool('transcriber',...)
+  // 这里的简化方案：转写工具通常接受 input_path,而不是 base64。
+  // 但前端没有持久化路径。我们用 upload_asset_chunk 替代:
+  // 上传完后用返回的 path 调 transcriber。
+  function runTranscribe(file) {
+    setSubStatus('上传文件到 MCP...');
+    uploadFileToMCP(file).then(function (finishResult) {
+      var path = finishResult && (finishResult.path || finishResult.asset_path || finishResult.url);
+      if (!path) {
+        // fallback: try to read finishResult.data.path
+        path = finishResult && finishResult.data && (finishResult.data.path || finishResult.data.asset_path);
+      }
+      if (!path) throw new Error('上传完成但未返回文件路径: ' + JSON.stringify(finishResult));
+      subState.fileAbsPath = path;
+      setSubStatus('转写中(本地 faster-whisper)...');
+      return callMCP('transcriber', {
+        input_path: path,
+        model_size: 'base',
+        language: 'en',
+        output_dir: 'projects/subtitle-viewer',
+      });
+    }).then(function (r) {
+      var data = (r && r.data) || r;
+      var segs = data.segments || (data.data && data.data.segments);
+      if (!segs || !segs.length) throw new Error('转写返回为空');
+      subState.transcriptSegments = segs;
+      renderTranscriptPreview(segs);
+      setSubBtn('sub-translate', true);
+      setSubStatus('转写完成 · 共 ' + segs.length + ' 段');
+    }).catch(function (e) {
+      setSubStatus('转写失败: ' + e.message);
+      document.getElementById('sub-transcript').textContent = '错误: ' + e.message;
+    });
+  }
+
+  function renderTranscriptPreview(segs) {
+    var html = segs.slice(0, 20).map(function (s) {
+      var t = formatTime(s.start) + ' → ' + formatTime(s.end);
+      return '[' + t + ']  ' + (s.text || '');
+    }).join('\n');
+    if (segs.length > 20) html += '\n... 共 ' + segs.length + ' 段';
+    document.getElementById('sub-transcript').textContent = html;
+  }
+
+  function formatTime(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    var m = Math.floor(sec / 60);
+    var s = sec % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function runTranslate(segs) {
+    setSubStatus('翻译中(Argos 离线模型)...');
+    callMCP('translator', {
+      segments: segs,
+      source_lang: 'en',
+      target_lang: 'zh',
+    }).then(function (r) {
+      var data = (r && r.data) || r;
+      var out = data.segments || (data.data && data.data.segments);
+      if (!out || !out.length) throw new Error('翻译返回为空');
+      subState.translatedSegments = out;
+      var html = out.slice(0, 20).map(function (s) {
+        return '[' + formatTime(s.start) + ' → ' + formatTime(s.end) + ']  ' + (s.text || '');
+      }).join('\n');
+      if (out.length > 20) html += '\n... 共 ' + out.length + ' 段';
+      document.getElementById('sub-translation').textContent = html;
+      setSubBtn('sub-srt', true);
+      setSubStatus('翻译完成 · provider=' + (data.provider || 'argos'));
+    }).catch(function (e) {
+      setSubStatus('翻译失败: ' + e.message);
+      document.getElementById('sub-translation').textContent = '错误: ' + e.message;
+    });
+  }
+
+  function runSubtitleGen() {
+    setSubStatus('生成双语 SRT...');
+    callMCP('subtitle_gen', {
+      segments: subState.transcriptSegments,
+      target_segments: subState.translatedSegments,
+      format: 'dual_srt',
+      output_path: 'projects/subtitle-viewer/subtitles_' + Date.now() + '.srt',
+    }).then(function (r) {
+      var data = (r && r.data) || r;
+      // subtitle_gen 返回 artifacts: [output_path],但前端需要 srt 文本。
+      // 通过 fetch 下载该文件,或者让 BFF 再加一个 /api/assets 代理。
+      var srtPath = (data.output) || (data.artifacts && data.artifacts[0]);
+      if (!srtPath) throw new Error('SRT 路径缺失: ' + JSON.stringify(data));
+      subState.srtPath = srtPath;
+      // 直接拉 SRT 文本(走 BFF 静态资源代理或 MCP artifacts)
+      return fetch(bffBase() + '/api/assets?rel=' + encodeURIComponent(srtPath))
+        .then(function (resp) { return resp.text(); })
+        .then(function (txt) {
+          subState.srtText = txt;
+          document.getElementById('sub-srt-preview').textContent = txt.slice(0, 2000);
+          document.getElementById('sub-srt-actions').style.display = 'block';
+          var dl = document.getElementById('sub-srt-download');
+          dl.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(txt);
+          dl.download = 'subtitles_zh_en.srt';
+          setSubBtn('sub-burn', true);
+          setSubStatus('双语字幕已生成: ' + srtPath);
+        });
+    }).catch(function (e) {
+      setSubStatus('生成失败: ' + e.message);
+      document.getElementById('sub-srt-preview').textContent = '错误: ' + e.message;
+    });
+  }
+
+  function runBurn() {
+    setSubStatus('烧录字幕到视频(FFmpeg,耗时数十秒)...');
+    callMCP('remotion_caption_burn', {
+      input_path: subState.fileAbsPath,
+      output_path: 'projects/subtitle-viewer/burned_' + Date.now() + '.mp4',
+      srt_path: subState.srtPath,
+      words_per_page: 4,
+      font_size: 52,
+      highlight_color: '#22D3EE',
+      // 触发双语烧录(由 subtitle_gen 生成的 dual_srt 决定)
+    }).then(function (r) {
+      var data = (r && r.data) || r;
+      var out = (data.output) || (data.artifacts && data.artifacts[0]);
+      if (!out) throw new Error('烧录返回缺失 output: ' + JSON.stringify(data));
+      subState.burnedVideoPath = out;
+      var videoUrl = bffBase() + '/api/assets?rel=' + encodeURIComponent(out);
+      var v = document.getElementById('sub-burn-video');
+      v.src = videoUrl;
+      v.style.display = 'block';
+      document.getElementById('sub-burn-result').innerHTML =
+        '✓ 烧录完成 · <a href="' + videoUrl + '" download style="color:var(--accent)">下载视频</a>';
+      setSubStatus('烧录完成');
+    }).catch(function (e) {
+      setSubStatus('烧录失败: ' + e.message);
+      document.getElementById('sub-burn-result').textContent = '错误: ' + e.message;
+    });
+  }
 </script>
 </body>
 </html>

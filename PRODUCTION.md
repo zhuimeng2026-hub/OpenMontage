@@ -386,7 +386,7 @@ nginx -t && systemctl reload nginx
 **1) 环境与依赖**
 ```bash
 cd /opt/OpenMontage
-make setup        # 建 venv、装 requirements.txt、npm install remotion-composer、缓存 hyperframes
+make setup        # 建 venv、装 requirements.txt、npm install remotion-composer、npm install demo、缓存 hyperframes
 # 等价最小步骤： python -m venv .venv && .venv/bin/activate && pip install -r requirements.txt
 ```
 
