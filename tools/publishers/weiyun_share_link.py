@@ -8,12 +8,22 @@ is the token-based counterpart to the cookie/mcporter-based
 It reuses the proven HTTP transport vendored into ``weiyun_upload_lib.mcp_call``
 (the same endpoint, auth header, and retry logic that the upload tool uses), so
 the only credential needed is the MCP token already configured in ``.env``.
+
+Optional ``retain_days`` adds a server-side expiry tracker entry to
+``projects/_share_expiry/index.jsonl``. A separate sweeper
+(``tools/publishers/weiyun_expiry_sweep.py``) reads that index and calls
+``weiyun_delete`` when ``retain_days`` elapses — the underlying MCP
+``gen_share_link`` has no native expiration parameter, so this is the
+documented workaround.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from tools.base_tool import (
@@ -28,6 +38,43 @@ from tools.base_tool import (
     ToolTier,
 )
 from .weiyun_upload_lib import mcp_call
+
+
+# Where we keep the expiry index. Sibling to projects/ — matches existing
+# projects/.mcp_sessions, projects/.uploads, projects/.users pattern.
+SHARE_EXPIRY_DIR = Path(__file__).resolve().parents[2] / "projects" / "_share_expiry"
+SHARE_EXPIRY_INDEX = SHARE_EXPIRY_DIR / "index.jsonl"
+
+
+def _append_expiry_entry(
+    *,
+    short_url: str,
+    file_ids: list[str],
+    pdir_keys: list[str],
+    retain_days: int,
+    project_id: Optional[str],
+    share_name: str,
+) -> None:
+    """Append one row to projects/_share_expiry/index.jsonl (best-effort)."""
+    try:
+        SHARE_EXPIRY_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        entry = {
+            "short_url":   short_url,
+            "file_ids":    file_ids,
+            "pdir_keys":   pdir_keys,
+            "share_name":  share_name,
+            "created_at":  now.isoformat(),
+            "expires_at":  (now + timedelta(days=retain_days)).isoformat(),
+            "retain_days": retain_days,
+            "project_id":  project_id or "",
+            "status":      "active",
+            "deleted_at":  None,
+        }
+        with SHARE_EXPIRY_INDEX.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 - expiry tracking must never break the publish
+        pass
 
 
 class WeiyunShareLink(BaseTool):
@@ -84,6 +131,28 @@ class WeiyunShareLink(BaseTool):
                 "type": "string",
                 "description": "Optional 6-char share password.",
             },
+            "retain_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 365,
+                "description": (
+                    "Optional retention window in days. Weiyun MCP's gen_share_link has "
+                    "no native expiration; setting this writes an entry to "
+                    "projects/_share_expiry/index.jsonl and a sweeper deletes the "
+                    "underlying file at expires_at, which invalidates the share."
+                ),
+            },
+            "pdir_key": {
+                "type": "string",
+                "description": (
+                    "Optional parent dir key. Required when retain_days is set so the "
+                    "sweeper can call weiyun.delete (each entry needs pdir_key)."
+                ),
+            },
+            "project_id": {
+                "type": "string",
+                "description": "Optional project id for grouping the expiry row.",
+            },
             "mcp_session_id": {
                 "type": "string",
                 "description": "Server-injected MCP session identifier used to correlate the result.",
@@ -95,6 +164,8 @@ class WeiyunShareLink(BaseTool):
         "properties": {
             "short_url": {"type": "string", "description": "Shareable short URL."},
             "share_name": {"type": "string", "description": "Share display name."},
+            "expires_at": {"type": "string", "description": "ISO timestamp when the share is queued for deletion. Empty if retain_days was unset."},
+            "expiry_index": {"type": "string", "description": "Path to the expiry index row (relative)."},
         },
     }
 
@@ -192,12 +263,33 @@ class WeiyunShareLink(BaseTool):
                 data=res,
             )
 
+        # Optional: register an expiry entry so the sweeper can revoke the share
+        # by deleting the underlying file once `retain_days` elapses.
+        retain_days = inputs.get("retain_days")
+        expires_at_str = ""
+        if isinstance(retain_days, int) and retain_days >= 1:
+            pdir_key = (inputs.get("pdir_key") or "").strip()
+            file_ids = [f for f in (inputs.get("file_list") or []) if f]
+            _append_expiry_entry(
+                short_url=short_url,
+                file_ids=file_ids,
+                pdir_keys=[pdir_key] if pdir_key else [],
+                retain_days=retain_days,
+                project_id=inputs.get("project_id"),
+                share_name=res.get("share_name") or share_name,
+            )
+            expires_at_str = (
+                datetime.now(timezone.utc) + timedelta(days=retain_days)
+            ).isoformat()
+
         return ToolResult(
             success=True,
             data={
                 "short_url": short_url,
                 "share_name": res.get("share_name") or share_name,
                 "mcp_session_id": inputs.get("mcp_session_id"),
+                "expires_at": expires_at_str,
+                "expiry_index": str(SHARE_EXPIRY_INDEX.relative_to(Path(__file__).resolve().parents[2])) if expires_at_str else "",
             },
             duration_seconds=elapsed,
         )
