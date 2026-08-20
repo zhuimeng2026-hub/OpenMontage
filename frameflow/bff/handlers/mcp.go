@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -386,4 +390,187 @@ func (h *Handlers) quotaRejectForUpload(scope, projectID string) (bool, int, gin
 		}
 	}
 	return false, 0, nil
+}
+
+// MCPRawProxy is a transparent JSON-RPC passthrough for external (non-browser)
+// callers. It accepts standard MCP JSON-RPC envelopes (initialize / tools/list
+// / tools/call) and forwards them verbatim to the upstream MCP through the
+// SessionStore's per-owner Client, returning the upstream response unchanged
+// (including SSE framing). The owner key is derived from the bearer token via
+// RequireBearer (see auth.go) and never collides with any WeChat user.
+//
+// Unlike MCPProxy which reshapes requests to {tool, args}, this endpoint
+// preserves the upstream MCP protocol — it is intended for CLI/agent callers
+// that already speak MCP and don't need the browser-friendly adapter.
+//
+// Body size cap: 256 MB. Larger payloads should not go through the BFF —
+// upload them via upload_asset_chunk or the dedicated asset endpoint instead.
+func (h *Handlers) MCPRawProxy(c *gin.Context) {
+	const maxRawBody = 256 * 1024 * 1024
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRawBody)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body exceeds 256 MB"})
+		return
+	}
+	if len(body) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty request body"})
+		return
+	}
+	// Parse just enough to log the method name. Malformed JSON still gets
+	// forwarded so the upstream produces a proper JSON-RPC -32600 error.
+	var peek struct {
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(body, &peek)
+	method := peek.Method
+	if method == "" {
+		method = "unknown"
+	}
+	// Pull the validated bearer token out of the gin Context (set by RequireBearer).
+	tokenVal, _ := c.Get("agent_token")
+	token, _ := tokenVal.(string)
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing agent token"})
+		return
+	}
+	scope := renderQueueOwnerIDForAgent(token)
+	start := time.Now()
+	status, contentType, raw, callErr := h.Store.RawCall(scope, method, body)
+	elapsed := time.Since(start).Milliseconds()
+	if callErr != nil {
+		log.Printf("[bff-mcp-raw] err method=%s scope_hash=%s elapsed_ms=%d err=%v", method, mcp.ShortHashForLog(scope), elapsed, callErr)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream mcp unavailable", "detail": callErr.Error()})
+		return
+	}
+	if status >= 400 {
+		log.Printf("[bff-mcp-raw] upstream_error method=%s scope_hash=%s elapsed_ms=%d upstream_status=%d body_len=%d",
+			method, mcp.ShortHashForLog(scope), elapsed, status, len(raw))
+	}
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	// Forward the rotating upstream Mcp-Session-Id so the client can keep using
+	// the same session across calls (essential for upload_asset_chunk ->
+	// create_remotion_video_share continuity). Also forward Content-Length.
+	c.Header("Mcp-Session-Id", h.Store.SessionIDForOwner(scope))
+	c.Data(status, contentType, raw)
+}
+
+// VoiceboxMCPProxy is a thin, stateless JSON-RPC pass-through to the local
+// voicebox FastMCP endpoint (default: http://lanes.ymxt.top:8900/voicebox/mcp/).
+//
+// Why this exists alongside /api/mcp-raw: voicebox's MCP transport does NOT
+// rotate Mcp-Session-Id per response in a way that requires client-side
+// pinning, and there is no per-owner upload->create continuity to preserve.
+// Routing the call through the OpenMontage SessionStore would force a fresh
+// SQLite write on every probe and bind all callers to one Mcp-Session-Id,
+// which is wrong for an always-streaming, stateless proxy.
+//
+// Auth: RequireBearer() — same EXTERNAL_AGENT_TOKEN as /api/mcp-raw.
+// Body cap: 256 MB (matches MCPRawProxy).
+// Header policy (inbound -> outbound):
+//   - Authorization: STRIPPED (voicebox has no shared secret here;
+//     X-Voicebox-Client-Id is its identity). The BFF never injects a
+//     bearer to the upstream.
+//   - X-Voicebox-Client-Id: forwarded verbatim; falls back to a stable
+//     per-token hash if the caller forgot to set it.
+//   - Mcp-Session-Id: forwarded verbatim if present.
+//
+// Response: streamed (io.Copy) so SSE notifications from voicebox are not
+// buffered behind the rest of the body. Status + Content-Type are copied
+// from the upstream. No DB writes.
+func (h *Handlers) VoiceboxMCPProxy(c *gin.Context) {
+	const maxRawBody = 256 * 1024 * 1024
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRawBody)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body exceeds 256 MB"})
+		return
+	}
+	if len(body) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty request body"})
+		return
+	}
+
+	// Peek the JSON-RPC method for logging. Malformed JSON still forwards.
+	var peek struct {
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(body, &peek)
+	method := peek.Method
+	if method == "" {
+		method = "unknown"
+	}
+
+	// Re-confirm the bearer: RequireBearer() would have aborted already if it
+	// failed, but checking once in the handler guards against future route-table
+	// regressions where the middleware chain is reshuffled.
+	tokenVal, _ := c.Get("agent_token")
+	token, _ := tokenVal.(string)
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing agent token"})
+		return
+	}
+
+	upstreamReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, h.Cfg.VoiceboxUpstreamURL, bytes.NewReader(body))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot build upstream request", "detail": err.Error()})
+		return
+	}
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	upstreamReq.Header.Set("Accept", "application/json, text/event-stream")
+
+	// Auth translation: the inbound Bearer (EXTERNAL_AGENT_TOKEN) authenticated
+	// this caller to the BFF; it is NOT a valid MCP_API_TOKEN for OpenMontage.
+	// The upstream OpenMontage :8900 enforces BearerTokenAuthMiddleware on
+	// every route (including /voicebox/mcp/*), so we must inject the upstream
+	// token here. The voicebox fastmcp behind the proxy never sees the
+	// Authorization header because the OpenMontage proxy strips it.
+	if h.Cfg.MCPAPIToken != "" {
+		upstreamReq.Header.Set("Authorization", "Bearer "+h.Cfg.MCPAPIToken)
+	}
+
+	// Forward X-Voicebox-Client-Id (with fallback) and Mcp-Session-Id.
+	clientID := c.GetHeader("X-Voicebox-Client-Id")
+	if clientID == "" {
+		sum := sha256.Sum256([]byte("agent:" + strings.TrimSpace(token)))
+		clientID = "bff-agent-" + hex.EncodeToString(sum[:6])
+	}
+	upstreamReq.Header.Set("X-Voicebox-Client-Id", clientID)
+	if sid := c.GetHeader("Mcp-Session-Id"); sid != "" {
+		upstreamReq.Header.Set("Mcp-Session-Id", sid)
+	}
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(upstreamReq)
+	if err != nil {
+		log.Printf("[bff-voicebox-mcp] upstream_err method=%s client_id=%s elapsed_ms=%d err=%v",
+			method, clientID, time.Since(start).Milliseconds(), err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream voicebox mcp unavailable", "detail": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy upstream headers (sans hop-by-hop). Mcp-Session-Id flows back so a
+	// caller can pin to it across calls if they want.
+	for k, vs := range resp.Header {
+		switch strings.ToLower(k) {
+		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+			"te", "trailer", "transfer-encoding", "upgrade":
+			continue
+		}
+		for _, v := range vs {
+			c.Header(k, v)
+		}
+	}
+
+	c.Status(resp.StatusCode)
+	if _, err := io.Copy(c.Writer, resp.Body); err != nil {
+		log.Printf("[bff-voicebox-mcp] copy_err method=%s client_id=%s elapsed_ms=%d err=%v",
+			method, clientID, time.Since(start).Milliseconds(), err)
+		return
+	}
+	log.Printf("[bff-voicebox-mcp] done method=%s client_id=%s upstream_status=%d elapsed_ms=%d",
+		method, clientID, resp.StatusCode, time.Since(start).Milliseconds())
 }

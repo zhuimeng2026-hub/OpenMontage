@@ -68,6 +68,23 @@ type Config struct {
 	// a real user store / WeChat resolver can replace this later.
 	DefaultTier   string
 	TierOverrides string
+
+	// ExternalAgentToken is a static bearer token accepted by /api/mcp-raw as
+	// an alternative to WeChat auth. When set, external CLI/agent callers can
+	// hit the BFF without a browser session. The token is hashed (SHA-256, first
+	// 16 hex) and used as the SessionStore scope key, so all calls from the same
+	// token share one upstream MCP session. Leave empty to disable the route.
+	ExternalAgentToken string
+
+	// VoiceboxUpstreamURL is the Streamable-HTTP MCP endpoint for the local
+	// voicebox MCP server, served via OpenMontage's :8900 reverse-proxy mount
+	// at /voicebox/mcp/. Proxied verbatim by POST /api/voicebox-mcp with no
+	// state, no SessionStore, and no Mcp-Session-Id rotation pinning. The
+	// trailing slash is required: voicebox's MCP route is mounted at
+	// /voicebox/mcp/ and a bare /voicebox/mcp 301-strips to it. Defaults to
+	// the production upstream (lanes.ymxt.top). Override with
+	// VOICEBOX_UPSTREAM_URL=http://127.0.0.1:8900/voicebox/mcp/ on dev hosts.
+	VoiceboxUpstreamURL string
 }
 
 func Load() *Config {
@@ -106,6 +123,8 @@ func Load() *Config {
 		WeiyunAPIToken:           os.Getenv("WEIYUN_API_KEY"),
 		DefaultTier:              get("DEFAULT_TIER", "free"),
 		TierOverrides:            os.Getenv("TIER_OVERRIDES"),
+		ExternalAgentToken:       strings.TrimSpace(os.Getenv("EXTERNAL_AGENT_TOKEN")),
+		VoiceboxUpstreamURL:      strings.TrimRight(get("VOICEBOX_UPSTREAM_URL", "http://lanes.ymxt.top:8900/voicebox/mcp/"), "/") + "/",
 	}
 }
 
