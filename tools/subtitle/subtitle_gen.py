@@ -60,14 +60,17 @@ class SubtitleGen(BaseTool):
             },
             "format": {
                 "type": "string",
-                "enum": ["srt", "vtt", "json", "dual_srt", "dual_ass"],
+                "enum": ["srt", "vtt", "json", "dual_srt", "dual_ass", "remotion_bilingual_captions"],
                 "default": "srt",
                 "description": (
                     "`srt`/`vtt`/`json` for single-language output. "
                     "`dual_srt` renders both languages on consecutive lines in "
                     "the same cue (English top, target bottom). "
                     "`dual_ass` emits an ASS file with two styles (Primary, "
-                    "Secondary) so FFmpeg `subtitles=` can burn-in the pair."
+                    "Secondary) so FFmpeg `subtitles=` can burn-in the pair. "
+                    "`remotion_bilingual_captions` outputs JSON shaped for the "
+                    "BilingualCaptionOverlay Remotion composition "
+                    "(primaryWords[]/secondaryWords[] with startMs/endMs ints)."
                 ),
             },
             "output_path": {"type": "string"},
@@ -130,7 +133,7 @@ class SubtitleGen(BaseTool):
         # re-chunk the translated text on word/char boundaries and break the
         # 1:1 alignment with the primary cues.
         secondary_segments: list[dict] | None = None
-        if fmt in ("dual_srt", "dual_ass"):
+        if fmt in ("dual_srt", "dual_ass", "remotion_bilingual_captions"):
             if not target_segments:
                 return ToolResult(
                     success=False,
@@ -166,6 +169,17 @@ class SubtitleGen(BaseTool):
             assert secondary_segments is not None
             content = self._render_dual_ass(segments, secondary_segments, secondary_font)
             ext = ".ass"
+        elif fmt == "remotion_bilingual_captions":
+            assert secondary_segments is not None
+            payload = {
+                "format": "remotion_bilingual_captions",
+                "primaryWords": SubtitleGen._segments_to_word_captions(segments),
+                "secondaryWords": SubtitleGen._segments_to_word_captions(
+                    secondary_segments
+                ),
+            }
+            content = json.dumps(payload, indent=2, ensure_ascii=False)
+            ext = ".remotion_bilingual.json"
         else:
             return ToolResult(success=False, error=f"Unknown format: {fmt}")
 
@@ -472,6 +486,48 @@ class SubtitleGen(BaseTool):
                 f"Dialogue: 0,{fmt(cue['start'])},{fmt(cue['end'])},Primary,,0,0,0,,{text}"
             )
         return header + "\n".join(events) + "\n"
+
+    @staticmethod
+    def _segments_to_word_captions(segments: list[dict]) -> list[dict]:
+        """Flatten transcript segments to Remotion `WordCaption[]`.
+
+        Output shape matches `BilingualCaptionOverlay`'s `WordCaption`
+        interface in remotion-composer/src/components/BilingualCaptionOverlay.tsx:
+            {word: str, startMs: int, endMs: int}
+
+        Seconds → milliseconds conversion (round to int) so the timeline
+        is stable across int math (Remotion's `useCurrentFrame` and
+        `interpolate` both operate on ints at 30fps).
+
+        Sentence-only fallback: when a segment has no `words[]` (e.g.,
+        FunASR paraformer-zh without the word-timestamp model), emit a
+        single WordCaption spanning the whole segment. The component
+        groups these into multi-char cues by `wordsPerPage`, so per-char
+        karaoke isn't possible with sentence-level input — pick the
+        `speech_seaco_paraformer_large_asrnat` model for that.
+        """
+        out: list[dict] = []
+        for seg in segments:
+            words = seg.get("words") or []
+            if words:
+                for w in words:
+                    word = (w.get("word") or "").strip()
+                    if not word:
+                        continue
+                    start_s = w.get("start", seg.get("start", 0))
+                    end_s = w.get("end", seg.get("end", 0))
+                    out.append({
+                        "word": word,
+                        "startMs": int(round(float(start_s) * 1000)),
+                        "endMs": int(round(float(end_s) * 1000)),
+                    })
+            elif seg.get("text"):
+                out.append({
+                    "word": seg["text"].strip(),
+                    "startMs": int(round(float(seg.get("start", 0)) * 1000)),
+                    "endMs": int(round(float(seg.get("end", 0)) * 1000)),
+                })
+        return out
 
     @staticmethod
     def _hmsms(seconds: float) -> tuple[int, int, int, int]:

@@ -14,6 +14,7 @@ import { EndTag, EndTagProps } from "./components/EndTag";
 import { HeroTitle } from "./components/HeroTitle";
 import { ProductReveal, ProductRevealProps } from "./components/ProductReveal";
 import { CaptionOverlay, WordCaption } from "./components/CaptionOverlay";
+import { BilingualCaptionOverlay } from "./components/BilingualCaptionOverlay";
 import { CollageBurst, CollageBurstProps } from "./CollageBurst";
 import { LyricOverlay, LyricOverlayProps } from "./LyricOverlay";
 // Shared with the runnable demo so MCP and the local demo use the same
@@ -303,6 +304,29 @@ export const Root: React.FC = () => {
           fontSize: 58,
           highlightColor: "#FACC15",
           backgroundColor: "rgba(15, 23, 42, 0.75)",
+        }}
+      />
+      <Composition
+        id="BilingualCaptionOverlayOnly"
+        component={BilingualCaptionOverlay}
+        durationInFrames={30 * 300}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          primaryWords: [] as WordCaption[],
+          secondaryWords: [] as WordCaption[],
+          wordsPerPage: 4,
+          rowGap: 6,
+          primaryFontSize: 48,
+          secondaryFontSize: 40,
+          primaryColor: "#F8FAFC",
+          primaryHighlightColor: "#22D3EE",
+          secondaryColor: "#E2E8F0",
+          secondaryHighlightColor: "#FBBF24",
+          backgroundColor: "rgba(15, 23, 42, 0.78)",
+          primaryFontFamily: "Space Grotesk, Inter, system-ui, sans-serif",
+          secondaryFontFamily: "Noto Sans CJK SC, Noto Sans SC, system-ui, sans-serif",
         }}
       />
       <Composition

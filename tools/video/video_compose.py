@@ -153,7 +153,7 @@ class VideoCompose(BaseTool):
         "properties": {
             "operation": {
                 "type": "string",
-                "enum": ["compose", "render", "remotion_render", "burn_subtitles", "overlay", "encode"],
+                "enum": ["compose", "render", "remotion_render", "burn_subtitles", "overlay", "encode", "remotion_bilingual_overlay"],
                 "description": (
                     "compose: low-level concat cuts + audio + subtitles. "
                     "render: high-level — resolves asset IDs, auto-routes to Remotion "
@@ -161,7 +161,10 @@ class VideoCompose(BaseTool):
                     "remotion_render: render via Remotion (Node.js). "
                     "burn_subtitles: burn subtitle file into existing video. "
                     "overlay: composite overlays onto base video. "
-                    "encode: re-encode to a target profile/codec."
+                    "encode: re-encode to a target profile/codec. "
+                    "remotion_bilingual_overlay: render bilingual subtitles via "
+                    "Remotion's BilingualCaptionOverlay composition (animated "
+                    "word-level highlighting, transparent or black background)."
                 ),
             },
             "input_path": {"type": "string"},
@@ -284,6 +287,7 @@ class VideoCompose(BaseTool):
     _REMOTION_COMPONENTS = [
         "text_card", "stat_card", "callout", "comparison",
         "progress", "chart", "bar_chart", "line_chart", "pie_chart", "kpi_grid",
+        "bilingual_caption_overlay",
     ]
 
     best_for = [
@@ -450,6 +454,8 @@ class VideoCompose(BaseTool):
                 result = self._overlay(inputs)
             elif operation == "encode":
                 result = self._encode(inputs)
+            elif operation == "remotion_bilingual_overlay":
+                result = self._remotion_bilingual_overlay(inputs)
             else:
                 return ToolResult(success=False, error=f"Unknown operation: {operation}")
         except Exception as e:
@@ -1829,6 +1835,185 @@ class VideoCompose(BaseTool):
             },
             artifacts=[str(output_path)],
         )
+
+    def _remotion_bilingual_overlay(self, inputs: dict[str, Any]) -> ToolResult:
+        """Render animated bilingual subtitles via Remotion.
+
+        Takes ``segments`` (primary language) + ``target_segments`` (translated,
+        secondary language), runs them through ``subtitle_gen`` with
+        ``format="remotion_bilingual_captions"`` to get the Remotion-shaped
+        WordCaption JSON, then invokes ``npx remotion render`` against the
+        ``BilingualCaptionOverlayOnly`` composition registered in
+        ``remotion-composer/src/Root.tsx``.
+
+        Output is an MP4 with the bilingual subtitles rendered on a black
+        background. To composite onto original footage, use the ``
+        `operation="overlay"` path with this file as the overlay input.
+        """
+        import shutil
+        import tempfile
+
+        segments = inputs.get("segments")
+        target_segments = inputs.get("target_segments")
+        if not segments:
+            return ToolResult(
+                success=False,
+                error="`segments` (primary language) required for remotion_bilingual_overlay",
+            )
+        if not target_segments:
+            return ToolResult(
+                success=False,
+                error="`target_segments` (translated language) required for remotion_bilingual_overlay",
+            )
+
+        if not shutil.which("npx"):
+            return ToolResult(
+                success=False,
+                error="npx not found. Install Node.js to use Remotion rendering.",
+            )
+
+        composer_dir = (
+            Path(__file__).resolve().parent.parent.parent / "remotion-composer"
+        )
+        if not (composer_dir / "node_modules").exists():
+            return ToolResult(
+                success=False,
+                error=(
+                    f"remotion-composer/node_modules missing. Run "
+                    f"`make install` (or `cd {composer_dir} && npm install`) "
+                    f"to set up Remotion."
+                ),
+            )
+
+        output_path = Path(
+            inputs.get("output_path", "renders/bilingual_overlay.mp4")
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = output_path.resolve()
+
+        # 1. Build the Remotion props JSON via subtitle_gen.
+        # Lazy import to avoid pulling subtitle_gen at module load time
+        # (it can be heavy on cold starts and is only needed here).
+        from tools.subtitle.subtitle_gen import SubtitleGen
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subtitle_path = Path(tmpdir) / "bilingual.remotion.json"
+            sg = SubtitleGen().execute({
+                "segments": segments,
+                "target_segments": target_segments,
+                "format": "remotion_bilingual_captions",
+                "output_path": str(subtitle_path),
+            })
+            if not sg.success:
+                return ToolResult(
+                    success=False,
+                    error=f"subtitle_gen failed: {sg.error}",
+                )
+            if not subtitle_path.exists():
+                return ToolResult(
+                    success=False,
+                    error="subtitle_gen reported success but produced no file",
+                )
+
+            # 2. Stage props for the BilingualCaptionOverlayOnly composition.
+            #    subtitle_gen wrote `primaryWords` / `secondaryWords` at the
+            #    top level — those are exactly what the composition consumes.
+            props = json.loads(subtitle_path.read_text(encoding="utf-8"))
+
+            # Allow callers to override visual styling per-call (font sizes,
+            # highlight colors, page size, etc.). All keys are optional.
+            for key in (
+                "primaryFontSize", "secondaryFontSize",
+                "primaryColor", "primaryHighlightColor",
+                "secondaryColor", "secondaryHighlightColor",
+                "backgroundColor",
+                "primaryFontFamily", "secondaryFontFamily",
+                "wordsPerPage", "rowGap",
+            ):
+                if key in inputs:
+                    props[key] = inputs[key]
+
+            props_path = Path(tmpdir) / "props.json"
+            props_path.write_text(
+                json.dumps(props, ensure_ascii=False), encoding="utf-8"
+            )
+
+            # 3. Build the npx remotion render command. Mirrors the
+            #    `_remotion_render` command shape but skips the asset
+            #    staging path — bilingual overlay needs no media.
+            cmd = [
+                "npx", "remotion", "render",
+                str(composer_dir / "src" / "index.tsx"),
+                "BilingualCaptionOverlayOnly",
+                str(output_path),
+                "--props", str(props_path),
+                "--concurrency", str(_get_remotion_concurrency()),
+                "--no-sandbox",
+            ]
+            custom_concurrency = inputs.get("concurrency")
+            if custom_concurrency:
+                cmd = [c for c in cmd if not c.startswith("--concurrency")]
+                cmd.extend(["--concurrency", str(custom_concurrency)])
+            if inputs.get("remotion_timeout_ms"):
+                cmd.append(f"--timeout={int(inputs['remotion_timeout_ms'])}")
+
+            start = time.time()
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(composer_dir),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+            except subprocess.TimeoutExpired:
+                return ToolResult(
+                    success=False,
+                    error="Remotion render timed out after 600s",
+                )
+            except FileNotFoundError as exc:
+                return ToolResult(
+                    success=False,
+                    error=f"Remotion binary launch failed: {exc}",
+                )
+
+            if proc.returncode != 0:
+                # Trim long stacks but keep the most recent lines so the
+                # operator can see what Remotion actually complained about.
+                stderr_tail = "\n".join(
+                    (proc.stderr or "").splitlines()[-20:]
+                )
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"npx remotion render failed (exit {proc.returncode}): "
+                        f"{stderr_tail or proc.stdout or '(no output)'}"
+                    ),
+                )
+
+            if not output_path.exists():
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Remotion exit was 0 but output file is missing — "
+                        "check disk space and write permissions."
+                    ),
+                )
+
+            return ToolResult(
+                success=True,
+                data={
+                    "output_path": str(output_path),
+                    "operation": "remotion_bilingual_overlay",
+                    "composition_id": "BilingualCaptionOverlayOnly",
+                    "primary_word_count": len(props.get("primaryWords", [])),
+                    "secondary_word_count": len(props.get("secondaryWords", [])),
+                    "render_seconds": round(time.time() - start, 2),
+                },
+                artifacts=[str(output_path)],
+                duration_seconds=round(time.time() - start, 2),
+            )
 
     @staticmethod
     def _parse_remotion_progress(line: str) -> Optional[float]:

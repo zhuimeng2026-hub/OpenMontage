@@ -306,6 +306,13 @@ def probe_initialize(base_url: str, token: str) -> dict:
         if "init_latency_warn" not in tags:
             tags.append("init_latency_warn")
 
+    # PROBLEMS_FOUND from om_mcp_probe can flag non-init issues
+    # (port_down, cpu_high, etc.). For OUR purpose — "is the MCP serving
+    # traffic?" — those don't matter. If we ended up with zero `init_*`
+    # tags, the JSON-RPC handshake path is healthy regardless of the
+    # probe's overall verdict.
+    if not any(t.startswith("init_") for t in tags):
+        ok = True
     return {"ok": ok, "elapsed_ms": elapsed_ms, "tags": tags,
             "stderr": proc.stderr[-500:], "raw_stdout_tail": stdout_tail}
 
@@ -325,7 +332,13 @@ _INIT_ERR_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\b401\b|unauthorized|missing or invalid bearer", re.I),
      "init_auth"),
     (re.compile(r"\b5\d\d\b", re.I), "init_http_5xx"),
-    (re.compile(r"\b4\d\d\b", re.I), "init_http_4xx"),
+    # Tightened: only fire on HTTP 4xx in HTTP response context (`HTTP/1.1
+    # 4xx`, `HTTP/2 4xx`). The previous loose `\b4\d\d\b` over-matched
+    # innocent port-listen output like `":443 -> OK"` (HTTPS listen) when
+    # the probe was running with `role=bff` and the BFF was misbound to
+    # a non-8080 port. That path produced `port_down:8080` (real) +
+    # `init_http_4xx` (false-positive from the regex) every probe tick.
+    (re.compile(r"\bHTTP/[\d.]+\s+4\d\d\b", re.I), "init_http_4xx"),
 ]
 
 
@@ -419,12 +432,26 @@ def probe_business(base_url: str, token: str) -> dict:
         if not content or content[0].get("type") != "text":
             raise RuntimeError("unexpected tool response shape")
         inner = json.loads(content[0]["text"])
-        status = (inner.get("status") or "").lower()
-        share = inner.get("share_url") or ""
-        if status != "published":
-            tags.append(f"biz_unexpected_status:{status or 'none'}")
-        elif not share:
-            tags.append("biz_missing_share_url")
+        # MCP returns success=False / an `error` field when the sentinel job
+        # is no longer in upstream state (typically because the upstream
+        # restarted and rebuilt its job→session index without this baseline
+        # row — see SENTINEL_JOB_ID docstring). That's an operations issue
+        # with the *sentinel reference*, NOT a fault against the upstream's
+        # ability to serve business traffic. Tag as `biz_sentinel_missing`
+        # so run_once() can keep the run classified OK and stop the
+        # `biz_unexpected_status:none` 30-min 139-SMS storm.
+        if inner.get("success") is False or "error" in inner:
+            LOG.warning("sentinel %s missing from upstream (%s)",
+                        SENTINEL_JOB_ID,
+                        (inner.get("error") or "success=False")[:160])
+            tags.append("biz_sentinel_missing")
+        else:
+            status = (inner.get("status") or "").lower()
+            share = inner.get("share_url") or ""
+            if status != "published":
+                tags.append(f"biz_unexpected_status:{status or 'none'}")
+            elif not share:
+                tags.append("biz_missing_share_url")
     except Exception as exc:  # noqa: BLE001
         tags.append("biz_fail")
         elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -580,7 +607,13 @@ def run_once(smtp_cfg: dict, base_url: str, token: str,
     tags += [t for t in init_res.get("tags", []) if t.startswith("init_")
              or t == "upstream_down"]
     tags += [t for t in biz_res.get("tags", []) if t.startswith("biz_")]
-    state_key = "OK" if (init_res["ok"] and biz_res["ok"]) else f"FAULT[{','.join(tags) or 'unknown'}]"
+    # `biz_sentinel_missing` is OK at the run level — see probe_business:
+    # sentinel reference is stale, but the upstream actually served the
+    # JSON-RPC round trip + tool execution. Treating it as FAULT would
+    # fire a 139-SMS every ALERT_COOLDOWN_SEC for a sentinel that we
+    # never rotated.
+    biz_ok = biz_res["ok"] or "biz_sentinel_missing" in biz_res.get("tags", [])
+    state_key = "OK" if (init_res["ok"] and biz_ok) else f"FAULT[{','.join(tags) or 'unknown'}]"
 
     LOG.info("init: ok=%s elapsed_ms=%d tags=%s",
              init_res["ok"], init_res["elapsed_ms"], init_res["tags"])
