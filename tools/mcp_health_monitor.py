@@ -128,6 +128,11 @@ STATE_FILE = Path(os.environ.get(
 SCRIPT_LOG = Path(os.environ.get(
     "MONITOR_LOG_FILE", "/var/log/openmontage/mcp_monitor.log"))
 
+#: Persisted override applied when SENTINEL_JOB_ID is missing from upstream
+#: state — the fresh published job_id we fell back to on the previous run.
+#: Stored alongside STATE_FILE so a single chmod covers both secrets.
+SENTINEL_OVERRIDE_FILE = STATE_FILE.parent / "mcp_monitor_sentinel.txt"
+
 # --------------------------------------------------------------------------- #
 # Logging — single source of truth for the operator
 # --------------------------------------------------------------------------- #
@@ -418,39 +423,222 @@ class MCPClient:
         return res
 
 
+# --------------------------------------------------------------------------- #
+# Sentinel rotation — discover a fresh published job_id when the hard-coded
+# SENTINEL_JOB_ID is no longer in the upstream's state. The fallback path
+# is promised in the SENTINEL_JOB_ID docstring above and realized here.
+# --------------------------------------------------------------------------- #
+
+
+def _read_sentinel_override() -> str | None:
+    """Read the persisted fallback sentinel (set by a previous probe)."""
+    try:
+        text = SENTINEL_OVERRIDE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text if text else None
+
+
+def _write_sentinel_override(job_id: str) -> None:
+    """Persist a newly discovered sentinel for the next probe's tick.
+
+    Best-effort: failures are logged at WARNING level and never block the
+    current run, since an upcoming probe can re-discover.
+    """
+    try:
+        SENTINEL_OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SENTINEL_OVERRIDE_FILE.write_text(job_id, encoding="utf-8")
+    except OSError as exc:
+        LOG.warning("could not persist sentinel override to %s: %s",
+                    SENTINEL_OVERRIDE_FILE, exc)
+
+
+def _resolve_active_sentinel() -> str:
+    """Return the sentinel for the next probe: persisted override if any,
+    otherwise the hard-coded SENTINEL_JOB_ID."""
+    override = _read_sentinel_override()
+    return override if override else SENTINEL_JOB_ID
+
+
+def _candidate_index_paths() -> list[Path]:
+    """Return all candidate ``.job_index.json`` paths to scan during fallback.
+
+    Order matters: we probe candidates in path order so the *first* path
+    is preferred. Two sources are included by default:
+
+      - ``<REPO_ROOT>/projects/.mcp_sessions/.job_index.json`` —
+        canonical for single-repo deployments.
+      - ``/opt/OpenMontage_Voicebox/projects/.mcp_sessions/.job_index.json``
+        — auto-included for dual-repo deployments where the MCP runs
+        from the Voicebox working tree (per the systemd unit's
+        ``WorkingDirectory``) but config / SMTP creds come from the
+        OpenMontage sister repo. Without this, a dual-repo setup hits
+        the monitor against an index the running MCP doesn't serve.
+
+    Operators on custom paths can pin a single directory via
+    ``MONITOR_MCP_STATE_DIR`` (full path to the ``.mcp_sessions`` dir).
+    """
+    paths: list[Path] = []
+
+    # Explicit single-path override wins.
+    state_dir_env = os.environ.get("MONITOR_MCP_STATE_DIR")
+    if state_dir_env:
+        p = Path(state_dir_env) / ".job_index.json"
+        if p.exists():
+            paths.append(p)
+        return paths
+
+    # Default primary: REPO_ROOT-derived path.
+    primary = REPO_ROOT / "projects" / ".mcp_sessions" / ".job_index.json"
+    if primary.exists():
+        paths.append(primary)
+
+    # Auto-detect: Voicebox sibling repo (dual-repo deployments).
+    voicebox = Path("/opt/OpenMontage_Voicebox/projects/.mcp_sessions"
+                     "/.job_index.json")
+    if voicebox.exists() and voicebox not in paths:
+        paths.append(voicebox)
+
+    return paths
+
+
+def _discover_published_sentinel() -> str | None:
+    """Find the freshest published render job from on-disk session indices.
+
+    Pure disk scan — reads ``.job_index.json`` from each candidate path
+    (see ``_candidate_index_paths``) and returns the freshest job_id
+    whose session file has ``status == "published"``.
+
+    We deliberately DO NOT verify against the MCP via ``get_render_status``
+    here. The MCP loads its in-memory job→session index once at startup
+    (``Orphan recovery: N job(s) indexed``) and only refreshes it on writes
+    the running MCP process itself makes. Sessions created by parallel
+    tools (BFF, manual edits, secondary test MCPs) end up on disk but
+    not in the running MCP's cache — ``get_render_status`` then returns
+    ``success=False`` for those, so an MCP-verified fallback would never
+    accept any candidate on a long-running install. Trust the disk:
+    it's the persistent record.
+
+    Called from ``probe_business`` when the configured sentinel is no
+    longer in upstream state. The picked job_id is persisted to
+    ``SENTINEL_OVERRIDE_FILE`` so the next probe tick sees it via
+    ``_resolve_active_sentinel`` instead of re-scanning.
+    """
+    candidates: list[tuple[float, str]] = []
+    seen: set[str] = set()
+    for index_path in _candidate_index_paths():
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            LOG.warning("cannot read %s: %s", index_path, exc)
+            continue
+        sessions_dir = index_path.parent
+        for job_id, digest in index.items():
+            if job_id in seen:
+                continue
+            seen.add(job_id)
+            sess_path = sessions_dir / f"{digest}.json"
+            try:
+                mtime = sess_path.stat().st_mtime
+                sess = json.loads(sess_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if (sess.get("status") or "").lower() != "published":
+                continue
+            candidates.append((mtime, job_id))
+    if not candidates:
+        return None
+    # Newest-first across all candidate paths.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    return candidates[0][1]
+
+
+def _probe_one_sentinel(client: "MCPClient", sentinel: str) -> dict:
+    """Run a single get_render_status round-trip.
+
+    Returns dict with keys: missing (bool), status (str lowercase), share
+    (str), error (str). missing=True iff the upstream reports success=False
+    / 'No render job found' (the sentinel isn't in its state index).
+    """
+    out = {"missing": False, "status": "", "share": "", "error": ""}
+    try:
+        res = client.call_tool(
+            "get_render_status", {"render_job_id": sentinel})
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)[:300]
+        return out
+    content = res.get("result", {}).get("content", [])
+    if not content or content[0].get("type") != "text":
+        out["error"] = "unexpected tool response shape"
+        return out
+    try:
+        inner = json.loads(content[0]["text"])
+    except (ValueError, TypeError) as exc:
+        out["error"] = f"json decode: {exc}"
+        return out
+    if inner.get("success") is False or "error" in inner:
+        out["missing"] = True
+        out["error"] = inner.get("error") or "success=False"
+        return out
+    out["status"] = (inner.get("status") or "").lower()
+    out["share"] = inner.get("share_url") or ""
+    return out
+
+
 def probe_business(base_url: str, token: str) -> dict:
-    """Run a real business tool call end-to-end. Returns ok/tags/elapsed."""
+    """Run a real business tool call end-to-end. Returns ok/tags/elapsed.
+
+    Sentinel-rotation behavior:
+      - First tries ``_resolve_active_sentinel()`` (persisted override, falling
+        back to SENTINEL_JOB_ID).
+      - If the upstream reports success=False / 'No render job found', try
+        ``_discover_published_sentinel()`` to pick a fresh row from the
+        on-disk job index, persist it, and re-probe in the same session.
+      - If neither the override nor the discovered sentinel yield a real
+        ``status=published``, emit ``biz_sentinel_missing`` and rely on the
+        run-level OK gate to keep state quiet.
+    """
     t0 = time.monotonic()
     tags: list[str] = []
+    sentinel_missing = False
+    biz_err = ""
     try:
         client = MCPClient(base_url, token, PROBE_TIMEOUT)
         client.initialize()
         client.notify_initialized()
-        res = client.call_tool(
-            "get_render_status", {"render_job_id": SENTINEL_JOB_ID})
-        content = res.get("result", {}).get("content", [])
-        if not content or content[0].get("type") != "text":
-            raise RuntimeError("unexpected tool response shape")
-        inner = json.loads(content[0]["text"])
-        # MCP returns success=False / an `error` field when the sentinel job
-        # is no longer in upstream state (typically because the upstream
-        # restarted and rebuilt its job→session index without this baseline
-        # row — see SENTINEL_JOB_ID docstring). That's an operations issue
-        # with the *sentinel reference*, NOT a fault against the upstream's
-        # ability to serve business traffic. Tag as `biz_sentinel_missing`
-        # so run_once() can keep the run classified OK and stop the
-        # `biz_unexpected_status:none` 30-min 139-SMS storm.
-        if inner.get("success") is False or "error" in inner:
-            LOG.warning("sentinel %s missing from upstream (%s)",
-                        SENTINEL_JOB_ID,
-                        (inner.get("error") or "success=False")[:160])
+
+        active_sentinel = _resolve_active_sentinel()
+        result = _probe_one_sentinel(client, active_sentinel)
+
+        if result["missing"]:
+            LOG.warning(
+                "sentinel %s missing from upstream (%s); attempting fallback",
+                active_sentinel, str(result["error"])[:160])
+            new_sentinel = _discover_published_sentinel()
+            if new_sentinel and new_sentinel != active_sentinel:
+                LOG.info("rotating sentinel: %s -> %s",
+                         active_sentinel[:12], new_sentinel[:12])
+                _write_sentinel_override(new_sentinel)
+                # Re-probe with the new sentinel in the SAME MCP session.
+                # Same connection, same Mcp-Session-Id, no extra handshake.
+                result = _probe_one_sentinel(client, new_sentinel)
+                if not result["missing"]:
+                    tags.append(f"biz_sentinel_rotated:{new_sentinel[:12]}")
+                    active_sentinel = new_sentinel
+
+        if result["missing"]:
+            # No usable sentinel — tag for visibility but keep OK at the
+            # run level (the upstream's MCP itself is fine; only the
+            # sentinel reference is stale).
             tags.append("biz_sentinel_missing")
+            sentinel_missing = True
+        elif result["error"]:
+            tags.append("biz_fail")
+            biz_err = result["error"]
         else:
-            status = (inner.get("status") or "").lower()
-            share = inner.get("share_url") or ""
-            if status != "published":
-                tags.append(f"biz_unexpected_status:{status or 'none'}")
-            elif not share:
+            if result["status"] != "published":
+                tags.append(f"biz_unexpected_status:{result['status'] or 'none'}")
+            elif not result["share"]:
                 tags.append("biz_missing_share_url")
     except Exception as exc:  # noqa: BLE001
         tags.append("biz_fail")
@@ -463,8 +651,9 @@ def probe_business(base_url: str, token: str) -> dict:
         tags.append("biz_latency_crit")
     elif elapsed_ms / 1000.0 > WARN_LATENCY:
         tags.append("biz_latency_warn")
-    return {"ok": not tags, "elapsed_ms": elapsed_ms, "tags": tags,
-            "error": ""}
+    ok = (not tags) and (not sentinel_missing)
+    return {"ok": ok, "elapsed_ms": elapsed_ms, "tags": tags,
+            "error": biz_err, "sentinel_missing": sentinel_missing}
 
 
 # --------------------------------------------------------------------------- #
