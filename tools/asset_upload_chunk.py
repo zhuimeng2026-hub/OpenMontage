@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.asset_upload import _ALLOWED_EXTENSIONS, _SAFE_FILENAME, _max_upload_bytes
-from lib.workbuddy_session import register_image, require_session
+from lib.workbuddy_session import register_asset, register_image, require_session
 from tools.base_tool import BaseTool, ResourceProfile, ToolResult, ToolRuntime, ToolStability, ToolTier
 
 
@@ -133,6 +133,8 @@ class UploadAssetChunk(BaseTool):
             batch = None
             if asset["type"] == "image":
                 batch = register_image(current_session, state["project_id"], asset)
+            else:
+                register_asset(current_session, state["project_id"], asset)
             state_path.unlink(missing_ok=True)
             return ToolResult(True, {"asset": asset, "asset_manifest": {"assets": [asset]}, "upload_id": upload_id, **({"batch": batch} if batch else {})}, [str(target)], duration_seconds=time.monotonic()-started)
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:

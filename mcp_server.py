@@ -90,6 +90,10 @@ from lib.workbuddy_session import (
     fail_job_by_id,
 )
 from lib.render_progress import publish, progress_event, subscribe, unsubscribe
+from lib.media_job_store import create_job as create_media_job
+from lib.media_job_store import get_job as get_media_job
+from lib.media_job_store import update_job as update_media_job
+from lib.media_job_store import recover_incomplete_jobs as recover_media_jobs
 from lib.render_queue import (
     get_render_queue,
     save_job_record,
@@ -596,8 +600,12 @@ async def create_remotion_video_share(
     project = state["project_id"]
     batch_id = state["batch_id"]
     job_id = state["render_job_id"]
-    assets = state.get("assets", [])
+    # Generic session registration also tracks uploaded video/audio. The legacy
+    # photo renderer must continue to operate only on image assets.
+    assets = [asset for asset in state.get("assets", []) if asset.get("type") == "image"]
     try:
+        if not assets:
+            raise ValueError("No completed images found in the current MCP session batch")
         duration = float(duration_per_image)
         if duration < 1 or duration > 30:
             raise ValueError("duration_per_image must be between 1 and 30 seconds")
@@ -845,6 +853,236 @@ def _run_render_job(
             pass
 
 
+def _queue_media_workflow(
+    *, sid: str, project_id: str, job_type: str, video_asset_id: str,
+    voice_sample_asset_id: str | None = None, script: str | None = None,
+    language: str | None = None, subtitle: bool = True,
+    subtitle_style: str = "short_video", title: str | None = None,
+) -> dict[str, Any]:
+    """Validate session assets and dispatch a durable media workflow."""
+    from lib.workbuddy_session import find_asset
+
+    digest = session_hash(sid)
+    if not digest:
+        return {"success": False, "status": "failed", "stage": "session", "error": "Streamable HTTP Mcp-Session-Id is required"}
+    video = find_asset(sid, video_asset_id, project_id=project_id)
+    if not video or video.get("type") != "video":
+        return {"success": False, "status": "failed", "stage": "validation", "error": "video_asset_id is not a video uploaded in this MCP session"}
+    voice_sample = None
+    if voice_sample_asset_id:
+        voice_sample = find_asset(sid, voice_sample_asset_id, project_id=project_id)
+        if not voice_sample or voice_sample.get("type") != "audio":
+            return {"success": False, "status": "failed", "stage": "validation", "error": "voice_sample_asset_id is not an audio file uploaded in this MCP session"}
+
+    root = (_PROJECT_ROOT / "projects" / project_id).resolve()
+    for asset in (video, voice_sample):
+        if not asset:
+            continue
+        path = Path(asset.get("path", "")).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return {"success": False, "status": "failed", "stage": "validation", "error": "session asset path is outside the project workspace"}
+        if not path.is_file():
+            return {"success": False, "status": "failed", "stage": "validation", "error": f"uploaded asset is missing: {path.name}"}
+
+    job = create_media_job(
+        session_hash=digest, project_id=project_id, job_type=job_type,
+        title=title, metadata={
+            "video_asset_id": video_asset_id,
+            "voice_sample_asset_id": voice_sample_asset_id,
+            "language": language,
+            "subtitle": subtitle,
+            "subtitle_style": subtitle_style,
+        },
+    )
+    threading.Thread(
+        target=_run_media_workflow,
+        kwargs={
+            "sid": sid, "job_id": job["job_id"], "project_id": project_id,
+            "job_type": job_type, "video_path": video["path"],
+            "voice_sample_path": voice_sample["path"] if voice_sample else None,
+            "script": script, "language": language, "subtitle": subtitle,
+            "subtitle_style": subtitle_style, "title": title,
+        },
+        daemon=True,
+    ).start()
+    publish(job["job_id"], progress_event(job["job_id"], phase="queue", status="queued", message="Media job queued"))
+    return {
+        "success": True, "status": "queued", "render_job_id": job["job_id"],
+        "job_id": job["job_id"], "project_id": project_id,
+        "message": "任务已进入后台队列，请使用 get_render_status 查询进度和分享链接。",
+    }
+
+
+def _run_media_workflow(
+    *, sid: str, job_id: str, project_id: str, job_type: str,
+    video_path: str, voice_sample_path: str | None, script: str | None,
+    language: str | None, subtitle: bool, subtitle_style: str,
+    title: str | None,
+) -> None:
+    """Run caption/voice work, publish the result, and persist every phase."""
+    async def _worker() -> None:
+        set_mcp_session_id(sid)
+        renders = _PROJECT_ROOT / "projects" / project_id / "renders"
+        renders.mkdir(parents=True, exist_ok=True)
+
+        def stage(name: str, progress: int, message: str, **changes: Any) -> None:
+            update_media_job(job_id, status=name, current_stage=name, progress=progress, **changes)
+            publish(job_id, progress_event(job_id, phase=name, status=name, progress=progress, message=message, **changes))
+
+        def required_tool(name: str):
+            tool = registry.get(name)
+            if tool is None:
+                raise RuntimeError(f"{name} tool is not registered")
+            return tool
+
+        try:
+            segments: list[dict[str, Any]] = []
+            working_video = video_path
+            if job_type == "cloned_voice":
+                stage("voice_cloning", 10, "Cloning voice")
+                cloned = await _run_tool_sync(required_tool("voicebox_voice_clone"), {
+                    "sample_path": voice_sample_path, "consent": True,
+                    "voice_id": f"om-{job_id[:20]}",
+                })
+                if not cloned.success:
+                    raise RuntimeError(cloned.error or "Voicebox voice clone failed")
+                clone_data = cloned.data or {}
+                voice_id = clone_data.get("provider_voice_id") or clone_data.get("voice_id")
+                if not voice_id:
+                    raise RuntimeError("Voicebox voice clone returned no voice_id")
+                update_media_job(job_id, executor="voicebox", executor_job_id=clone_data.get("job_id"), executor_worker_id=clone_data.get("worker_id"))
+
+                audio_path = str(renders / f"{job_id}-voice.mp3")
+                stage("tts_generating", 30, "Generating cloned narration")
+                spoken = await _run_tool_sync(required_tool("voicebox_tts"), {
+                    "text": script, "voice_id": voice_id, "output_path": audio_path,
+                    "subtitle": subtitle, "language": language,
+                })
+                if not spoken.success:
+                    raise RuntimeError(spoken.error or "Voicebox TTS failed")
+                spoken_data = spoken.data or {}
+                audio_path = spoken_data.get("audio_path") or spoken_data.get("output") or audio_path
+                segments = spoken_data.get("segments") or []
+
+                stage("audio_mixing", 50, "Replacing video audio")
+                revoiced = str(renders / f"{job_id}-revoiced.mp4")
+                mixed = await _run_tool_sync(required_tool("audio_mixer"), {
+                    "operation": "replace_video_audio", "video_path": video_path,
+                    "audio_path": audio_path, "output_path": revoiced,
+                })
+                if not mixed.success:
+                    raise RuntimeError(mixed.error or "Audio replacement failed")
+                working_video = (mixed.data or {}).get("output") or revoiced
+                if subtitle and not segments:
+                    stage("transcribing", 60, "Generating subtitle timestamps")
+                    transcript = await _run_tool_sync(required_tool("transcriber"), {
+                        "input_path": audio_path, "language": language,
+                        "output_dir": str(renders / f"{job_id}-transcript"),
+                    })
+                    if not transcript.success:
+                        raise RuntimeError(transcript.error or "Narration transcription failed")
+                    segments = (transcript.data or {}).get("segments") or []
+            else:
+                stage("transcribing", 25, "Transcribing source video")
+                transcript = await _run_tool_sync(required_tool("transcriber"), {
+                    "input_path": video_path, "language": language,
+                    "output_dir": str(renders / f"{job_id}-transcript"),
+                })
+                if not transcript.success:
+                    raise RuntimeError(transcript.error or "Video transcription failed")
+                segments = (transcript.data or {}).get("segments") or []
+
+            final_video = working_video
+            if subtitle:
+                if not segments:
+                    raise RuntimeError("No timed transcript segments were produced")
+                stage("subtitle_burning", 70, "Burning subtitles")
+                captioned = str(renders / f"{job_id}-captioned.mp4")
+                burned = await _run_tool_sync(required_tool("remotion_caption_burn"), {
+                    "input_path": working_video, "output_path": captioned,
+                    "segments": segments,
+                    "words_per_page": 4 if subtitle_style == "short_video" else 8,
+                })
+                if not burned.success:
+                    raise RuntimeError(burned.error or "Subtitle burn failed")
+                final_video = (burned.data or {}).get("output") or captioned
+
+            stage("uploading", 85, "Uploading video to Weiyun", video_path=final_video)
+            uploaded = await _run_tool_sync(required_tool("weiyun_upload"), {
+                "video_path": final_video, "target_dir": "", "overwrite": False,
+            })
+            if not uploaded.success:
+                raise RuntimeError(uploaded.error or "Weiyun upload failed")
+            file_id = (uploaded.data or {}).get("file_id")
+            if not file_id:
+                raise RuntimeError("Weiyun upload returned no file_id")
+
+            stage("sharing", 95, "Generating Weiyun share link")
+            shared = await _run_tool_sync(required_tool("weiyun_share_link"), {
+                "file_list": [file_id], "share_name": title or f"{project_id}-{job_id[:8]}",
+            })
+            if not shared.success:
+                raise RuntimeError(shared.error or "Weiyun share link failed")
+            share_url = (shared.data or {}).get("short_url") or (shared.data or {}).get("share_url")
+            if not share_url:
+                raise RuntimeError("Weiyun share tool returned no share URL")
+            update_media_job(job_id, status="published", current_stage="published", progress=100, result_url=share_url, video_path=final_video, error_code=None, error_message=None)
+            publish(job_id, progress_event(job_id, phase="share", status="published", progress=100, share_url=share_url, message="Share link ready"))
+        except Exception as exc:  # noqa: BLE001
+            current = get_media_job(job_id) or {}
+            failed_stage = current.get("current_stage") or "workflow"
+            update_media_job(job_id, status="failed", current_stage=failed_stage, error_code=failed_stage, error_message=str(exc))
+            publish(job_id, progress_event(job_id, phase=failed_stage, status="failed", error=str(exc), message="Media workflow failed"))
+            _log.exception("media workflow failed for job %s", job_id)
+
+    try:
+        asyncio.run(_worker())
+    except Exception as exc:  # noqa: BLE001
+        update_media_job(job_id, status="failed", current_stage="background_crash", error_code="background_crash", error_message=str(exc))
+        _log.exception("media workflow background crash for job %s", job_id)
+
+
+@mcp.tool()
+async def create_captioned_video_share(
+    project_id: str, video_asset_id: str, language: Optional[str] = "zh",
+    subtitle_style: str = "short_video", title: Optional[str] = None,
+) -> dict[str, Any]:
+    """Add synchronized subtitles to an uploaded video and return a share job."""
+    if subtitle_style not in {"short_video", "standard"}:
+        return {"success": False, "status": "failed", "stage": "validation", "error": "subtitle_style must be short_video or standard"}
+    return _queue_media_workflow(
+        sid=get_mcp_session_id(), project_id=project_id, job_type="captioned_video",
+        video_asset_id=video_asset_id, language=language,
+        subtitle=True, subtitle_style=subtitle_style, title=title,
+    )
+
+
+@mcp.tool()
+async def create_cloned_voice_video_share(
+    project_id: str, video_asset_id: str, voice_sample_asset_id: str,
+    script: str, audio_mode: str = "replace", subtitle: bool = True,
+    language: Optional[str] = "zh", subtitle_style: str = "short_video",
+    title: Optional[str] = None, voice_consent: bool = False,
+) -> dict[str, Any]:
+    """Clone an authorized voice, dub a video, optionally caption, and share."""
+    if not voice_consent:
+        return {"success": False, "status": "failed", "stage": "consent", "error": "voice_consent=true is required"}
+    if audio_mode != "replace":
+        return {"success": False, "status": "failed", "stage": "validation", "error": "MVP supports audio_mode=replace only"}
+    if not isinstance(script, str) or not script.strip() or len(script) > 10000:
+        return {"success": False, "status": "failed", "stage": "validation", "error": "script must contain 1-10000 characters"}
+    if subtitle_style not in {"short_video", "standard"}:
+        return {"success": False, "status": "failed", "stage": "validation", "error": "subtitle_style must be short_video or standard"}
+    return _queue_media_workflow(
+        sid=get_mcp_session_id(), project_id=project_id, job_type="cloned_voice",
+        video_asset_id=video_asset_id, voice_sample_asset_id=voice_sample_asset_id,
+        script=script.strip(), language=language, subtitle=subtitle,
+        subtitle_style=subtitle_style, title=title,
+    )
+
+
 def _find_session_by_job(render_job_id: str) -> dict[str, Any] | None:
     """Back-compat alias for ``find_session_by_job_id`` (O(1) index lookup)."""
     return find_session_by_job_id(render_job_id)
@@ -860,6 +1098,25 @@ def get_render_status(render_job_id: str) -> dict[str, Any]:
     the Weiyun share link; when ``failed`` the ``stage`` field names the
     failing pipeline stage.
     """
+    media = get_media_job(render_job_id, session_hash=session_hash(get_mcp_session_id()))
+    if media:
+        return {
+            "success": True,
+            "render_job_id": render_job_id,
+            "job_id": render_job_id,
+            "job_type": media.get("job_type"),
+            "status": media.get("status"),
+            "stage": media.get("current_stage"),
+            "progress": media.get("progress"),
+            "error": media.get("error_message"),
+            "project_id": media.get("project_id"),
+            "video_path": media.get("video_path"),
+            "share_url": media.get("result_url"),
+            "executor": media.get("executor"),
+            "executor_job_id": media.get("executor_job_id"),
+            "executor_worker_id": media.get("executor_worker_id"),
+            "updated_at": media.get("updated_at"),
+        }
     state = find_session_by_job_id(render_job_id)
     if not state:
         return {"success": False, "error": f"No render job found for render_job_id '{render_job_id}'"}
@@ -1391,6 +1648,7 @@ async def render_progress_sse(request: "Request"):
     job_id = request.path_params.get("job_id", "")
     q = subscribe(job_id)
     state = find_session_by_job_id(job_id)
+    media = get_media_job(job_id) if state is None else None
 
     async def event_generator():
         # Initial snapshot so clients joining mid-flight get current state.
@@ -1406,6 +1664,18 @@ async def render_progress_sse(request: "Request"):
                 queue_depth=state.get("queue_depth"),
                 share_url=state.get("share_url"),
                 video_path=state.get("video_path"),
+            )
+        elif media:
+            snap = progress_event(
+                job_id,
+                phase="snapshot",
+                status=media.get("status"),
+                stage=media.get("current_stage"),
+                error=media.get("error_message"),
+                percent=media.get("progress"),
+                share_url=media.get("result_url"),
+                video_path=media.get("video_path"),
+                job_type=media.get("job_type"),
             )
         else:
             snap = progress_event(
@@ -1507,6 +1777,13 @@ if __name__ == "__main__":
     except Exception as exc:  # pragma: no cover - defensive
         _log.warning("Orphan recovery failed (continuing startup): %s", exc)
         stats = {}
+
+    try:
+        recovered_media = recover_media_jobs()
+        if recovered_media:
+            _log.info("Media job recovery: %d interrupted job(s) marked failed", recovered_media)
+    except Exception as exc:  # pragma: no cover - defensive
+        _log.warning("Media job recovery failed (continuing startup): %s", exc)
 
     # Re-dispatch render jobs that were merely *waiting for a slot* (not actively
     # rendering) when the process last died. Their durable job records let us

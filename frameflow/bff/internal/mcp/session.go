@@ -163,7 +163,7 @@ func (s *SessionStore) UpdateJobStatus(sessionID, jobID, status string) {
 	}
 }
 
-// AssetCount returns how many images the manual upload flow has completed for
+// AssetCount returns how many media files the manual upload flow has completed for
 // the current submission of a BFF session. It is the basis for the
 // per-tier MaxFilesPerSubmission cap enforced in MCPProxy.
 func (s *SessionStore) AssetCount(sessionID string) int {

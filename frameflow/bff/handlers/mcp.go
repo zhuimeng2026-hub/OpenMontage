@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"frameflow-bff/internal/config"
 	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
 )
@@ -33,6 +34,12 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tool is required"})
 		return
 	}
+	// tools/list and initialize are intentionally not accepted here: they are
+	// internal MCP client operations, never browser-facing tool calls.
+	if !h.mcpToolAllowed(req.Tool) {
+		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("tool %q is not allowed", req.Tool)})
+		return
+	}
 	sid := h.ensureSession(c)
 
 	// Pre-check the per-submission file cap on a new upload. Rejecting at the
@@ -45,7 +52,7 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 			if h.Store.AssetCount(sid) >= lim.MaxFilesPerSubmission {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
 					"error": fmt.Sprintf(
-						"your %q tier allows at most %d images per submission; this submission has already reached the limit",
+						"your %q tier allows at most %d media files per submission; this submission has already reached the limit",
 						tier, lim.MaxFilesPerSubmission),
 					"files": h.Store.AssetCount(sid),
 					"max":   lim.MaxFilesPerSubmission,
@@ -64,13 +71,16 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	// A successful render submission enters the caller's own render queue. The
 	// queue is keyed by the BFF session, so each user only ever sees their own
 	// jobs — never another caller's (owner isolation is structural, not a filter).
-	if req.Tool == "create_remotion_video_share" {
-		if jobID := digString(res, "render_job_id"); jobID != "" {
-			name, _ := req.Args["title"].(string)
+	if isRenderSubmissionTool(req.Tool) {
+		if jobID := renderJobID(res); jobID != "" {
+			name := firstString(req.Args, "title", "name")
 			if name == "" {
 				name = "帧流作品"
 			}
-			resLabel, _ := req.Args["aspect_ratio"].(string)
+			resLabel := firstString(req.Args, "aspect_ratio", "resolution")
+			if resLabel == "" {
+				resLabel = firstString(res, "aspect_ratio", "resolution")
+			}
 			if resLabel == "" {
 				resLabel = "9:16"
 			}
@@ -96,9 +106,50 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 				}
 			}
 		}
-	} else if req.Tool == "create_remotion_video_share" {
+	} else if isRenderSubmissionTool(req.Tool) {
 		h.Store.ResetAsset(sid)
 	}
 
 	c.JSON(http.StatusOK, res)
+}
+
+func isRenderSubmissionTool(tool string) bool {
+	switch tool {
+	case "create_remotion_video_share", "create_captioned_video_share", "create_cloned_voice_video_share":
+		return true
+	default:
+		return false
+	}
+}
+
+func renderJobID(res map[string]interface{}) string {
+	if id := digString(res, "render_job_id"); id != "" {
+		return id
+	}
+	return digString(res, "job_id")
+}
+
+func firstString(values map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (h *Handlers) mcpToolAllowed(tool string) bool {
+	allowed := []string(nil)
+	if h != nil && h.Cfg != nil {
+		allowed = h.Cfg.MCPAllowedTools
+	}
+	if len(allowed) == 0 {
+		allowed = config.DefaultMCPAllowedTools()
+	}
+	for _, candidate := range allowed {
+		if candidate == tool {
+			return true
+		}
+	}
+	return false
 }

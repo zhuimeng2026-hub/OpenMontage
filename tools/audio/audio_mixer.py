@@ -40,7 +40,7 @@ class AudioMixer(BaseTool):
     )
     agent_skills = ["ffmpeg", "video-toolkit"]
 
-    capabilities = ["mix", "duck", "fade", "normalize", "extract_audio", "segmented_music"]
+    capabilities = ["mix", "duck", "fade", "normalize", "extract_audio", "segmented_music", "replace_video_audio"]
 
     input_schema = {
         "type": "object",
@@ -48,7 +48,7 @@ class AudioMixer(BaseTool):
         "properties": {
             "operation": {
                 "type": "string",
-                "enum": ["mix", "duck", "extract", "full_mix", "segmented_music"],
+                "enum": ["mix", "duck", "extract", "full_mix", "segmented_music", "replace_video_audio"],
                 "description": (
                     "mix: layer multiple tracks with volume/delay/fades. "
                     "duck: lower music volume when speech is present. "
@@ -114,6 +114,8 @@ class AudioMixer(BaseTool):
                 "default": -12,
             },
             "input_path": {"type": "string", "description": "Input for extract operation"},
+            "video_path": {"type": "string", "description": "Input video for replace_video_audio"},
+            "audio_path": {"type": "string", "description": "Replacement audio for replace_video_audio"},
             "output_path": {"type": "string"},
             "ducking": {
                 "type": "object",
@@ -261,6 +263,8 @@ class AudioMixer(BaseTool):
                 result = self._full_mix(inputs)
             elif operation == "segmented_music":
                 result = self._segmented_music(inputs)
+            elif operation == "replace_video_audio":
+                result = self._replace_video_audio(inputs)
             else:
                 return ToolResult(success=False, error=f"Unknown operation: {operation}")
         except Exception as e:
@@ -268,6 +272,29 @@ class AudioMixer(BaseTool):
 
         result.duration_seconds = round(time.time() - start, 2)
         return result
+
+    def _replace_video_audio(self, inputs: dict[str, Any]) -> ToolResult:
+        """Copy video frames and replace the source audio with narration."""
+        video_path = Path(inputs.get("video_path", ""))
+        audio_path = Path(inputs.get("audio_path", ""))
+        output_path = Path(inputs.get("output_path", "revoiced.mp4"))
+        if not video_path.is_file():
+            return ToolResult(success=False, error=f"Video not found: {video_path}")
+        if not audio_path.is_file():
+            return ToolResult(success=False, error=f"Audio not found: {audio_path}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.run_command([
+            "ffmpeg", "-y", "-i", str(video_path), "-i", str(audio_path),
+            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-shortest", str(output_path),
+        ])
+        if not output_path.is_file():
+            return ToolResult(success=False, error="No output produced")
+        return ToolResult(
+            success=True,
+            data={"operation": "replace_video_audio", "output": str(output_path)},
+            artifacts=[str(output_path)],
+        )
 
     def _mix(self, inputs: dict[str, Any]) -> ToolResult:
         """Mix multiple audio tracks into one output."""

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.base_tool import BaseTool, ResourceProfile, ToolResult, ToolRuntime, ToolStability, ToolTier
-from lib.workbuddy_session import register_image, require_session, session_hash
+from lib.workbuddy_session import register_asset, register_image, require_session, session_hash
 
 
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
@@ -87,10 +87,14 @@ class UploadAsset(BaseTool):
         },
     }
 
+    @staticmethod
+    def _workspace_root() -> Path:
+        return Path(__file__).resolve().parent.parent
+
     def _project_dir(self, project_id: str) -> Path:
         if not isinstance(project_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", project_id):
             raise ValueError("project_id must be a safe basename (letters, numbers, '.', '_' and '-' only)")
-        root = (Path(__file__).resolve().parent.parent / "projects").resolve()
+        root = (self._workspace_root() / "projects").resolve()
         project_dir = (root / project_id).resolve()
         try:
             project_dir.relative_to(root)
@@ -165,7 +169,7 @@ class UploadAsset(BaseTool):
                         os.unlink(tmp_name)
                 deduplicated = False
 
-            relative_path = target.relative_to(Path(__file__).resolve().parent.parent).as_posix()
+            relative_path = target.relative_to(self._workspace_root()).as_posix()
             mime_type = inputs.get("mime_type") or mimetypes.guess_type(filename)[0] or "application/octet-stream"
             asset = {
                 "id": f"{project_id}-{digest[:12]}",
@@ -182,6 +186,8 @@ class UploadAsset(BaseTool):
             batch = None
             if asset["type"] == "image":
                 batch = register_image(session_id, project_id, asset)
+            else:
+                register_asset(session_id, project_id, asset)
             return ToolResult(
                 success=True,
                 data={

@@ -69,7 +69,7 @@
     }
   }
 
-  // ---- 分块上传单张图片：start -> append* -> complete ----
+  // ---- 分块上传单个媒体文件：start -> append* -> complete ----
   // 协议严格对齐 OpenMontage：按二进制字节切片后各自 base64，offset 用二进制偏移。
   async function chunkUpload(file, opts) {
     opts = opts || {};
@@ -78,7 +78,14 @@
     var buf = await file.arrayBuffer();
     var n = buf.byteLength;
     var mime = file.type ||
-      (/\.png$/i.test(file.name) ? 'image/png' : 'image/jpeg');
+      (/\.png$/i.test(file.name) ? 'image/png' :
+       /\.webp$/i.test(file.name) ? 'image/webp' :
+       /\.(mp4|m4v)$/i.test(file.name) ? 'video/mp4' :
+       /\.mov$/i.test(file.name) ? 'video/quicktime' :
+       /\.webm$/i.test(file.name) ? 'video/webm' :
+       /\.wav$/i.test(file.name) ? 'audio/wav' :
+       /\.m4a$/i.test(file.name) ? 'audio/mp4' :
+       /\.mp3$/i.test(file.name) ? 'audio/mpeg' : 'application/octet-stream');
     var sha = await sha256Hex(buf);
     var safe = file.name.replace(/[^\w.\-]/g, '_');
 
@@ -91,8 +98,9 @@
       }
       return {
         success: true, demo: true, upload_id: 'demo-' + Date.now(),
+        asset: {id: 'demo-asset-' + Date.now(), filename: file.name, mime_type: mime},
         asset_count: 1, status: 'collecting_assets',
-        message: '已收到 1 张图片（演示）。可继续上传，完成后点击「开始渲染」。'
+        message: '已收到 1 个媒体文件（演示）。'
       };
     }
 
@@ -155,6 +163,35 @@
     return result;
   }
 
+  async function createCaptionedVideo(opts) {
+    opts = opts || {};
+    if (demoMode) return {success:true, render_job_id:'MEDIA-' + Date.now(), status:'queued'};
+    return await mcpCall('create_captioned_video_share', {
+      project_id: opts.projectId,
+      video_asset_id: opts.videoAssetId,
+      language: opts.language || 'zh',
+      subtitle_style: opts.subtitleStyle || 'short_video',
+      title: opts.title || '帧流字幕视频'
+    });
+  }
+
+  async function createClonedVoiceVideo(opts) {
+    opts = opts || {};
+    if (demoMode) return {success:true, render_job_id:'VOICE-' + Date.now(), status:'queued'};
+    return await mcpCall('create_cloned_voice_video_share', {
+      project_id: opts.projectId,
+      video_asset_id: opts.videoAssetId,
+      voice_sample_asset_id: opts.voiceSampleAssetId,
+      script: opts.script || '',
+      audio_mode: 'replace',
+      subtitle: opts.subtitle !== false,
+      language: opts.language || 'zh',
+      subtitle_style: opts.subtitleStyle || 'short_video',
+      title: opts.title || '帧流克隆配音视频',
+      voice_consent: opts.voiceConsent === true
+    });
+  }
+
   // ---- 轮询渲染状态（SSE 不可用时的兜底）----
   async function getRenderStatus(jobId) {
     if (demoMode) return null;
@@ -193,6 +230,8 @@
     mcpCall: mcpCall,
     chunkUpload: chunkUpload,
     createVideo: createVideo,
+    createCaptionedVideo: createCaptionedVideo,
+    createClonedVoiceVideo: createClonedVoiceVideo,
     getRenderStatus: getRenderStatus,
     subscribeProgress: subscribeProgress
   };

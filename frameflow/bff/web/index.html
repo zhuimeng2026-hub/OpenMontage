@@ -471,6 +471,7 @@
         <div class="create-tabs">
           <div class="ctab active" data-mode="template">模板模式</div>
           <div class="ctab" data-mode="script">脚本模式</div>
+          <div class="ctab" data-mode="voice">字幕 / 克隆配音</div>
         </div>
 
         <!-- 模板模式：图生视频（黑盒预设） -->
@@ -550,6 +551,44 @@
                 <div id="script-status" class="st">准备中…</div>
               </div>
               <div style="font-size:12px;color:var(--text-secondary);margin-top:14px">自定义代码渲染需上游 MCP 支持（BFF 开关 CUSTOM_COMPOSITION_ENABLED）。未开启时提交会返回明确提示，不会伪造成功。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 字幕/声音克隆 MVP -->
+        <div class="create-mode" id="mode-voice" style="display:none">
+          <div class="create-row">
+            <div style="flex:1;min-width:0">
+              <div class="step-label">1 · 上传原视频</div>
+              <div class="drop" id="media-video-drop" style="height:130px">
+                <div class="d1">点击上传 MP4 / MOV / WEBM</div>
+                <div class="d2" id="media-video-name">尚未选择视频</div>
+                <input type="file" id="media-video-input" accept="video/mp4,video/quicktime,video/webm" hidden>
+              </div>
+              <div class="step-label">2 · 可选：上传声音样本</div>
+              <div class="drop" id="media-voice-drop" style="height:110px">
+                <div class="d1">克隆配音时上传 MP3 / WAV / M4A</div>
+                <div class="d2" id="media-voice-name">字幕模式无需上传</div>
+                <input type="file" id="media-voice-input" accept="audio/mpeg,audio/wav,audio/x-m4a,audio/mp4" hidden>
+              </div>
+              <div class="step-label">3 · 配音文案</div>
+              <textarea id="media-script" class="opt" style="width:100%;height:130px;box-sizing:border-box;resize:vertical;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft)" placeholder="仅克隆配音模式需要填写，最多 10000 字"></textarea>
+            </div>
+            <div class="panel">
+              <h4>处理方式</h4>
+              <div class="pl">任务类型</div>
+              <select id="media-job-type" class="opt" style="width:100%;box-sizing:border-box;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft)">
+                <option value="caption">自动加字幕</option>
+                <option value="clone">声音克隆 + 配音 + 字幕</option>
+              </select>
+              <label style="display:flex;gap:8px;align-items:flex-start;margin-top:16px;font-size:12px;color:var(--text-secondary)">
+                <input type="checkbox" id="media-consent"> 我确认已获得该声音所有者授权，并同意用于本次声音克隆
+              </label>
+              <button class="btn-primary" id="media-submit" style="margin-top:18px">提交任务</button>
+              <div id="media-progress" style="display:none;margin-top:14px">
+                <div class="track"><div id="media-fill" class="fill"></div></div>
+                <div id="media-status" class="st">准备中…</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1325,6 +1364,98 @@
     });
   }
 
+  // ===== 字幕 / 声音克隆 MVP =====
+  var mediaProjectId = 'frameflow-media-' + Date.now();
+  var mediaVideoAsset = null;
+  var mediaVoiceAsset = null;
+  var mediaVideoInput = document.getElementById('media-video-input');
+  var mediaVoiceInput = document.getElementById('media-voice-input');
+  var mediaSubmit = document.getElementById('media-submit');
+  var mediaProgress = document.getElementById('media-progress');
+  var mediaFill = document.getElementById('media-fill');
+  var mediaStatus = document.getElementById('media-status');
+
+  function setMediaProgress(pct, text){
+    if (mediaProgress) mediaProgress.style.display = 'block';
+    if (mediaFill && typeof pct === 'number') mediaFill.style.width = pct + '%';
+    if (mediaStatus) mediaStatus.textContent = text;
+  }
+
+  async function uploadMediaFile(file, labelEl){
+    setMediaProgress(0, '正在上传 ' + file.name + '…');
+    var result = await window.FFMCP.chunkUpload(file, {
+      projectId: mediaProjectId,
+      onProgress: function(p){ setMediaProgress(p, '正在上传 ' + file.name + ' · ' + p + '%'); }
+    });
+    var asset = result && (result.asset || (result.data && result.data.asset));
+    if (!asset || !asset.id) throw new Error('上传完成但未返回 asset_id');
+    if (labelEl) labelEl.textContent = '已上传：' + file.name;
+    setMediaProgress(100, file.name + ' 上传完成');
+    return asset;
+  }
+
+  var mediaVideoDrop = document.getElementById('media-video-drop');
+  var mediaVoiceDrop = document.getElementById('media-voice-drop');
+  if (mediaVideoDrop && mediaVideoInput){
+    mediaVideoDrop.addEventListener('click', function(){ mediaVideoInput.click(); });
+    mediaVideoInput.addEventListener('change', async function(){
+      if (!mediaVideoInput.files || !mediaVideoInput.files[0]) return;
+      try { mediaVideoAsset = await uploadMediaFile(mediaVideoInput.files[0], document.getElementById('media-video-name')); }
+      catch(err){ setMediaProgress(null, '视频上传失败：' + err.message); }
+    });
+  }
+  if (mediaVoiceDrop && mediaVoiceInput){
+    mediaVoiceDrop.addEventListener('click', function(){ mediaVoiceInput.click(); });
+    mediaVoiceInput.addEventListener('change', async function(){
+      if (!mediaVoiceInput.files || !mediaVoiceInput.files[0]) return;
+      try { mediaVoiceAsset = await uploadMediaFile(mediaVoiceInput.files[0], document.getElementById('media-voice-name')); }
+      catch(err){ setMediaProgress(null, '声音样本上传失败：' + err.message); }
+    });
+  }
+  if (mediaSubmit){
+    mediaSubmit.addEventListener('click', async function(){
+      var kind = document.getElementById('media-job-type').value;
+      var script = document.getElementById('media-script').value || '';
+      if (!mediaVideoAsset){ setMediaProgress(null, '请先上传原视频'); return; }
+      if (kind === 'clone' && !mediaVoiceAsset){ setMediaProgress(null, '克隆配音需要声音样本'); return; }
+      if (kind === 'clone' && !script.trim()){ setMediaProgress(null, '克隆配音需要填写文案'); return; }
+      var consent = document.getElementById('media-consent').checked;
+      if (kind === 'clone' && !consent){ setMediaProgress(null, '请确认已获得声音所有者授权'); return; }
+      mediaSubmit.disabled = true;
+      setMediaProgress(0, '正在提交任务…');
+      try {
+        var result = kind === 'clone'
+          ? await window.FFMCP.createClonedVoiceVideo({
+              projectId:mediaProjectId, videoAssetId:mediaVideoAsset.id,
+              voiceSampleAssetId:mediaVoiceAsset.id, script:script,
+              voiceConsent:consent, subtitle:true
+            })
+          : await window.FFMCP.createCaptionedVideo({
+              projectId:mediaProjectId, videoAssetId:mediaVideoAsset.id
+            });
+        var jobId = result && (result.render_job_id || result.job_id);
+        if (!jobId || result.success === false) throw new Error((result && result.error) || '任务提交失败');
+        setMediaProgress(0, '任务已提交：' + jobId);
+        loadQueue();
+        window.FFMCP.subscribeProgress(jobId, function(ev){
+          var pct = ev && (ev.percent || ev.progress || 0);
+          if (ev && ev.status === 'published'){
+            setMediaProgress(100, '处理完成 · 分享链接：' + (ev.share_url || '请在队列查看'));
+            mediaSubmit.disabled = false;
+          } else if (ev && ev.status === 'failed'){
+            setMediaProgress(pct, '处理失败：' + (ev.error || '未知错误'));
+            mediaSubmit.disabled = false;
+          } else {
+            setMediaProgress(pct, (ev && (ev.message || ev.phase || ev.status)) || '处理中…');
+          }
+        }, function(){ setMediaProgress(null, '实时进度中断，请在任务队列查看'); mediaSubmit.disabled = false; });
+      } catch(err){
+        setMediaProgress(null, '提交失败：' + err.message);
+        mediaSubmit.disabled = false;
+      }
+    });
+  }
+
   // ===== 创建页：脚本模式（Monaco 编辑器 + 自定义 Remotion 合成）=====
   var ffMonaco = null;
   var scriptUploaded = 0;
@@ -1387,6 +1518,7 @@
       var mode = tab.getAttribute('data-mode');
       document.getElementById('mode-template').style.display = mode === 'template' ? 'block' : 'none';
       document.getElementById('mode-script').style.display = mode === 'script' ? 'block' : 'none';
+      document.getElementById('mode-voice').style.display = mode === 'voice' ? 'block' : 'none';
       if (mode === 'script') initMonaco();
     });
   });

@@ -1736,7 +1736,17 @@ class VideoCompose(BaseTool):
         """
         if not source or source.startswith(("http://", "https://", "data:")):
             return source
-        resolved = Path(source.replace("file://", ""))
+        if source.startswith("file:"):
+            from urllib.parse import urlparse
+            from urllib.request import url2pathname
+
+            parsed = urlparse(source)
+            uri_path = url2pathname(parsed.path)
+            if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+                uri_path = f"//{parsed.netloc}{uri_path}"
+            resolved = Path(uri_path)
+        else:
+            resolved = Path(source)
         if not resolved.exists():
             return source
         import hashlib

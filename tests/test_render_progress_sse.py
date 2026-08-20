@@ -12,6 +12,7 @@ body_iterator 取前几帧后 aclose()。
 import sys
 import threading
 import time
+import json
 
 sys.path.insert(0, ".")
 
@@ -78,3 +79,33 @@ def test_sse_delivers_published_event():
         assert captured[-1].get("share_url") == "https://share.weiyun.com/xyz"
     finally:
         unsubscribe(job_id, q)
+
+
+def test_sse_snapshot_supports_media_jobs(monkeypatch):
+    monkeypatch.setattr(
+        mcp_server,
+        "get_media_job",
+        lambda job_id: {
+            "status": "published",
+            "current_stage": "published",
+            "progress": 100,
+            "result_url": "https://share.weiyun.com/media",
+            "video_path": "output/final.mp4",
+            "job_type": "captioned_video",
+        } if job_id == "media-job" else None,
+    )
+
+    async def run():
+        resp = await mcp_server.render_progress_sse(_make_request("media-job"))
+        iterator = resp.body_iterator
+        try:
+            frame = await iterator.__anext__()
+        finally:
+            await iterator.aclose()
+        return json.loads(frame.removeprefix("data: ").strip())
+
+    snapshot = anyio.run(run)
+    assert snapshot["status"] == "published"
+    assert snapshot["percent"] == 100
+    assert snapshot["share_url"] == "https://share.weiyun.com/media"
+    assert snapshot["job_type"] == "captioned_video"

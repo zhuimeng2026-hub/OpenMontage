@@ -26,6 +26,9 @@ type Handlers struct {
 }
 
 func New(cfg *config.Config, store *mcp.SessionStore, lim limits.Resolver, batches *imagebatch.Store) *Handlers {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	return &Handlers{
 		Cfg:          cfg,
 		Store:        store,
