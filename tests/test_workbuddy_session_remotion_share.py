@@ -22,7 +22,7 @@ def _image(tmp_path, name="one.jpg"):
     return path
 
 
-def _install_fakes(monkeypatch, tmp_path, *, fail_upload=False, fail_share=False):
+def _install_fakes(monkeypatch, tmp_path, *, fail_upload=False, fail_share=False, voice=False, calls=None):
     """Monkeypatch the registry so create_remotion_video_share runs end-to-end
     with instant fake tools. Returns the mcp_server module for polling."""
     import mcp_server
@@ -60,6 +60,35 @@ def _install_fakes(monkeypatch, tmp_path, *, fail_upload=False, fail_share=False
                 return ToolResult(False, error="mock share failure")
             return ToolResult(True, {"short_url": "https://share.weiyun.com/abc"})
 
+    calls = calls if calls is not None else []
+
+    class FakeVoiceClone:
+        def execute(self, inputs):
+            calls.append(("voicebox_voice_clone", inputs))
+            assert inputs["consent"] is True
+            assert Path(inputs["sample_path"]).is_file()
+            return ToolResult(True, {"provider_voice_id": "voice-1"})
+
+    class FakeTTS:
+        def execute(self, inputs):
+            calls.append(("voicebox_tts", inputs))
+            Path(inputs["output_path"]).parent.mkdir(parents=True, exist_ok=True)
+            Path(inputs["output_path"]).write_bytes(b"audio")
+            return ToolResult(True, {"audio_path": inputs["output_path"], "segments": [{"text": "hello", "start": 0, "end": 1}]})
+
+    class FakeMixer:
+        def execute(self, inputs):
+            calls.append(("audio_mixer", inputs))
+            assert inputs["operation"] == "replace_video_audio"
+            Path(inputs["output_path"]).write_bytes(b"revoiced")
+            return ToolResult(True, {"output": inputs["output_path"]})
+
+    class FakeCaption:
+        def execute(self, inputs):
+            calls.append(("remotion_caption_burn", inputs))
+            Path(inputs["output_path"]).write_bytes(b"captioned")
+            return ToolResult(True, {"output": inputs["output_path"]})
+
     # NOTE: the production tool names are underscore-based (weiyun_upload /
     # weiyun_share_link), registered by tools/publishers/* — not the legacy
     # dot-named weiyun.gen_share_link wrapper.
@@ -68,6 +97,13 @@ def _install_fakes(monkeypatch, tmp_path, *, fail_upload=False, fail_share=False
         "weiyun_upload": FakeUpload(),
         "weiyun_share_link": FakeShare(),
     }
+    if voice:
+        tools.update({
+            "voicebox_voice_clone": FakeVoiceClone(),
+            "voicebox_tts": FakeTTS(),
+            "audio_mixer": FakeMixer(),
+            "remotion_caption_burn": FakeCaption(),
+        })
     monkeypatch.setattr(mcp_server.registry, "get", lambda name: tools.get(name))
     return mcp_server
 
@@ -176,6 +212,56 @@ def test_create_share_polls_to_failed_weiyun_upload(monkeypatch, tmp_path):
     assert final["status"] == "failed"
     assert final["stage"] == "weiyun_upload"
     assert final["error"] == "mock upload failure"
+
+
+def test_create_share_rejects_voice_without_consent(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    token = set_mcp_session_id("voice-consent")
+    try:
+        import mcp_server
+
+        result = asyncio.run(mcp_server.create_remotion_video_share(
+            voice_sample_asset_id="voice-1", script="hello", voice_consent=False,
+        ))
+    finally:
+        reset_mcp_session_id(token)
+
+    assert result == {
+        "success": False, "status": "failed", "stage": "consent",
+        "error": "voice_consent=true is required",
+    }
+
+
+def test_create_share_voice_chain_runs_before_upload_and_publishes(monkeypatch, tmp_path):
+    _state_env(monkeypatch, tmp_path)
+    sessions.register_image("voice-workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
+    sessions.register_image("voice-workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "type": "image", "sha256": "y"})
+    audio_path = tmp_path / "projects" / "demo" / "assets" / "voice.wav"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"voice-sample")
+    sessions.register_asset("voice-workflow", "demo", {"id": "voice-1", "path": str(audio_path), "type": "audio", "sha256": "voice"})
+    calls = []
+    mcp_server = _install_fakes(monkeypatch, tmp_path, voice=True, calls=calls)
+    token = set_mcp_session_id("voice-workflow")
+    try:
+        result = asyncio.run(mcp_server.create_remotion_video_share(
+            project_id="demo", voice_sample_asset_id="voice-1", script="hello world",
+            language="zh", subtitle=True, subtitle_style="short_video", voice_consent=True,
+        ))
+        assert result["status"] == "queued"
+        final = asyncio.run(_poll_until(mcp_server, result["render_job_id"]))
+    finally:
+        reset_mcp_session_id(token)
+
+    assert final["success"] is True
+    assert final["status"] == "published"
+    assert final["share_url"] == "https://share.weiyun.com/abc"
+    assert [name for name, _ in calls] == [
+        "voicebox_voice_clone", "voicebox_tts", "audio_mixer", "remotion_caption_burn",
+    ]
+    assert calls[0][1]["sample_path"] == str(audio_path)
+    assert calls[1][1]["voice_id"] == "voice-1"
+    assert calls[3][1]["words_per_page"] == 4
 
 
 def test_get_render_status_unknown_job(monkeypatch, tmp_path):
