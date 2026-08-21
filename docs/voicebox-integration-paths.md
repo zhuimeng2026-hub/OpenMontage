@@ -260,6 +260,51 @@ caller --[Bearer MCP_API_TOKEN]--> :8900/mcp/* (BearerTokenAuthMiddleware)
 | SSE 长连 | 自己控制超时 | **不暴露 SSE** | **保真透传** |
 | 失败时 fallback | 工具层 + tts_selector 双层 | 双层（同左） | 没有 fallback 注入层 —— 客户端自己处理 |
 
+### 6.1 性能取舍
+
+> **TL;DR：** 长生成（TTS 几十秒到几分钟）差异 < 1%，可忽略；真正显眼的差别在 **SSE 流式**、**远端调用**、**高并发短调用** 这三种场景。
+
+#### 网络跳数 & 框架开销
+
+| 项 | A · REST | B1 · MCP 包装 | B2 · MCP 反向代理 |
+|---|---|---|---|
+| 网络跳数 | **1**（Python → :17493） | **2**（:8900 → :17493） | **2**（:8900 → :17493） |
+| JSON-RPC parse | 无 | FastMCP 加/解一层 | FastMCP 加/解一层 |
+| 鉴权中间件 | 无（header 直写） | BearerTokenAuthMiddleware 每请求校验 | 同左 |
+| ASGI / proxy 层 | 无 | 无 | `_VoiceboxProxyHandler` (`aiter_raw` 流式) |
+| 并发模型 | **阻塞** `requests.post()` | async + `asyncio.to_thread(BaseTool.execute)` | async + httpx 流式 |
+
+直答："MCP 是不是只是包装了一层所以没区别？" —— **是的，差的就是这一层**。对 dominant 负载无感，对边角负载有感。
+
+#### 真正显眼的三个差别
+
+1. **B1 不暴露 SSE —— 语义层面的"性能差"。**
+   - A: 一次 `voicebox_tts.execute()` 内 `POST /generate` → 阻塞读 SSE 状态流 → `GET /audio` 落盘。一条调用串完成。
+   - B1: `voicebox_tts` MCP 调只返 `generation_id`，客户端要再开一轮 MCP / REST 调来轮询。等于**两次交互 + 客户端持状态**。
+   - B2: `voicebox.speak` 端点透传 SSE，跟 A 等价。
+   - 影响：客户端实现 B1 时要自管轮询 + 超时 + 漏接补偿；A / B2 不需要。
+
+2. **远端调用 —— B 的 2-跳是真痛点。**
+   - 本地 loopback 三条路径一致（亚毫秒）。
+   - 远端（比如 voicebox 在另一台机 / VPC）—— B 路径的 :8900 中间一跳带来：第二次 TLS 握手、keepalive 重建、多一次失败点。**B1 比 B2 更糟**：它还要再走 BaseTool 一层，又多一次阻塞。
+   - 远端 + 想用 MCP 鉴权？首选 **A 直接连 voicebox**（`.mcp.json` 不强制过 :8900），保留 MCP 语义、但少一跳。远端 + 想继续把鉴权收敛到 :8900？走 B2。
+
+3. **并发短调用（A 的短板）。**
+   - A 是阻塞的 `requests.post`：多并发靠开多线程 / 进程。
+   - B1 / B2 是 async（uvicorn + asyncio 协作）：并发友好。
+   - 阈值：voicebox 工作负载几乎不会到 ~50 RPS，所以这个差别通常不触发。**真触发它**的情景：上游 agent 在做"批量调 list_profiles 检查 / health probe"。
+
+#### 不该挑路径的真实原因
+
+**性能不是选路径的理由**。真正决定性的轴是 §5 那张决策表的 caller 身份、鉴权归属、需要的 tool 命名。性能只在两个场景值得念：
+
+| 真该按性能挑的场景 | 选 |
+|---|---|
+| 客户端跑在远端、传百 KB~几 MB wav（clone 上传） | **A 直连 voicebox**（少一跳 + 无 :8900 这一跳故障点） |
+| 需要实时 SSE 流式推进（UI 波形 / 逐字朗读） | **B2**（不是 B1；B2 才能拿到完整 SSE 流） |
+
+其他情况：性能是可忽略项；选 §5 决策表里最匹配的就好。
+
 ---
 
 ## 7. 自检 / 排障 check-list
