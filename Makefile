@@ -6,7 +6,7 @@ PIP = $(RUN_PYTHON) -m pip
 
 .DEFAULT_GOAL := setup
 
-.PHONY: setup install install-dev install-gpu test test-contracts lint clean preflight demo demo-list hyperframes-doctor hyperframes-warm venv ensure-venv
+.PHONY: setup install install-dev install-gpu test test-contracts test-integration lint clean preflight demo demo-list hyperframes-doctor hyperframes-warm venv ensure-venv
 
 # ---- Virtual environment ----
 
@@ -99,6 +99,13 @@ test: ensure-venv
 
 test-contracts: ensure-venv
 	$(RUN_PYTHON) -m pytest tests/contracts/ -v
+
+# Voicebox / live-MCP integration tests. Skip gracefully when voicebox or
+# OpenMontage's :8900 aren't running, so `make test` stays green in CI.
+# Override VOICEBOX_TEST_TTS_TIMEOUT_S to give the TTS roundtrip more time
+# on cold voicebox installs (Qwen 1.7B model load alone can take 60-180s).
+test-integration: ensure-venv
+	$(RUN_PYTHON) -m pytest tests/integration/ -v
 
 # ---- Utilities ----
 

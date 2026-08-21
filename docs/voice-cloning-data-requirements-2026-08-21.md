@@ -14,27 +14,42 @@
 
 | Tier | Total audio | Sample shape | Quality | When to use |
 |---|---|---|---|---|
-| **A. Works** | ≥ 10 s | 1 short clip | Recognizable as "that voice"; mild machine flavor | Validate the pipeline; throwaway PoC |
-| **B. Production** | 1-3 min | 3-5 clips, 15-60 s each | Tonal match + natural prosody; 90 % of uses covered | Real narration, social clips |
-| **C. Hi-fi** | 5-10 min | 8-15 clips, varied prosody | Hard to tell from real speaker | Hero voice for long-form / commercial |
+| **A. Works** | ≥ 30 s | 1 short clip (10-30 s) | Recognizable as "that voice"; mild machine flavor | Validate the pipeline; throwaway PoC |
+| **B. Production** | 1-3 min | 3-5 clips, **15-30 s each** | Tonal match + natural prosody; 90 % of uses covered | Real narration, social clips |
+| **C. Hi-fi** | 5-10 min | 8-15 clips, **15-30 s each**, varied prosody | Hard to to hard to tell from real speaker | Hero voice for long-form / commercial |
 
-Hard floors:
-- **30 s total** is the practical floor for "clone-like" output. Below 10 s,
-  expect uncanny-valley artifacts regardless of engine.
+Hard floors and ceilings:
+
+- **Each sample: 10-30 seconds.** Voicebox rejects samples over 30 s
+  (`400 Audio too long (maximum 30.0 seconds)`). Anything under 10 s is
+  technically accepted but yields a thin, "machine-flavored" clone.
+- **Total: ≥ 30 s** is the practical floor for "clone-like" output.
+  Total 1-3 min is the production sweet spot.
 - **5 s** will technically run but is marketing-tier — output sounds like the
   speaker with a head cold.
 
+> **Update 2026-08-21:** The earlier version of this doc said "30 s total"
+> was the per-sample minimum. That was wrong — Voicebox enforces
+> **30 s per sample as a MAXIMUM**, not a minimum. The previous text has
+> been corrected and the per-engine table clarified to mean per-sample
+> duration.
+
 ## Per-Engine Sweet Spots (this Voicebox instance)
+
+> All durations in this table are **per sample**. Voicebox caps each
+> uploaded file at 30 s, so "30-60 s" means "each clip is 30-60 s" — you'd
+> send 2-3 such clips as separate `audio_paths` entries. Total dataset
+> follows the tier table above.
 
 Default is `qwen` (Qwen3-TTS instant clone). Switch via the `engine` arg.
 
-| Engine | Min viable | Sweet spot | Personality |
+| Engine | Per-sample min viable | Per-sample sweet spot | Personality |
 |---|---|---|---|
-| **qwen** | 3-10 s | 30-60 s | Fastest convergence on small datasets; 16 kHz clean |
-| **chatterbox** | 10-20 s | 1-3 min | Most tolerant of background noise; good for "phone interview" sources |
-| **chatterbox_turbo** | 10-20 s | 1-3 min | Same as chatterbox, faster inference |
-| **luxtts** | 30 s | 2-5 min | Neural concatenative — needs more data to stabilize |
-| **tada** | 10-30 s | 1-3 min | Newer; behavior still settling, but competitive on 1 min+ |
+| **qwen** | 3-10 s | 15-30 s | Fastest convergence on small datasets; 16 kHz clean |
+| **chatterbox** | 10-20 s | 20-30 s | Most tolerant of background noise; good for "phone interview" sources |
+| **chatterbox_turbo** | 10-20 s | 20-30 s | Same as chatterbox, faster inference |
+| **luxtts** | 20-30 s | 25-30 s | Neural concatenative — needs more (per-sample) data to stabilize |
+| **tada** | 10-30 s | 20-30 s | Newer; behavior still settling, but competitive on 1 min+ total |
 | **qwen_custom_voice** | n/a | n/a | **Does NOT support cloning** (preset voices only) |
 
 If unsure: stay on `engine="qwen"` until you have a reason to switch.
@@ -58,21 +73,23 @@ Quantity is half. Quality of the samples matters more.
    Missing words, added words, or out-of-order transcripts bias the clone
    back toward the engine's default voice.
 
-## Concrete Recipe (Chinese narration, ~2 min total)
+## Concrete Recipe (Chinese narration, ~165 s total, 5 samples)
 
 ```
-audio_paths[0]:  intro_30s.wav      reference_texts[0]: "开场白逐字内容"
-audio_paths[1]:  main_45s.wav       reference_texts[1]: "主体内容逐字"
-audio_paths[2]:  emotion_30s.wav    reference_texts[2]: "带情绪的句子"
-audio_paths[3]:  rapid_30s.wav      reference_texts[3]: "语速偏快的句子"
-audio_paths[4]:  slow_30s.wav       reference_texts[4]: "语速偏慢的句子"
-                 → ~165 s, 5 samples, covers pace + emotion
+audio_paths[0]:  intro_25s.wav      reference_texts[0]: "开场白逐字内容"
+audio_paths[1]:  main_30s.wav       reference_texts[1]: "主体内容逐字"
+audio_paths[2]:  emotion_25s.wav    reference_texts[2]: "带情绪的句子"
+audio_paths[3]:  rapid_25s.wav      reference_texts[3]: "语速偏快的句子"
+audio_paths[4]:  slow_25s.wav       reference_texts[4]: "语速偏慢的句子"
+                 → 130 s total, 5 samples (each ≤ 30 s)
                  → engine="qwen" (default)
 ```
 
-If you can't record 5 samples, **3 samples of 30-45 s each** is the next
-tier down — still covers pace variety. **Never** ship one sample under 30 s
-unless the deliverable is a joke or a test.
+If you can't record 5 samples, **3 samples of 20-30 s each** is the next
+tier down — still covers pace variety. **Never** ship one sample under
+10 s unless the deliverable is a joke or a test, and **never** send a
+sample longer than 30 s — Voicebox will 400 it before reaching the
+model.
 
 ## Call Signature (MCP :8900)
 
