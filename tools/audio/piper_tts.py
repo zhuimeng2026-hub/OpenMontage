@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -96,9 +97,21 @@ class PiperTTS(BaseTool):
     user_visible_verification = ["Listen to generated audio for intelligibility"]
 
     def get_status(self) -> ToolStatus:
-        if shutil.which("piper"):
+        # Piper's CLI is a console script installed by the piper-tts package.
+        # Checking `shutil.which("piper")` is unreliable on hosts where pyenv
+        # shims come first on PATH: the shim resolves to a Python version
+        # whose site-packages may not contain piper-tts, so `piper` is on
+        # PATH yet the subprocess exits 127 with "command not found".
+        #
+        # Import-checking the package is the canonical "is it installed"
+        # question, and the executable path is recovered by invoking the
+        # same Python via `python -m piper` (see `_generate`). This makes
+        # the status signal honest even when the binary on PATH lies.
+        try:
+            import piper  # noqa: F401
             return ToolStatus.AVAILABLE
-        return ToolStatus.UNAVAILABLE
+        except ImportError:
+            return ToolStatus.UNAVAILABLE
 
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
         return 0.0
@@ -120,9 +133,14 @@ class PiperTTS(BaseTool):
         output_path = Path(inputs.get("output_path", "tts_output.wav"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Invoke `python -m piper` directly so we always hit the same Python
+        # interpreter whose site-packages we just verified import-clean in
+        # `get_status()`. Bypasses PATH resolution (pyenv shims, conda
+        # activation, /usr/local/bin overrides) which otherwise can yield a
+        # different binary that exits 127.
         proc = subprocess.run(
             [
-                "piper",
+                sys.executable, "-m", "piper",
                 "--model", inputs.get("model", "en_US-lessac-medium"),
                 "--speaker", str(inputs.get("speaker_id", 0)),
                 "--length-scale", str(inputs.get("length_scale", 1.0)),
