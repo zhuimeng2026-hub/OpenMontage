@@ -32,8 +32,12 @@ export interface TitledVideoProps {
   [key: string]: unknown;
 }
 
-// Resolve asset path — handle URLs, absolute paths, and public/ relative paths.
-// Mirrors the helper in Explainer.tsx so absolute Windows/Unix paths work.
+// Resolve asset path — pass through URLs/data URIs; everything else routes
+// through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
+// Simplified 2026-08-20: dropped the `file://` + absolute-path branches that
+// leaked through to headless Chrome as "Not allowed to load local resource".
+// Python _STAGEABLE_FIELDS + defensive guard now guarantee only relative
+// paths reach the JS layer.
 function resolveAsset(src: string): string {
   if (
     src.startsWith("http://") ||
@@ -42,11 +46,7 @@ function resolveAsset(src: string): string {
   ) {
     return src;
   }
-  const clean = src.replace(/^file:\/\/\/?/, "");
-  if (clean.startsWith("/") || /^[A-Za-z]:[\\/]/.test(clean)) {
-    return `file:///${clean.replace(/\\/g, "/")}`;
-  }
-  return staticFile(clean);
+  return staticFile(src.replace(/^file:\/\/\/?/, ""));
 }
 
 // ---------------------------------------------------------------------------

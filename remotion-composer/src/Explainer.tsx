@@ -11,23 +11,23 @@ import {
   useVideoConfig,
 } from "remotion";
 
-// Resolve asset path — handle URLs, absolute paths (Windows/Unix), and public/ relative paths
+// Resolve asset path — pass through URLs/data URIs; everything else routes
+// through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
+// Removed 2026-08-20: the previous `file://` + absolute-path branches were a
+// safety net for stale paths that slipped past Python staging. They caused
+// "Not allowed to load local resource" in headless Chrome. The Python
+// _STAGEABLE_FIELDS / defensive-guard layer now guarantees only relative
+// paths reach the JS layer, so we can drop the file:// escape hatch and
+// surface any drift as a clean error before launch.
 function resolveAsset(src: string): string {
-  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) {
+  if (
+    src.startsWith("http://") ||
+    src.startsWith("https://") ||
+    src.startsWith("data:")
+  ) {
     return src;
   }
-  // Already a file:// URI — return it verbatim (only normalize backslashes).
-  // NOTE: keep the leading "/" of an absolute path ("file:///opt/x" is a valid
-  // file URI; stripping it would corrupt the path and route to staticFile).
-  if (src.startsWith("file://")) {
-    return src.replace(/\\/g, "/");
-  }
-  // Absolute paths (Unix: /foo, Windows: C:\foo or C:/foo) — convert to file:// URI
-  // staticFile() only accepts relative paths within public/, so absolute paths must bypass it
-  if (src.startsWith("/") || /^[A-Za-z]:[\\/]/.test(src)) {
-    return `file:///${src.replace(/\\/g, "/")}`;
-  }
-  return staticFile(src);
+  return staticFile(src.replace(/^file:\/\/\/?/, ""));
 }
 import { TextCard } from "./components/TextCard";
 import { StatCard } from "./components/StatCard";

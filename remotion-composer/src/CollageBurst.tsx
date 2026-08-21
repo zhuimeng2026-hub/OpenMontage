@@ -16,13 +16,21 @@ import React from "react";
 const playfairFamily = "Georgia, 'Times New Roman', serif";
 const playfairItalic = "Georgia, 'Times New Roman', serif";
 
+// Resolve asset path — pass through URLs/data URIs; everything else routes
+// through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
+// Simplified 2026-08-20: dropped the `file://` + absolute-path branches that
+// leaked through to headless Chrome as "Not allowed to load local resource".
+// Python _STAGEABLE_FIELDS + defensive guard now guarantee only relative
+// paths reach the JS layer.
 function resolveAsset(src: string): string {
-  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) return src;
-  const clean = src.replace(/^file:\/\/\/?/, "");
-  if (clean.startsWith("/") || /^[A-Za-z]:[\\/]/.test(clean)) {
-    return `file:///${clean.replace(/\\/g, "/")}`;
+  if (
+    src.startsWith("http://") ||
+    src.startsWith("https://") ||
+    src.startsWith("data:")
+  ) {
+    return src;
   }
-  return staticFile(clean);
+  return staticFile(src.replace(/^file:\/\/\/?/, ""));
 }
 
 export type CollageTransition =
