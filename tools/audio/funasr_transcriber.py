@@ -9,14 +9,14 @@ Word timestamp capability depends on the chosen model:
   - paraformer-zh           — sentence-level only (default)
   - paraformer-large        — sentence-level only
   - SenseVoiceSmall         — multi-lingual (zh/en/yue/ja/ko), sentence-level
-  - speech_seaco_paraformer_large_asrnat — **word-level timestamps**
+  - speech_seaco_paraformer_large_asr_nat — **word-level timestamps**
 
 When the chosen model does not provide word-level timestamps, this tool
 falls back to evenly distributing characters across the sentence's time
 range. That is correct enough for subtitle rendering (where the consumer
 groups words into multi-character cues by `max_chars_per_line`) but is NOT
 suitable for word-by-word karaoke highlights — pick
-`speech_seaco_paraformer_large_asrnat` for that.
+`speech_seaco_paraformer_large_asr_nat` for that.
 
 Output contract matches `transcriber.py` (faster-whisper) so the result
 drops straight into `nllb_translator` without for the bilingual pipeline:
@@ -35,7 +35,7 @@ Install:
     # First run downloads the model from ModelScope (~400MB for paraformer-zh)
     # to ~/.cache/modelscope/. To pre-cache offline:
     python -c "from modelscope import snapshot_download; \\
-        snapshot_download('iic/speech_seaco_paraformer_large_asrnat-zh-cn-16k-common-vocab8404-pytorch', \\
+        snapshot_download('iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch', \\
         cache_dir='~/.cache/modelscope')"
 """
 
@@ -70,7 +70,7 @@ _KNOWN_MODELS: dict[str, dict[str, Any]] = {
         "has_word_timestamps": False,
         "languages": ["zh"],
     },
-    "iic/speech_seaco_paraformer_large_asrnat-zh-cn-16k-common-vocab8404-pytorch": {
+    "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch": {
         "label": "seaco-paraformer-large",
         "has_word_timestamps": True,
         "languages": ["zh"],
@@ -132,7 +132,7 @@ class FunASRTranscriber(BaseTool):
                 "description": (
                     "ModelScope model id. Default paraformer-zh is the "
                     "best speed/quality tradeoff for Mandarin. Use "
-                    "speech_seaco_paraformer_large_asrnat for word-level "
+                    "speech_seaco_paraformer_large_asr_nat for word-level "
                     "timestamps."
                 ),
             },
@@ -181,7 +181,7 @@ class FunASRTranscriber(BaseTool):
     user_visible_verification = [
         "Spot-check transcribed text against source audio",
         "Verify sentence boundaries land on natural pauses (VAD active)",
-        "If word timestamps needed, ensure model_size is speech_seaco_paraformer_large_asrnat",
+        "If word timestamps needed, ensure model_size is speech_seaco_paraformer_large_asr_nat",
     ]
 
     # funasr/modelscope are heavy to import; do it lazily and once.
@@ -252,7 +252,7 @@ class FunASRTranscriber(BaseTool):
         Timing is linear by character count — first word starts at `start`,
         last word's end snaps to `end`. Good enough for `subtitle_gen`'s
         cue grouping; NOT accurate enough for per-word karaoke on the
-        source audio (use `speech_seaco_paraformer_large_asrnat` for that).
+        source audio (use `speech_seaco_paraformer_large_asr_nat` for that).
         """
         words: list[dict] = []
         if not sentence or end <= start:
