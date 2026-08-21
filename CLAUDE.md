@@ -40,8 +40,9 @@ make install-gpu          # adds torch/torchaudio/torchvision + diffusers (NVIDI
 
 make test                 # full pytest suite in tests/
 make test-contracts       # tests/contracts/ only — pipeline manifest + artifact schema checks
+make test-integration     # tests/integration/ — voicebox live-MCP roundtrip; skipped gracefully if voicebox / :8900 are down
 
-make preflight            # dump the tool provider menu (configured/available counts per capability)
+make preflight            # dump the full tool provider menu via registry.provider_menu() — firehose; use provider_menu_summary() for human-ready output
 make hyperframes-doctor   # runtime check: node/ffmpeg/npx + `hyperframes doctor`
 make hyperframes-warm     # refresh HyperFrames npx cache to latest
 
