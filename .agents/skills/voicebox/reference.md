@@ -1,5 +1,7 @@
 # Voicebox REST API Reference
 
+> **Before reading endpoints:** [`docs/voicebox-integration-paths.md`](../../../docs/voicebox-integration-paths.md) covers **REST vs MCP access paths** (which port / which entry point to use). This reference only covers the REST contract (`http://127.0.0.1:17493`); for MCP wrappers and the OpenMontage :8900 reverse-proxy see the integration-paths doc.
+
 Endpoint detail for the local Voicebox server (`http://127.0.0.1:17493` by
 default; override with `VOICEBOX_REST_URL`). Every request must include the
 `X-Voicebox-Client-Id` header (the OpenMontage tool sends `openmontage-tts`).

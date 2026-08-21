@@ -66,6 +66,14 @@ Section-level delivery cues:
 - ElevenLabs: use lower `stability` for more variation, moderate `style` for
   expressiveness, `speed` in the provider's `0.7..1.2` range, and keep
   `similarity_boost` high enough to preserve the voice.
+- **Voicebox (local, REST-first)**: route via `voicebox_tts` `BaseTool` (Path A
+  in [`docs/voicebox-integration-paths.md`](../../docs/voicebox-integration-paths.md))
+  — keep `personality=false` unless the profile explicitly opts in. `instruct`
+  accepts natural-language delivery ("speak slowly with a smile") on
+  Qwen3-TTS / Qwen CustomVoice. Paralinguistic tags `[laugh] [sigh] [gasp]`
+  are Chatterbox Turbo only. **Integration-shape / port / MCP-vs-REST
+  questions belong to `docs/voicebox-integration-paths.md`** — this meta
+  skill only covers expressiveness; the paths doc owns transport decisions.
 - Offline/basic voices: rely on punctuation, shorter sentences, and explicit
   segment splitting because provider-level emotion controls may be unavailable.
 

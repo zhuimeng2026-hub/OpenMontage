@@ -1,6 +1,6 @@
 ---
 name: voicebox
-description: Local, privacy-first text-to-speech and voice cloning via the Voicebox REST API (port 17493 by default). Use when narration must stay on-prem, when voice cloning is needed without a paid cloud subscription, when producing multilingual audio (23 languages), or when ElevenLabs/OpenAI/Edge is unavailable, rate-limited, or too expensive. Triggers include voice cloning, on-device TTS, free TTS, "no API key" TTS, multilingual narration, local LLM-backed voice profiles, or any audio synthesis task where privacy/locality matters more than cloud polish.
+description: Local, privacy-first text-to-speech and voice cloning via the Voicebox REST API (port 17493 by default). Use when narration must stay on-prem, when voice cloning is needed without a paid cloud subscription, when producing multilingual audio (23 languages), or when ElevenLabs/OpenAI/Edge is unavailable, rate-limited, or too expensive. Triggers include voice cloning, on-device TTS, free TTS, "no API key" TTS, multilingual narration, local LLM-backed voice profiles, or any audio synthesis task where privacy/locality matters more than cloud polish. Also use when the question is "REST vs MCP for voicebox", "how to wire voicebox into OpenMontage", "should voicebox run via :8900 or :17493", "voicebox_speak vs voicebox_tts", or any voicebox integration-path / access-shape decision — the `voicebox` skill is the entry point and the integration paths doc (linked below) owns the path comparison.
 ---
 
 # Voicebox (Local TTS + Voice Cloning)
@@ -172,3 +172,10 @@ export VOICEBOX_REST_URL=http://voicebox.internal:17493
 
 For full API detail (every endpoint, request/response shape, status codes,
 curl examples), see [reference.md](reference.md).
+
+## See Also
+
+- [`docs/voicebox-integration-paths.md`](../../../docs/voicebox-integration-paths.md) — **REST vs MCP integration paths (REST A / MCP wrapper B1 / MCP reverse-proxy B2)**, decision table by caller, failure modes, performance tradeoffs. **Read this first** when the question is "how do I integrate voicebox" or "which path should I pick" rather than "what is voicebox".
+- [`docs/voicebox-prerequisites.md`](../../../docs/voicebox-prerequisites.md) — HF proxy, model weights, cache layout. Required regardless of integration path.
+- [`docs/voicebox-installation-pitfalls.md`](../../../docs/voicebox-installation-pitfalls.md) — Common installer footguns.
+- [`docs/openmontage-integration.md`](../../../docs/openmontage-integration.md) — *Direction* (who calls whom): Direction A/B/C. Complementary to the integration-paths doc, which covers *access shape*.
