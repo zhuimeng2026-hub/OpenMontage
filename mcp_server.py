@@ -561,6 +561,151 @@ def get_provider_menu() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Subtitle & Voice Convenience Wrappers
+#
+# These are domain-flavored entry points over the underlying tools
+# (`video_compose`, `elevenlabs_tts`). They keep the MCP surface small and
+# give external clients a vocabulary tied to the user-visible feature instead
+# of the internal `execute_tool(tool_name="...", inputs={...})` envelope.
+#
+# Both still go through the registry, so all governance (cost tracking,
+# review hooks, decision log) applies the same as for any other tool call.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def burn_subtitles(
+    input_path: str,
+    subtitle_path: str,
+    output_path: Optional[str] = None,
+    subtitle_style: Optional[dict[str, Any]] = None,
+    codec: str = "libx264",
+    crf: int = 23,
+) -> ExecuteResult:
+    """Burn a subtitle file (.srt / .ass / .vtt) into a video.
+
+    Thin wrapper over `video_compose` with `operation=burn_subtitles`. Uses
+    FFmpeg's `subtitles=` filter; codec defaults to `libx264` so the result
+    is widely playable. Audio is copied losslessly (no re-encode).
+    """
+    tool = registry.get("video_compose")
+    if tool is None:
+        return ExecuteResult(success=False, error="video_compose tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "burn_subtitles",
+        "input_path": input_path,
+        "subtitle_path": subtitle_path,
+        "codec": codec,
+        "crf": crf,
+    }
+    if output_path:
+        inputs["output_path"] = output_path
+    if subtitle_style:
+        inputs["subtitle_style"] = subtitle_style
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"burn_subtitles failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def clone_voice(
+    name: str,
+    audio_paths: list[str],
+    description: Optional[str] = None,
+    labels: Optional[dict[str, Any]] = None,
+) -> ExecuteResult:
+    """Instant-clone a voice on ElevenLabs from 1+ audio sample files.
+
+    Uploads the samples to ElevenLabs `/v1/voices/add` and returns the new
+    `voice_id`. Use that `voice_id` with `elevenlabs_tts` `text_to_speech`
+    to generate narration in the cloned voice.
+
+    Recommended total sample duration >= 60 seconds for a usable clone.
+    Requires ELEVENLABS_API_KEY with Instant Voice Cloning enabled on the
+    account.
+    """
+    tool = registry.get("elevenlabs_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="elevenlabs_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "clone_voice",
+        "name": name,
+        "audio_paths": audio_paths,
+    }
+    if description:
+        inputs["description"] = description
+    if labels:
+        inputs["labels"] = labels
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"clone_voice failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def list_cloned_voices(
+    include_library: bool = False,
+) -> ExecuteResult:
+    """List voices owned by this ElevenLabs account (cloned + custom).
+
+    By default returns only account-owned voices (`show_only_owned=true`).
+    Set `include_library=True` to also include the curated voice library.
+    Each entry has `voice_id`, `name`, `category`, and `is_cloned` flag.
+    """
+    tool = registry.get("elevenlabs_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="elevenlabs_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "list_cloned_voices",
+        "include_library": include_library,
+    }
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"list_cloned_voices failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Execution tools
 # ---------------------------------------------------------------------------
 
@@ -833,6 +978,77 @@ async def get_session_assets() -> dict[str, Any]:
     return {"success": True, "assets": assets}
 
 
+def _ensure_governance_fields(
+    edit_decisions: dict[str, Any],
+    *,
+    default_renderer_family: Optional[str],
+    script_id: Optional[str],
+    delivery_promise_override: Optional[dict] = None,
+) -> None:
+    """Guarantee edit_decisions carries renderer_family + metadata.delivery_promise.
+
+    Mutates edit_decisions in place. Idempotent — never overwrites caller-set
+    values. Required because ``video_compose._pre_compose_validation`` BLOCKS
+    the render when ``renderer_family`` is missing, and silently skips the
+    proposal→compose delivery-promise contract when ``metadata.delivery_promise``
+    is absent. This is the single construction point for ``edit_decisions`` in
+    the BFF/MCP pipeline, so we guarantee the contract here.
+
+    Why these defaults:
+      - ``renderer_family="animation-first"`` matches ``script_families[
+        "photo-ken-burns"]`` (the default script_id) and is a legal value in
+        ``tools/video/video_compose.py::RENDERER_FAMILY_MAP``.
+      - ``motion_required=False`` is passed explicitly to ``classify_from_brief``
+        because image-batch / template-batch inputs are stills; without this the
+        classifier outputs ``MOTION_LED`` and ``validate_cuts`` BLOCKS on the
+        motion-ratio rule.
+    """
+    # renderer_family: keep existing if set, else default.
+    existing_rf = edit_decisions.get("renderer_family")
+    if not existing_rf or not isinstance(existing_rf, str):
+        edit_decisions["renderer_family"] = default_renderer_family or "animation-first"
+
+    # metadata.delivery_promise: keep existing if set.
+    metadata = edit_decisions.setdefault("metadata", {})
+    existing_dp = metadata.get("delivery_promise") or edit_decisions.get("delivery_promise")
+    if existing_dp:
+        return
+    if delivery_promise_override:
+        metadata["delivery_promise"] = delivery_promise_override
+        return
+
+    pipeline_for_script = {
+        "photo-ken-burns": "cinematic",
+        "cinematic-montage": "cinematic",
+        "ecommerce-product-demo": "hybrid",
+    }
+    pipeline_type = pipeline_for_script.get(script_id) or "hybrid"
+    try:
+        from lib.delivery_promise import classify_from_brief
+        promise = classify_from_brief(
+            pipeline_type,
+            {
+                # image-only inputs — never promise motion-required delivery.
+                "motion_required": False,
+                "has_footage": False,
+                "tone": "corporate",
+                "quality": "presentable",
+            },
+        )
+        metadata["delivery_promise"] = promise.to_dict()
+    except Exception as exc:  # noqa: BLE001 — never block dispatch on defaulting
+        # Last-resort literal default so the field is at least non-null.
+        metadata["delivery_promise"] = {
+            "promise_type": "hybrid",
+            "motion_required": False,
+            "source_required": False,
+            "tone_mode": "corporate",
+            "quality_floor": "presentable",
+            "approved_fallback": None,
+        }
+        _log.warning("default delivery_promise fallback used (classify failed: %s)", exc)
+
+
 @mcp.tool()
 async def create_remotion_video_share(
     project_id: Optional[str] = None,
@@ -842,6 +1058,7 @@ async def create_remotion_video_share(
     title: Optional[str] = None,
     code: Optional[str] = None,
     queue_owner_id: Optional[str] = None,
+    delivery_promise_override: Optional[dict] = None,
 ) -> dict[str, Any]:
     """Generate and share a Remotion photo video from images in this MCP session.
 
@@ -965,6 +1182,16 @@ async def create_remotion_video_share(
                 "renderer_family": renderer_family, "composition_mode": "templated",
                 "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "targetDurationSeconds": duration * len(safe_assets), "compose_target": {"width": width, "height": height, "fit": "cover"}},
             }
+        # Governance contract: edit_decisions MUST carry renderer_family and
+        # metadata.delivery_promise before dispatching _run_render_job, otherwise
+        # video_compose._pre_compose_validation BLOCKS the render.
+        # See _ensure_governance_fields docstring for default-field rationale.
+        _ensure_governance_fields(
+            edit_decisions,
+            default_renderer_family=renderer_family,
+            script_id=script_id if not code else None,
+            delivery_promise_override=delivery_promise_override,
+        )
         if script_id == "ecommerce-product-demo" and not code:
             if len(safe_assets) < 4:
                 raise ValueError("ecommerce-product-demo requires at least 4 uploaded images")
@@ -1051,6 +1278,16 @@ def _run_render_job(
     report progress. Mirrors the synchronous pipeline that previously blocked
     the MCP call.
     """
+    # Defense-in-depth: even for jobs persisted before the governance fix,
+    # guarantee edit_decisions carries renderer_family and delivery_promise
+    # before video_compose's pre-compose validation runs. This catches jobs
+    # restored from .mcp_jobs.json by _drain_queued_jobs after a server restart.
+    _ensure_governance_fields(
+        edit_decisions,
+        default_renderer_family=edit_decisions.get("renderer_family"),
+        script_id=edit_decisions.get("metadata", {}).get("script_id"),
+        delivery_promise_override=None,
+    )
     async def _worker() -> None:
         set_mcp_session_id(sid)
         started = time.monotonic()
