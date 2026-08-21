@@ -627,6 +627,8 @@ async def clone_voice(
     audio_paths: list[str],
     description: Optional[str] = None,
     engine: Optional[str] = "qwen",
+    reference_texts: Optional[list[str]] = None,
+    reference_text: Optional[str] = None,
 ) -> ExecuteResult:
     """Create a cloned voice profile via the local Voicebox service.
 
@@ -641,6 +643,11 @@ async def clone_voice(
 
     Recommended total sample duration >= 30 seconds for a usable Qwen3-TTS
     clone. Returns the new `profile_id` for use with voicebox text-to-speech.
+
+    Voicebox requires each audio sample to have a matching transcript
+    (`reference_texts` — one entry per audio_paths entry, in order). If you
+    don't have per-sample transcripts, pass `reference_text` to apply the
+    same transcript to every sample (low-quality fallback).
     """
     tool = registry.get("voicebox_tts")
     if tool is None:
@@ -654,6 +661,10 @@ async def clone_voice(
     }
     if description:
         inputs["description"] = description
+    if reference_texts is not None:
+        inputs["reference_texts"] = reference_texts
+    if reference_text is not None:
+        inputs["reference_text"] = reference_text
 
     ctx = contextvars.copy_context()
     try:
