@@ -1,8 +1,20 @@
 """Capability-level text-to-speech selector that chooses among provider tools.
 
-Provider discovery is automatic — any BaseTool with capability="tts"
-is picked up from the registry.  Adding a new TTS provider requires only creating
-the tool file in tools/audio/; no changes to this selector are needed.
+Provider discovery is automatic -- any BaseTool with capability="tts"
+is picked up from the registry. Adding a cloud provider (ElevenLabs,
+OpenAI, DashScope, Doubao, Google, Edge) usually needs no changes here.
+
+The Voicebox local TTS + voice-cloning provider IS auto-discovered, but it
+exposes fields that don't exist on the cloud providers (profile_id, engine
+override, model_size, instruct, personality, seed) plus its own operations
+(clone_voice, list_cloned_voices). Those are passed through to whichever
+provider is selected; they're declared here so MCP / agent callers can
+discover them in the schema rather than reading every provider's docs.
+
+Selection is driven by lib.scoring.rank_providers: voicebox naturally wins
+when intent mentions cloning/privacy/local, and on cost (free) and latency
+(LOCAL runtime). Callers can force a specific provider via
+preferred_provider="voicebox" / "elevenlabs" / etc.
 """
 
 from __future__ import annotations
@@ -14,13 +26,13 @@ from tools.base_tool import BaseTool, ToolResult, ToolRuntime, ToolStability, To
 
 class TTSSelector(BaseTool):
     name = "tts_selector"
-    version = "0.2.0"
+    version = "0.3.0"
     tier = ToolTier.VOICE
     capability = "tts"
     provider = "selector"
     stability = ToolStability.BETA
     runtime = ToolRuntime.HYBRID
-    agent_skills = ["text-to-speech", "elevenlabs", "openai-docs"]
+    agent_skills = ["text-to-speech", "elevenlabs", "openai-docs", "voicebox"]
 
     capabilities = [
         "text_to_speech",
@@ -118,15 +130,73 @@ class TTSSelector(BaseTool):
                 "description": "Provider name or 'auto'. Valid values are discovered at runtime from the registry.",
                 "default": "auto",
             },
+            # ---- Voicebox passthrough fields ----
+            # Voicebox uses profile_id (its "voice_id" equivalent) and exposes
+            # engine / model_size / instruct / personality / seed. Declared
+            # here so MCP / agent callers see them in the schema; each
+            # provider that doesn't recognize a field will simply ignore it.
+            "profile_id": {
+                "type": "string",
+                "description": (
+                    "Voicebox voice profile id (operation=text_to_speech with "
+                    "the voicebox provider). Returned by clone_voice or "
+                    "list_cloned_voices. Other providers ignore this field."
+                ),
+            },
+            "engine": {
+                "type": "string",
+                "enum": [
+                    "qwen", "qwen_custom_voice", "luxtts",
+                    "chatterbox", "chatterbox_turbo", "tada", "kokoro",
+                ],
+                "description": (
+                    "Voicebox TTS engine override. Other providers ignore."
+                ),
+            },
+            "model_size": {
+                "type": "string",
+                "description": (
+                    "Voicebox engine-specific model size (e.g. Qwen3-TTS '0.6B' "
+                    "or '1.7B'). Other providers ignore."
+                ),
+            },
+            "instruct": {
+                "type": "string",
+                "description": (
+                    "Voicebox natural-language delivery instruction (Qwen3-TTS / "
+                    "Qwen CustomVoice only, e.g. 'speak slowly with a smile'). "
+                    "Other providers ignore. Distinct from ElevenLabs-shaped "
+                    "`stability`/`style`/`similarity_boost`."
+                ),
+            },
+            "personality": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Voicebox only: when true AND the profile has a personality "
+                    "prompt, voicebox rewrites the text in-character via its "
+                    "bundled local LLM before TTS."
+                ),
+            },
+            "seed": {
+                "type": "integer",
+                "description": "Voicebox optional seed for reproducibility.",
+            },
             "allowed_providers": {
                 "type": "array",
                 "items": {"type": "string"},
             },
             "operation": {
                 "type": "string",
-                "enum": ["generate", "rank"],
+                "enum": ["generate", "rank", "clone_voice", "list_cloned_voices"],
                 "default": "generate",
-                "description": "Operation mode. 'rank' returns scored provider rankings without generating.",
+                "description": (
+                    "Operation mode. 'generate' (default) synthesizes speech. "
+                    "'rank' returns scored provider rankings without generating. "
+                    "'clone_voice' and 'list_cloned_voices' are voicebox-specific "
+                    "operations and are routed only when voicebox is selected; "
+                    "other providers will return an unknown-operation error."
+                ),
             },
             "output_path": {"type": "string"},
         },
