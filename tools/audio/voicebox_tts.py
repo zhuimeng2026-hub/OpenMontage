@@ -539,12 +539,17 @@ class VoiceboxTTS(BaseTool):
                         return {"ok": False, "status": "timeout", "error": f"timeout after {timeout_s}s"}
                     if not raw:
                         continue
-                    # SSE lines look like: "data: {json}"
-                    if not raw.startswith("data:"):
+                    # SSE lines look like: b"data: {json}".
+                    # `resp.iter_lines()` yields bytes; comparing against a
+                    # str literal raises `TypeError: startswith first arg
+                    # must be bytes or a tuple of bytes, not str`. Compare
+                    # against bytes throughout and let json.loads accept the
+                    # bytes payload directly.
+                    if not raw.startswith(b"data:"):
                         continue
-                    payload_str = raw[len("data:"):].strip()
+                    payload_bytes = raw[len(b"data:"):].strip()
                     try:
-                        payload = json.loads(payload_str)
+                        payload = json.loads(payload_bytes)
                     except json.JSONDecodeError:
                         continue
                     last_status = payload.get("status") or last_status
