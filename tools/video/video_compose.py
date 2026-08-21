@@ -1585,22 +1585,53 @@ class VideoCompose(BaseTool):
             # an empty `code` and renders an error screen instead of the video.
             props = self._normalize_custom_composition_props(composition_data, staged_images)
 
-        for idx, cut in enumerate(props.get("cuts", [])):
-            # cuts[].source (Ken Burns / still) + background image/video layers
-            for field in ("source", "backgroundImage", "backgroundVideo"):
-                if cut.get(field):
-                    cut[field] = self._stage_remotion_asset(cut[field], idx, staged_dir)
-            # anime_scene / collage scenes: images[]
-            if cut.get("images"):
-                cut["images"] = [
-                    self._stage_remotion_asset(img, idx, staged_dir)
-                    for img in cut["images"]
-                ]
+        # --- Generic local-resource staging loop (defense-in-depth) ---
+        # Single declarative pass over _STAGEABLE_FIELDS so adding a new
+        # local-resource field is one tuple entry instead of editing scattered
+        # if-branches. See /root/.claude/plans/shimmering-cooking-truffle.md.
+        def _stage_one(parent: dict, key: str, idx: int) -> None:
+            if not isinstance(parent, dict):
+                return
+            val = parent.get(key)
+            if val:
+                parent[key] = self._stage_remotion_asset(val, idx, staged_dir)
+
+        for parent_key, field_key, idx in _STAGEABLE_FIELDS:
+            if not parent_key:
+                # Sentinel: field on the props root (e.g. `videoSrc` for
+                # TitledVideo / LyricOverlay / TalkingHead).
+                _stage_one(props, field_key, idx)
+                continue
+            container = props.get(parent_key)
+            if isinstance(container, list):
+                for item in container:
+                    _stage_one(item, field_key, idx)
+            elif isinstance(container, dict):
+                _stage_one(container, field_key, idx)
+
+        # Audio nested paths: audio.{narration|music}.src (explainer family)
+        # plus CinematicRenderer's top-level soundtrack / music.
+        audio_block = props.get("audio")
+        if isinstance(audio_block, dict):
+            for layer, idx in _STAGEABLE_AUDIO_FIELDS:
+                if layer in ("narration", "music"):
+                    layer_obj = audio_block.get(layer)
+                    if isinstance(layer_obj, dict) and layer_obj.get("src"):
+                        layer_obj["src"] = self._stage_remotion_asset(
+                            layer_obj["src"], idx, staged_dir
+                        )
+        for top_audio_key, idx in (("soundtrack", 10), ("music", 11)):
+            audio_obj = props.get(top_audio_key)
+            if isinstance(audio_obj, dict) and audio_obj.get("src"):
+                audio_obj["src"] = self._stage_remotion_asset(
+                    audio_obj["src"], idx, staged_dir
+                )
 
         # CinematicRenderer consumes `scenes`, while the MCP workflow emits
         # `cuts`. Bridge the trusted cut timeline explicitly so cinematic-
         # montage renders uploaded stills instead of merely accepting a
-        # renderer_family label and receiving an empty composition.
+        # renderer_family label and receiving an empty composition. Run AFTER
+        # staging so it sees the already-staged `_staged/<job>/<file>` paths.
         renderer_family = (composition_data or {}).get("renderer_family", "explainer-data")
         if renderer_family in {"cinematic-trailer", "documentary-montage"} and not props.get("scenes"):
             props["scenes"] = [
@@ -1617,26 +1648,6 @@ class VideoCompose(BaseTool):
                 if cut.get("source")
             ]
 
-        # audio.narration.src / audio.music.src
-        audio = props.get("audio")
-        if audio:
-            for layer in ("narration", "music"):
-                if audio.get(layer, {}).get("src"):
-                    audio[layer]["src"] = self._stage_remotion_asset(
-                        audio[layer]["src"], -1, staged_dir
-                    )
-
-        # The parameterized e-commerce composition keeps its image/audio
-        # references under assets rather than cuts/audio. Stage those fields
-        # too so MCP callers can pass absolute local paths safely.
-        assets = props.get("assets")
-        if isinstance(assets, dict):
-            for key in ("hero", "product", "detail", "lifestyle", "logo", "music"):
-                if assets.get(key):
-                    assets[key] = self._stage_remotion_asset(
-                        assets[key], -2, staged_dir
-                    )
-
         # Build a custom themeConfig from the playbook's actual colors.
         # This ensures every video gets a unique visual identity derived
         # from its production decisions — not picked from a preset menu.
@@ -1652,6 +1663,43 @@ class VideoCompose(BaseTool):
 
         # Write props to temp file for Remotion CLI. 文件名带 staging_id，避免
         # 同一 project 内并发/retry 的 render 抢同一个 .remotion_props.json。
+        # Defense-in-depth: refuse to ship a `file://` or absolute path to
+        # Remotion. After staging, every local-resource field should be a
+        # `_staged/<job>/<name>` relative path; if anything is still absolute
+        # the staging loop missed a field — surface a structured blocker
+        # rather than letting Chrome fail mid-render with an opaque
+        # "Not allowed to load local resource" error.
+        import re as _re
+        _suspicious = _re.compile(r"^(?:[A-Za-z]:[\\/]|/|[A-Za-z]+://(?!localhost))")
+
+        def _walk_strings(obj):
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    yield from _walk_strings(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    yield from _walk_strings(v)
+            elif isinstance(obj, str) and obj:
+                yield obj
+
+        _bad_paths = [
+            s for s in _walk_strings(props)
+            if _suspicious.match(s)
+            and not s.startswith(("http://", "https://", "data:"))
+            and not s.startswith("_staged/")
+        ]
+        if _bad_paths:
+            return ToolResult(
+                success=False,
+                error=(
+                    "Remotion staging left these non-public paths in props — "
+                    "Chrome will reject them with 'Not allowed to load local "
+                    f"resource'. Sample: {_bad_paths[:5]}. Add the missing "
+                    "field to _STAGEABLE_FIELDS / _STAGEABLE_AUDIO_FIELDS in "
+                    "tools/video/video_compose.py."
+                ),
+            )
+
         props_path = output_path.parent / f".remotion_props.{staging_id}.json"
         with open(props_path, "w", encoding="utf-8") as f:
             json.dump(props, f)
@@ -2015,6 +2063,16 @@ class VideoCompose(BaseTool):
                 duration_seconds=round(time.time() - start, 2),
             )
 
+    # Each tuple is (parent_dict_key, field_name, idx_sentiment).
+    #   parent_dict_key="" means field is on the props root (e.g. `videoSrc`).
+    #   idx_sentiment picks the per-call `idx` argument so distinct copies land in
+    #   distinct filenames and dedup still works (helper dedups by content hash).
+    # See _STAGEABLE_AUDIO_FIELDS below for the audio-source variant. These
+    # tables drive the generic local-resource staging loop in _remotion_render
+    # so adding a new field is one tuple entry instead of editing scattered
+    # if-branches. Edit /opt/OpenMontage_Voicebox plan:
+    # shimmer-remotion-local-asset-loading.
+
     @staticmethod
     def _parse_remotion_progress(line: str) -> Optional[float]:
         """Extract a 0-100 render-percentage from a Remotion CLI output line.
@@ -2024,8 +2082,6 @@ class VideoCompose(BaseTool):
         bare percentage lines. Returns the percentage or ``None`` if the line
         carries no progress information.
         """
-        if not line:
-            return None
         import re
 
         m = re.search(r"frame\s+(\d+)\s*/\s*(\d+)", line)
@@ -2068,6 +2124,19 @@ class VideoCompose(BaseTool):
             return source
         resolved = Path(source.replace("file://", ""))
         if not resolved.exists():
+            # Empty / missing paths used to silently pass through to TS resolveAsset()
+            # which then produced file:// URIs that Chrome refused to load. Now we at
+            # least log the warning so a stale path is observable in mcp_server.log;
+            # the runtime will still fail in headless Chrome with a clear error
+            # message (or the defensive guard at the end of _remotion_render will
+            # block the render before launching Chrome at all). Empty string / None
+            # are still legitimate "no asset" semantics — those are short-circuited
+            # by the `if not source` check above and never reach here.
+            logging.getLogger("video_compose").warning(
+                "_stage_remotion_asset: skipping missing path %r (will fall through "
+                "to resolveAsset() / file:// in TS; Chrome will reject it)",
+                source,
+            )
             return source
         import hashlib
         import os as _os
@@ -2910,3 +2979,47 @@ class VideoCompose(BaseTool):
             remaining /= 0.5
         filters.append(f"atempo={remaining:.4f}")
         return ",".join(filters)
+
+
+# Module-level constants for the generic local-resource staging loop in
+# _remotion_render. Defined outside the VideoCompose class so they can be
+# referenced from unit tests without instantiating the tool.
+#
+# Each tuple is (parent_dict_key, field_name, idx_sentiment).
+#   parent_dict_key="" means field is on the props root (e.g. `videoSrc`).
+#   idx_sentiment picks the per-call `idx` argument so distinct copies land in
+#   distinct filenames and dedup still works (helper dedups by content hash).
+# See _STAGEABLE_AUDIO_FIELDS below for the audio-source variant. These
+# tables drive the generic staging pass in _remotion_render — adding a new
+# field is one tuple entry instead of editing scattered if-branches. Plan:
+# /root/.claude/plans/shimmering-cooking-truffle.md.
+_STAGEABLE_FIELDS: tuple[tuple[str, str, int], ...] = (
+    # cuts[*] (explainer family) — already covered; kept here for symmetry.
+    ("cuts", "source", 0),
+    ("cuts", "backgroundImage", 1),
+    ("cuts", "backgroundVideo", 2),
+    # scenes[*] (cinematic / documentary family).
+    ("scenes", "src", 3),
+    ("scenes", "backgroundSrc", 4),
+    # clips[*] (CollageBurst — top-level prop, NOT under cuts[*]).
+    ("clips", "src", 5),
+    ("clips", "backgroundSrc", 6),
+    # TitledVideo / LyricOverlay / TalkingHead — top-level `videoSrc` prop.
+    ("", "videoSrc", 7),
+    # Ecommerce assets dict.
+    ("assets", "hero", -2),
+    ("assets", "product", -2),
+    ("assets", "detail", -2),
+    ("assets", "lifestyle", -2),
+    ("assets", "logo", -2),
+    ("assets", "music", -2),
+)
+
+# Audio sources — nested under audio.{narration|music}.src or top-level
+# soundtrack.src / music.src for CinematicRenderer. Handled as a separate
+# loop because the path is nested.
+_STAGEABLE_AUDIO_FIELDS: tuple[tuple[str, int], ...] = (
+    ("narration", -1),
+    ("music", -1),
+    ("soundtrack", 10),
+)
