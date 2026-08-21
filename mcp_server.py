@@ -626,31 +626,34 @@ async def clone_voice(
     name: str,
     audio_paths: list[str],
     description: Optional[str] = None,
-    labels: Optional[dict[str, Any]] = None,
+    engine: Optional[str] = "qwen",
 ) -> ExecuteResult:
-    """Instant-clone a voice on ElevenLabs from 1+ audio sample files.
+    """Create a cloned voice profile via the local Voicebox service.
 
-    Uploads the samples to ElevenLabs `/v1/voices/add` and returns the new
-    `voice_id`. Use that `voice_id` with `elevenlabs_tts` `text_to_speech`
-    to generate narration in the cloned voice.
+    Routes through the `voicebox_tts` tool, which talks to the Voicebox REST
+    API on `http://127.0.0.1:17493` by default (override with
+    `VOICEBOX_REST_URL`). Voice data never leaves the host.
 
-    Recommended total sample duration >= 60 seconds for a usable clone.
-    Requires ELEVENLABS_API_KEY with Instant Voice Cloning enabled on the
-    account.
+    Engines that support voice cloning on this Voicebox:
+      qwen, luxtts, chatterbox, chatterbox_turbo, tada.
+    Default `qwen` (Qwen3-TTS instant clone). Preset voices like `kokoro`
+    do not accept reference samples.
+
+    Recommended total sample duration >= 30 seconds for a usable Qwen3-TTS
+    clone. Returns the new `profile_id` for use with voicebox text-to-speech.
     """
-    tool = registry.get("elevenlabs_tts")
+    tool = registry.get("voicebox_tts")
     if tool is None:
-        return ExecuteResult(success=False, error="elevenlabs_tts tool not registered")
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
 
     inputs: dict[str, Any] = {
         "operation": "clone_voice",
         "name": name,
         "audio_paths": audio_paths,
+        "default_engine": engine or "qwen",
     }
     if description:
         inputs["description"] = description
-    if labels:
-        inputs["labels"] = labels
 
     ctx = contextvars.copy_context()
     try:
@@ -671,21 +674,23 @@ async def clone_voice(
 
 @mcp.tool()
 async def list_cloned_voices(
-    include_library: bool = False,
+    include_presets: bool = False,
 ) -> ExecuteResult:
-    """List voices owned by this ElevenLabs account (cloned + custom).
+    """List voice profiles on the local Voicebox instance.
 
-    By default returns only account-owned voices (`show_only_owned=true`).
-    Set `include_library=True` to also include the curated voice library.
-    Each entry has `voice_id`, `name`, `category`, and `is_cloned` flag.
+    By default returns only `voice_type=cloned` profiles (those created via
+    `clone_voice` / `voicebox_clone_voice`). Set `include_presets=True` to
+    also include preset and designed voices.
+
+    Each entry has `id`, `name`, `voice_type`, and an `is_cloned` flag.
     """
-    tool = registry.get("elevenlabs_tts")
+    tool = registry.get("voicebox_tts")
     if tool is None:
-        return ExecuteResult(success=False, error="elevenlabs_tts tool not registered")
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
 
     inputs: dict[str, Any] = {
         "operation": "list_cloned_voices",
-        "include_library": include_library,
+        "include_presets": include_presets,
     }
 
     ctx = contextvars.copy_context()
@@ -693,6 +698,165 @@ async def list_cloned_voices(
         result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
     except Exception as e:
         return ExecuteResult(success=False, error=f"list_cloned_voices failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def voicebox_clone_voice(
+    name: str,
+    audio_paths: list[str],
+    description: Optional[str] = None,
+    default_engine: Optional[str] = "qwen",
+    reference_texts: Optional[list[str]] = None,
+    reference_text: Optional[str] = None,
+) -> ExecuteResult:
+    """Create a Voicebox voice profile and attach 1+ reference audio samples.
+
+    Talks to the local Voicebox REST API (default http://127.0.0.1:17493) via
+    the `voicebox_tts` BaseTool. Returns the new `profile_id` for use with
+    `voicebox_tts` `text_to_speech` to generate narration in the cloned voice.
+
+    Recommended total sample duration >= 30 seconds for a usable Qwen3-TTS
+    clone. Requires Voicebox to be running locally; override
+    VOICEBOX_REST_URL for remote hosts.
+    """
+    tool = registry.get("voicebox_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "clone_voice",
+        "name": name,
+        "audio_paths": audio_paths,
+    }
+    if description is not None:
+        inputs["description"] = description
+    if default_engine is not None:
+        inputs["default_engine"] = default_engine
+    if reference_texts is not None:
+        inputs["reference_texts"] = reference_texts
+    if reference_text is not None:
+        inputs["reference_text"] = reference_text
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"voicebox_clone_voice failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def voicebox_tts(
+    text: str,
+    profile_id: str,
+    language: Optional[str] = "en",
+    engine: Optional[str] = None,
+    model_size: Optional[str] = None,
+    instruct: Optional[str] = None,
+    personality: Optional[bool] = None,
+    seed: Optional[int] = None,
+    output_path: Optional[str] = None,
+    timeout_seconds: Optional[int] = None,
+) -> ExecuteResult:
+    """Synthesize speech via the local Voicebox REST API.
+
+    Uses a VoiceProfile created via `voicebox_clone_voice` (or a preset
+    profile surfaced by `voicebox_list_cloned_voices`). Generates audio on
+    the host running Voicebox — no API keys, no cloud spend, voice data
+    never leaves the machine.
+
+    Returns ExecuteResult with `artifacts=[output_path]` pointing at the
+    synthesized audio file (placed under the active project's
+    assets/audio/ when no `output_path` is given).
+    """
+    tool = registry.get("voicebox_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "text_to_speech",
+        "text": text,
+        "profile_id": profile_id,
+    }
+    if language is not None:
+        inputs["language"] = language
+    if engine is not None:
+        inputs["engine"] = engine
+    if model_size is not None:
+        inputs["model_size"] = model_size
+    if instruct is not None:
+        inputs["instruct"] = instruct
+    if personality is not None:
+        inputs["personality"] = personality
+    if seed is not None:
+        inputs["seed"] = seed
+    if output_path is not None:
+        inputs["output_path"] = output_path
+    if timeout_seconds is not None:
+        inputs["timeout_seconds"] = timeout_seconds
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"voicebox_tts failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def voicebox_list_cloned_voices(
+    include_presets: bool = False,
+) -> ExecuteResult:
+    """List voice profiles on the local Voicebox instance.
+
+    By default returns only `voice_type=cloned` profiles (those created via
+    `voicebox_clone_voice`). Set `include_presets=True` to also include
+    preset and designed voices. Each entry has `id`, `name`, `voice_type`,
+    and an `is_cloned` flag — mirroring ElevenLabs' shape so downstream
+    selectors can filter uniformly across providers.
+    """
+    tool = registry.get("voicebox_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "list_cloned_voices",
+        "include_presets": include_presets,
+    }
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"voicebox_list_cloned_voices failed: {type(e).__name__}: {e}")
 
     return ExecuteResult(
         success=result.success,
