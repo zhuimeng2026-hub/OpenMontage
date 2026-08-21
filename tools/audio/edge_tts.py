@@ -68,8 +68,15 @@ class EdgeTTS(BaseTool):
             "text": {"type": "string", "description": "Text to convert to speech"},
             "voice": {
                 "type": "string",
-                "default": "zh-CN-YunxiNeural",
-                "description": "Voice name. Popular Chinese: zh-CN-YunxiNeural (male, lively), zh-CN-XiaoxiaoNeural (female, warm), zh-CN-YunjianNeural (male, passionate), zh-CN-YunyangNeural (male, news). English: en-US-AndrewNeural, en-US-AvaNeural.",
+                "default": "zh-CN-XiaoxiaoNeural",
+                "description": (
+                    "Voice name. Default is XiaoxiaoNeural because the upstream "
+                    "default 'zh-CN-YunxiNeural' is rate-limited / IP-blocked on "
+                    "many hosts (returns NoAudioReceived). Other Chinese voices: "
+                    "zh-CN-YunjianNeural (male, passionate), zh-CN-YunyangNeural "
+                    "(male, news), zh-CN-XiaoyiNeural (female, lively). "
+                    "English: en-US-AndrewNeural, en-US-AvaNeural."
+                ),
             },
             "rate": {
                 "type": "string",

@@ -705,6 +705,63 @@ async def list_cloned_voices(
     )
 
 
+@mcp.tool()
+async def edge_tts(
+    text: str,
+    voice: str = "zh-CN-XiaoxiaoNeural",
+    rate: str = "+0%",
+    volume: str = "+0%",
+    pitch: str = "+0Hz",
+    output_path: str = "tts_output.mp3",
+) -> ExecuteResult:
+    """Synthesize speech with Microsoft Edge TTS (free, no API key required).
+
+    The upstream tool's default voice `zh-CN-YunxiNeural` is rejected by
+    Microsoft's edge TTS service from many IPs (returns `NoAudioReceived`).
+    This wrapper defaults to `zh-CN-XiaoxiaoNeural` which is reliably
+    reachable. If you want YunxiNeural explicitly, set `voice` — but be
+    ready to fall back if you see "No audio was received".
+
+    Voices verified working from this host:
+      zh-CN-XiaoxiaoNeural   (中文女声，温暖)
+      zh-CN-YunjianNeural    (中文男声，激情)
+      zh-CN-XiaoyiNeural     (中文女声，活泼)
+      zh-CN-liaoning-XiaobeiNeural (东北口音女声)
+      en-US-AvaNeural        (英文女声)
+      en-US-AndrewNeural     (英文男声)
+
+    Returns ExecuteResult with `artifacts=[output_path]`.
+    """
+    tool = registry.get("edge_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="edge_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "text": text,
+        "voice": voice,
+        "rate": rate,
+        "volume": volume,
+        "pitch": pitch,
+        "output_path": output_path,
+    }
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"edge_tts failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Execution tools
 # ---------------------------------------------------------------------------
