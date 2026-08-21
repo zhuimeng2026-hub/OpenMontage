@@ -110,6 +110,9 @@ def test_speak_kicks_off_generation(
     if profile_id is None:
         pytest.skip("shared clone profile unavailable for speak")
 
+    # FastMCP >= 0.4 wraps tool results as {content, structuredContent, isError}.
+    # Look in structuredContent first (the typed payload), then fall back to the
+    # top-level dict for older FastMCP versions or non-typed responses.
     result = call_mcp_tool(
         sess, url, "voicebox.speak",
         {
@@ -120,7 +123,7 @@ def test_speak_kicks_off_generation(
             "personality": False,
         },
     )
-    gen_id = result.get("generation_id")
+    gen_id = (result.get("structuredContent") or {}).get("generation_id") or result.get("generation_id")
     assert gen_id, f"speak did not return generation_id: {result}"
 
     # Poll via REST -- proves MCP and REST share the same generation state.

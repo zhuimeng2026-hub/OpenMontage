@@ -188,7 +188,7 @@ def _cleanup_profiles(voicebox_available: str, created_profile_ids: list[str]) -
 # Shared cloned profile (session-scoped — cloning is the slow part)
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def shared_clone_profile(
     voicebox_available: str,
     sample_audio: Path,
@@ -269,7 +269,13 @@ def shared_clone_profile(
         # eventually loaded) or time out (broken install).
         pass
 
-    # Session teardown -- best-effort delete.
+    # Session teardown runs AFTER `yield profile` (below) so the test that
+    # consumes this fixture sees a profile that still exists. Previous
+    # versions of this fixture deleted before yielding, which made any
+    # test depending on `shared_clone_profile["id"]` fail with HTTP 404
+    # "Profile not found" because the profile was already gone.
+    yield profile
+
     try:
         requests.delete(
             f"{voicebox_available}/profiles/{profile_id}",
@@ -278,8 +284,6 @@ def shared_clone_profile(
         )
     except requests.RequestException:
         pass
-
-    yield profile
 
 
 # ---------------------------------------------------------------------------

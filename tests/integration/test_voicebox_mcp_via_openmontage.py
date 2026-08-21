@@ -79,6 +79,9 @@ def test_speak_via_reverse_proxy_completes(
     if profile_id is None:
         pytest.skip("shared clone profile unavailable; run REST tests first")
 
+    # FastMCP >= 0.4 wraps tool results as {content, structuredContent, isError}.
+    # Look in structuredContent first (the typed payload), then fall back to the
+    # top-level dict for older FastMCP versions or non-typed responses.
     result = call_mcp_tool(
         sess, url, "voicebox.speak",
         {
@@ -88,7 +91,7 @@ def test_speak_via_reverse_proxy_completes(
             "language": "en",
         },
     )
-    gen_id = result.get("generation_id")
+    gen_id = (result.get("structuredContent") or {}).get("generation_id") or result.get("generation_id")
     assert gen_id, result
 
     # The reverse proxy preserves /generate/{id}/status SSE passthrough.
