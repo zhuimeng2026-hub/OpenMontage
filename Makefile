@@ -17,7 +17,7 @@ ensure-venv:
 		echo "==> Using active conda environment: $$CONDA_PREFIX"; \
 	elif [ -x "$(VENV_DIR)/bin/python" ] || [ -x "$(VENV_DIR)/Scripts/python.exe" ]; then \
 		echo "==> Using existing virtual environment: $(VENV_DIR)"; \
-	elif command -v uv >/dev/null 2>&1; then \
+	elif command -v uv >/dev/null 2>&1 && uv --version >/dev/null 2>&1; then \
 		echo "==> Creating virtual environment with uv (Python $(PYTHON_VERSION)+): $(VENV_DIR)"; \
 		uv venv --python $(PYTHON_VERSION) "$(VENV_DIR)"; \
 	else \
