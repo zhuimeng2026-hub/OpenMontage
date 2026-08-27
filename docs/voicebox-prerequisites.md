@@ -9,6 +9,34 @@ fully-bundled one — still need model weights on disk before they can synthesiz
 audio. The download happens once per host. After it completes, voicebox runs
 fully offline (`HF_HUB_OFFLINE=1` is honored).
 
+## Host port (this host uses 17493 — the canonical default)
+
+This host runs **one** voicebox backend on the canonical default port
+**17493** (`/etc/systemd/system/voicebox.service`, enabled, single source of
+truth). Earlier on 2026-08-22 there was a port drift (38000 + 9380) that was
+resolved the same day; see the **"Port-drift audit trail"** section near the
+end of this file for the full story if you hit an old doc that still says
+otherwise.
+
+If you only want the verification recipe:
+
+```bash
+# 1. Where does voicebox systemd actually bind?
+systemctl show voicebox.service -p ExecStart --value
+#   Expect: ... --port 17493 ...
+
+# 2. Is it listening right now?
+ss -tln | grep ':17493\b'
+
+# 3. Confirm the OpenMontage-side default (no override needed)
+grep '^VOICEBOX_REST_URL' /opt/OpenMontage_Voicebox/.env
+#   Expect: no match (we go straight to the default 17493)
+
+# 4. End-to-end check
+curl -s -H 'X-Voicebox-Client-Id: probe' http://127.0.0.1:17493/health
+#   Expect: {"status":"healthy",...}
+```
+
 ## TL;DR — minimum to make voicebox TTS work
 
 ```bash
@@ -327,5 +355,80 @@ every generation.
   a cached model.
 - `.mcp.json` — wires Claude Code's MCP client to `http://127.0.0.1:17493/mcp`,
   so voicebox must be reachable on loopback for the agent's tools to work.
+  **On this host the actual port is 17493 (the canonical default; same as
+  the upstream `voicebox/justfile` / `Dockerfile` / `package.json`); no
+  override needed.**
 - `.agents/skills/voicebox/SKILL.md` — Layer-3 documentation for the agent
   (when to pick voicebox over cloud providers, engine selection matrix).
+
+## Port-drift audit trail (2026-08-22)
+
+Historical record of a port drift that has since been resolved. Kept here so
+anyone reading older code, commits, or LLM context that still mentions 38000
+or 9380 can find the explanation.
+
+### What was wrong
+
+For ~1 month (2026-07-26 → 2026-08-22) the host ran **two** voicebox
+backends on non-canonical ports:
+
+| Unit | Port | Started | Was serving |
+|---|---|---|---|
+| `voicebox.service` | 38000 | 2026-07-26 08:05 | The OpenMontage MCP-facing one (what the agent's tools were talking to) |
+| `voicebox-backend.service` | 9380 | 2026-07-26 05:48 | The `lanes.ymxt.top` public-facing one, CORS-locked to that origin |
+
+Both units were enabled, both backends shared `/opt/voicebox/data/voicebox.db`,
+and 17493 was never bound. Every upstream doc / `.mcp.json` /
+`voicebox_tts.py` default / test fixture still said 17493, so the
+OpenMontage `voicebox_tts` tool hit a dead `127.0.0.1:17493` (connection
+refused) until an `VOICEBOX_REST_URL=http://127.0.0.1:38000` override was
+added to `.env` as a stopgap.
+
+The 9380 unit was CORS-locked to `http://lanes.ymxt.top` — it looked like
+an intentional second deployment slot for the public domain, but the unit
+file had no comment explaining why, and no `.mcp.json` or DNS record on
+this host routed to it.
+
+### What was done on 2026-08-22
+
+1. `systemctl stop voicebox.service voicebox-backend.service` — both backends down
+2. `systemctl disable …` + `rm /etc/systemd/system/voicebox*.service` + `rm …/wants/voicebox*.service` — unit files and want-symlinks gone
+3. `systemctl daemon-reload` — `list-unit-files | grep voicebox` empty
+4. `Edit /opt/OpenMontage_Voicebox/.env` — removed the `VOICEBOX_REST_URL` override; tool now uses the upstream default
+5. `Write /etc/systemd/system/voicebox.service` — new unit, `--host 127.0.0.1 --port 17493 --data-dir /opt/voicebox/data`, `WantedBy=multi-user.target`
+6. `systemctl daemon-reload` + `enable voicebox.service` + `start voicebox.service` — 9 s to come up, PID 2459951
+7. `systemctl restart openmontage-mcp.service` — pick up the cleaned `.env`
+
+After: 17493 is the **only** voicebox listener on the host, `ss -tln | grep
+17493` shows exactly one socket bound to `127.0.0.1:17493` by
+`/root/.pyenv/versions/3.11.8/bin/python3 -m backend.main`. 38000 and 9380 are
+not bound by anything, and there are no unit files resurrecting them on
+reboot.
+
+### What was deliberately **not** done
+
+- `voicebox-backend.service` (9380) was removed, not preserved. If
+  `lanes.ymxt.top` ever did proxy to it, the DNS / reverse-proxy record on
+  the public host (not this one) is the thing to update — nothing on this
+  host serves that origin anymore.
+- No data wipe. `/opt/voicebox/data/voicebox.db` (5→7 profiles,
+  36→37 generations) and `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M`
+  / `models--Qwen--Qwen3-TTS-12Hz-1.7B-Base` were left intact, so existing
+  cloned profiles and downloaded model weights survive the unit change.
+
+### What still says 38000 / 9380 (so the next agent doesn't get burned)
+
+The historical record above is the only place these numbers appear on
+`main` after this commit. The rest of the repo either uses the canonical
+17493 or no port at all:
+
+- This file: only the "Port-drift audit trail" mentions 38000/9380, and only
+  in past tense.
+- `/opt/OpenMontage_Voicebox/.env`: no `VOICEBOX_REST_URL` override.
+- `/etc/systemd/system/voicebox.service`: `--port 17493`.
+- `tools/audio/voicebox_tts.py:758` reads `os.environ.get("VOICEBOX_REST_URL",
+  DEFAULT_VOICEBOX_REST_URL)` with `DEFAULT_VOICEBOX_REST_URL =
+  "http://127.0.0.1:17493"` — both branches now resolve to 17493 on this host.
+
+If you find a *new* mention of 38000 or 9380 in the repo after this commit,
+that's a regression — flag it.
