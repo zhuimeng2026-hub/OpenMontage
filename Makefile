@@ -6,7 +6,7 @@ PIP = $(RUN_PYTHON) -m pip
 
 .DEFAULT_GOAL := setup
 
-.PHONY: setup install install-dev install-gpu test test-contracts test-integration lint clean preflight demo demo-list hyperframes-doctor hyperframes-warm venv ensure-venv tweak-server tweak-server-stop
+.PHONY: setup install install-dev install-gpu test test-contracts test-integration lint clean preflight demo demo-list hyperframes-doctor hyperframes-warm musicgen-fetch venv ensure-venv tweak-server tweak-server-stop
 
 # ---- Virtual environment ----
 
@@ -121,6 +121,12 @@ hyperframes-warm:
 	@echo "    Uses --prefer-online so npx picks up new releases since your last run."
 	npx --yes --prefer-online hyperframes --version
 	@echo "==> Cache warm complete."
+
+musicgen-fetch:
+	@echo "==> Pre-fetching MusicGen small weights to ~/.cache/huggingface/..."
+	@echo "    ~300MB download, one-time. After this, music_gen_local works offline."
+	$(RUN_PYTHON) -c "from transformers import pipeline; pipeline('text-to-audio', model='facebook/musicgen-small')"
+	@echo "==> MusicGen weights cached."
 
 demo: ensure-venv
 	@echo "==> Rendering zero-key demo videos (no API keys needed)..."

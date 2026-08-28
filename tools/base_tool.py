@@ -76,10 +76,82 @@ class ToolStability(str, Enum):
     PRODUCTION = "production"
 
 
-class ToolStatus(str, Enum):
-    AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
-    DEGRADED = "degraded"
+class ToolStatus:
+    """Status of a tool, with optional ``reason`` / ``install_instructions``.
+
+    Backward-compatible with the prior ``(str, Enum)`` shape (the project's
+    pre-2026-08-28 convention) **and** with the dataclass-style construction
+    that the RFC for ``music_gen_local`` (§4.5) introduced:
+
+    * **Bare enum-style** still works — ``ToolStatus.AVAILABLE``,
+      ``ToolStatus.UNAVAILABLE``, ``ToolStatus.DEGRADED`` are class-level
+      singletons with empty reason/instructions, set after the class body.
+    * **Rich construction** — ``ToolStatus(status="unavailable",
+      reason="missing dep: transformers", install_instructions="...")`` is
+      the form new tools should use to convey *why* they are unavailable.
+    * **``status`` and ``value`` are aliases** for the same underlying string,
+      so both the RFC-style ``result.status`` and the legacy
+      ``t.get_status().value == "available"`` access patterns keep working.
+    * **Equality** compares ``status`` only, so a rich UNAVAILABLE
+      (``status="unavailable", reason="x"``) is still ``== ToolStatus.UNAVAILABLE``,
+      which preserves every existing ``tool.get_status() == ToolStatus.AVAILABLE``
+      / ``!= ToolStatus.AVAILABLE`` call site in the codebase
+      (``piper_tts``, ``kokoro_tts``, ``music_gen``, ``google_music``, the
+      ``tts_selector`` chain, etc.).
+    * **String equality** preserves the prior ``(str, Enum)`` semantics —
+      ``ToolStatus.AVAILABLE == "available"`` is True.
+    """
+
+    def __init__(
+        self,
+        status: str = "",
+        *,
+        value: str = "",
+        reason: str = "",
+        install_instructions: str = "",
+    ) -> None:
+        # Accept either ``status=`` (RFC §4.5 convention) or ``value=`` (the
+        # old ``(str, Enum)`` keyword). When both are passed, ``status`` wins.
+        s = status or value
+        self.status = s
+        self.value = s  # alias — keeps legacy `get_status().value` working
+        self.reason = reason
+        self.install_instructions = install_instructions
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ToolStatus):
+            return self.status == other.status
+        if isinstance(other, str):
+            return self.status == other
+        return NotImplemented
+
+    def __ne__(self, other: object) -> bool:
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __hash__(self) -> int:
+        return hash(self.status)
+
+    def __str__(self) -> str:
+        return self.status
+
+    def __repr__(self) -> str:
+        if not self.reason and not self.install_instructions:
+            return f"ToolStatus({self.status!r})"
+        return (
+            f"ToolStatus(status={self.status!r}, reason={self.reason!r}, "
+            f"install_instructions={self.install_instructions!r})"
+        )
+
+
+# Backward-compat singletons — match the previous (str, Enum) member names so
+# every existing ``ToolStatus.AVAILABLE`` / ``UNAVAILABLE`` / ``DEGRADED``
+# reference keeps working unchanged.
+ToolStatus.AVAILABLE = ToolStatus(status="available")
+ToolStatus.UNAVAILABLE = ToolStatus(status="unavailable")
+ToolStatus.DEGRADED = ToolStatus(status="degraded")
 
 
 class ToolRuntime(str, Enum):
