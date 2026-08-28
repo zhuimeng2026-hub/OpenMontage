@@ -8,7 +8,6 @@ import sys
 import builtins
 import base64
 import os
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -34,6 +33,7 @@ from tools.tool_registry import ToolRegistry
 from tools.audio.elevenlabs_tts import ElevenLabsTTS
 from tools.audio.openai_tts import OpenAITTS
 from tools.audio.piper_tts import PiperTTS
+from tools.audio.kokoro_tts import KokoroTTS
 from tools.audio.tts_selector import TTSSelector
 from tools.audio.google_tts import GoogleTTS
 from tools.graphics.google_imagen import GoogleImagen
@@ -119,21 +119,96 @@ class TestPiperTTS:
         assert "text_to_speech" in tool.capabilities
         assert "offline_generation" in tool.capabilities
 
-    def test_status_requires_piper_executable_even_if_python_package_imports(self, monkeypatch):
-        """F-12 regression: Piper generation shells out to `piper`, so importing
-        the Python package is not enough to mark the provider available."""
+    def test_status_requires_downloaded_voice_even_if_python_package_imports(self, monkeypatch, tmp_path):
+        """F-12 regression: importing the Python package is not enough to mark
+        the provider available.
+
+        The original check was `shutil.which("piper")`, but a pyenv shim puts
+        `piper` on PATH while resolving to an interpreter without the package,
+        so that test passed on hosts where generation still failed. piper >=1.7
+        also dropped voice auto-download, so the honest precondition is a voice
+        .onnx on disk -- without one, execute() exits 1."""
         original_import = builtins.__import__
-        original_which = shutil.which
 
         def fake_import(name, *args, **kwargs):
             if name == "piper":
                 return object()
             return original_import(name, *args, **kwargs)
 
-        monkeypatch.setattr(shutil, "which", lambda cmd: None if cmd == "piper" else original_which(cmd))
+        monkeypatch.setenv("PIPER_DATA_DIR", str(tmp_path))  # exists but empty
         monkeypatch.setattr(builtins, "__import__", fake_import)
 
         assert PiperTTS().get_status() == ToolStatus.UNAVAILABLE
+
+    def test_status_available_once_a_voice_is_downloaded(self, monkeypatch, tmp_path):
+        """Pins the other half of F-12 so the check cannot degenerate into
+        always-unavailable."""
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "piper":
+                return object()
+            return original_import(name, *args, **kwargs)
+
+        (tmp_path / "en_US-lessac-medium.onnx").write_bytes(b"")
+        monkeypatch.setenv("PIPER_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+        assert PiperTTS().get_status() == ToolStatus.AVAILABLE
+
+    def test_generate_reports_missing_voice_instead_of_shelling_out(self, monkeypatch, tmp_path):
+        """A missing voice should produce an actionable error naming the
+        download command, not a raw `piper` traceback."""
+        monkeypatch.setenv("PIPER_DATA_DIR", str(tmp_path))
+
+        result = PiperTTS()._generate(
+            {"text": "hello", "output_path": str(tmp_path / "out.wav"), "model": "zz_XX-nonexistent"}
+        )
+
+        assert result.success is False
+        assert "download_voices" in result.error
+
+
+class TestKokoroTTS:
+    def test_identity(self):
+        tool = KokoroTTS()
+        info = tool.get_info()
+        assert info["name"] == "kokoro_tts"
+        assert info["tier"] == "voice"
+        assert info["capability"] == "tts"
+        assert info["provider"] == "kokoro"
+
+    def test_cost_is_free(self):
+        tool = KokoroTTS()
+        assert tool.estimate_cost({"text": "anything"}) == 0.0
+
+    def test_status_requires_cached_weights_even_if_package_imports(self, monkeypatch, tmp_path):
+        """Same lesson as F-12: the tool advertises offline generation, which is
+        only true after the one-time weight bootstrap. An importable package
+        with an empty HF cache must not report AVAILABLE."""
+        monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))  # exists but empty
+
+        assert KokoroTTS().get_status() == ToolStatus.UNAVAILABLE
+
+    def test_status_available_once_weights_are_cached(self, monkeypatch, tmp_path):
+        pytest.importorskip("kokoro")
+        pytest.importorskip("soundfile")
+
+        voices = tmp_path / "models--hexgrad--Kokoro-82M" / "snapshots" / "abc" / "voices"
+        voices.mkdir(parents=True)
+        (voices / "zf_xiaobei.pt").write_bytes(b"")
+        monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+
+        assert KokoroTTS().get_status() == ToolStatus.AVAILABLE
+
+    def test_lang_code_is_derived_from_voice_prefix(self):
+        """Kokoro voices are `<lang><gender>_<name>`, so callers should not have
+        to pass lang_code alongside the voice."""
+        from tools.audio.kokoro_tts import LANG_NAMES
+
+        assert LANG_NAMES["z"] == "Mandarin Chinese"
+        assert LANG_NAMES["a"] == "American English"
+        assert "zf_xiaobei"[0] == "z"
 
 
 class TestGoogleTTS:
