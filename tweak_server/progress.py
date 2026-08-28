@@ -108,65 +108,143 @@ async def stream_job_events(
     request: Request,
     _auth: None = Depends(_sse_token_auth),
 ) -> StreamingResponse:
-    """Stream Server-Sent Events for ``job_id`` from the MCP server.
+    """Stream Server-Sent Events for ``job_id``.
 
-    We open ``httpx.AsyncClient.stream("GET", <mcp>/render-progress/<id>)``
-    and pipe its bytes through a ``StreamingResponse`` with
-    ``media_type="text/event-stream"``. **No parsing** — every byte the MCP
-    server emits is forwarded as-is so the ``data:``/``event:``/``id:`` lines
-    survive intact and the browser's EventSource can interpret them.
+    For jobs owned by the tweak server (the common case after Feature B),
+    we emit a local heartbeat every 1s by polling the Job state. This is the
+    authoritative source for tweak-server-created jobs — MCP doesn't know
+    about them unless they go through the high-level create_remotion_video_share.
 
-    The job_id is owned by the MCP server's progress bus; we do not gate on
-    it being in our local JobStore (the local store is updated by Feature B
-    based on SSE events, so a brand-new job may be known to MCP before we
-    see it). If MCP returns 404 for an unknown job_id the streaming response
-    simply closes — the browser's EventSource ``error`` handler fires.
+    Best-effort: when MCP happens to have its own SSE stream for the same id
+    (e.g. high-level workflow), we forward those bytes raw too — mixed into
+    the same stream. Stream closes when the JobStore reports completed/failed.
     """
-    url = f"{MCP_HTTP_URL}/render-progress/{job_id}"
-    headers = {"Accept": "text/event-stream"}
-    if MCP_API_TOKEN:
-        headers["Authorization"] = f"Bearer {MCP_API_TOKEN}"
+    import asyncio
+    import json as _json
 
-    # Connect timeout short (5s) — we don't want to block the response.
-    # Read timeout very long (24h) — SSE streams can be open for ages.
-    timeout = httpx.Timeout(connect=5.0, read=24 * 60 * 60.0, write=5.0, pool=5.0)
+    from .jobs import get_store
 
-    client = httpx.AsyncClient(timeout=timeout)
+    HEARTBEAT_INTERVAL_S = 1.0
 
-    async def relay() -> Any:
+    async def event_stream() -> Any:
+        last_status = last_phase = None
+        last_percent = -1.0
+        # Brief initial delay so the Job entry has time to land if the
+        # client connected right after the POST returned.
+        await asyncio.sleep(0.05)
+
+        mcp_q = asyncio.Queue()
+        mcp_started = False
+
+        async def _pump_mcp():
+            nonlocal mcp_started
+            url = f"{MCP_HTTP_URL}/render-progress/{job_id}"
+            headers = {"Accept": "text/event-stream"}
+            if MCP_API_TOKEN:
+                headers["Authorization"] = f"Bearer {MCP_API_TOKEN}"
+            timeout = httpx.Timeout(connect=5.0, read=24 * 60 * 60.0, write=5.0, pool=5.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                try:
+                    async with client.stream("GET", url, headers=headers) as resp:
+                        if resp.status_code == 200:
+                            mcp_started = True
+                            async for chunk in resp.aiter_bytes():
+                                await mcp_q.put(("mcp", chunk))
+                except httpx.HTTPError:
+                    pass
+                finally:
+                    await mcp_q.put(("mcp", None))  # sentinel
+
+        pump_task = asyncio.create_task(_pump_mcp())
+
         try:
-            async with client.stream("GET", url, headers=headers) as resp:
-                # If MCP returns 4xx/5xx, forward the status code in a single
-                # synthetic SSE event so the browser EventSource can surface
-                # the failure (it normally only sees net errors, not HTTP
-                # status). For 200 we pipe raw bytes through.
-                if resp.status_code != 200:
-                    body = await resp.aread()
-                    msg = (
-                        f"event: error\n"
-                        f"data: {{\"status\": {resp.status_code}, "
-                        f"\"body\": {body.decode('utf-8', errors='replace')[:500]!r}}}\n\n"
-                    )
-                    yield msg.encode("utf-8")
-                    return
-                async for chunk in resp.aiter_bytes():
-                    # Honour client disconnect — bail out of the inner loop.
-                    if await request.is_disconnected():
-                        _log.debug("client disconnected mid-stream job_id=%s", job_id)
+            for tick in range(7200):  # up to 2 hours
+                # Check client disconnect
+                disconnected = await request.is_disconnected()
+                if disconnected:
+                    break
+
+                # Drain any MCP chunks (non-blocking via get_nowait)
+                while not mcp_q.empty():
+                    try:
+                        kind, chunk = mcp_q.get_nowait()
+                        if chunk is None:
+                            # MCP done; mark so we stop awaiting it
+                            mcp_started = False
+                            continue
+                        yield chunk
+                    except asyncio.QueueEmpty:
                         break
-                    yield chunk
-        except httpx.HTTPError as exc:
-            _log.warning("SSE upstream error job_id=%s: %s", job_id, exc)
-            yield (
-                f"event: error\n"
-                f"data: {{\"status\": 502, \"message\": \"upstream_error\", "
-                f"\"detail\": \"{str(exc)[:300]!r}\"}}\n\n"
-            ).encode("utf-8")
+
+                # Local JobStore heartbeat
+                job = get_store().get(job_id)
+                if job is None:
+                    payload = {
+                        "job_id": job_id,
+                        "phase": "unknown",
+                        "status": "unknown",
+                        "message": "no such job",
+                    }
+                    yield (
+                        f"event: progress\n"
+                        f"data: {_json.dumps(payload)}\n\n"
+                    ).encode("utf-8")
+                    return
+
+                changed = (
+                    job.status != last_status
+                    or job.phase != last_phase
+                    or (job.percent or 0.0) != last_percent
+                )
+                if changed:
+                    last_status = job.status
+                    last_phase = job.phase
+                    last_percent = job.percent or 0.0
+                    payload = {
+                        "event": "render_progress",
+                        "render_job_id": job_id,
+                        "phase": job.phase or job.status,
+                        "status": job.status,
+                        "percent": job.percent,
+                        "message": job.message,
+                        "staging_id": job.staging_id,
+                        "output_path": job.output_path,
+                    }
+                    yield (
+                        f"event: progress\n"
+                        f"data: {_json.dumps(payload, default=str)}\n\n"
+                    ).encode("utf-8")
+
+                if job.status in ("completed", "failed"):
+                    terminal = {
+                        "event": "render_progress",
+                        "render_job_id": job_id,
+                        "phase": job.phase or job.status,
+                        "status": job.status,
+                        "percent": job.percent,
+                        "message": job.message or job.error,
+                        "staging_id": job.staging_id,
+                        "output_path": job.output_path,
+                        "result": job.result,
+                        "error": job.error,
+                    }
+                    yield (
+                        f"event: terminal\n"
+                        f"data: {_json.dumps(terminal, default=str)}\n\n"
+                    ).encode("utf-8")
+                    return
+
+                await asyncio.sleep(HEARTBEAT_INTERVAL_S)
         finally:
-            await client.aclose()
+            if not pump_task.done():
+                pump_task.cancel()
+                try:
+                    await pump_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     return StreamingResponse(
-        relay(),
+        event_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
