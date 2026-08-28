@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -102,6 +103,31 @@ app = FastAPI(
     version="0.1.0",
     description="Sidecar MCP client for end-user render-script micro-tweaks.",
     lifespan=lifespan,
+)
+
+# -----------------------------------------------------------------------------
+# CORS — needed when a browser SPA hosted on a different origin (e.g. the
+# openclaw-gateway web UI at https://openclaw.local:18789) wants to talk to
+# this tweak-server (e.g. http://localhost:8901). EventSource and fetch()
+# both obey CORS for cross-origin requests.
+#
+# Origins are configurable via TWEAK_SERVER_CORS_ORIGINS (comma-separated).
+# Use "*" for development; in production list the exact openclaw origins.
+# SSE endpoints accept the auth token via ?token= (not header) because
+# EventSource cannot set custom headers — see auth.py:_sse_token_auth.
+# -----------------------------------------------------------------------------
+_CORS_ORIGINS_RAW = os.environ.get("TWEAK_SERVER_CORS_ORIGINS", "http://localhost:18789,http://127.0.0.1:18789")
+_CORS_ORIGINS = ["*"] if _CORS_ORIGINS_RAW.strip() == "*" else [
+    o.strip() for o in _CORS_ORIGINS_RAW.split(",") if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["X-Tweak-Token", "Content-Type", "mcp-session-id"],
+    expose_headers=["Content-Disposition"],
+    max_age=600,
 )
 
 if STATIC_DIR.is_dir():
