@@ -5,7 +5,8 @@ Routes:
     GET  /                                       health
     GET  /projects/{project_id}/tweak            form HTML
     GET  /api/projects/{project_id}              current props + schemas (JSON)
-    POST /api/projects/{project_id}/tweak        submit tweak → MCP render (JSON)
+    POST /api/projects/{project_id}/tweak        submit tweak → enqueue async MCP render (JSON 202)
+    GET  /api/projects/{project_id}/jobs         list jobs for a project (JSON)
 
 Run:
     uvicorn tweak_server.app:app --port 8901 --host 127.0.0.1
@@ -24,7 +25,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -36,6 +36,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from . import jobs as jobs_module
+from . import queue
 from .auth import TWEAK_SERVER_BEARER, require_token
 from .mcp_client import MCPError, get_client, shutdown_client, startup_client
 from .props_schema import (
@@ -243,7 +245,11 @@ async def submit_tweak(
     raw: dict[str, Any],
     _auth: None = Depends(require_token),
 ) -> JSONResponse:
-    """Validate tweak, merge into template, dispatch MCP render, log decision."""
+    """Validate tweak, merge into template, enqueue MCP render, log decision.
+
+    Returns HTTP 202 with ``{job_id, status: "queued", ...}`` immediately;
+    the actual render runs in the background via ``queue.submit_render_job``.
+    """
     # 1) Validate payload shape
     try:
         tweak = TweakPayload.model_validate(raw)
@@ -273,16 +279,23 @@ async def submit_tweak(
     renders_dir = project_dir / "renders"
     renders_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    staging_id = f"tweak-{uuid.uuid4().hex[:12]}"
+
+    # 4) Generate job_id + staging_id (deterministic link between Job and MCP render)
+    job_id = uuid.uuid4().hex[:12]
+    staging_id = f"tweak-{job_id}"
     output_path = str(renders_dir / f"tweak-{timestamp}.mp4")
 
-    # 4) Decision-log entry (must be appended BEFORE the render — survives crash)
+    # 5) Pre-create the Job so list endpoint sees it immediately
+    jobs_module.get_store().create(project_id, job_id=job_id)
+
+    # 6) Decision-log entry (must be appended BEFORE the render — survives crash)
     log_entry = {
         "category": "user_tweak",
         "subject": "tweak_form_submission",
         "actor": raw.get("_actor", "anonymous"),
         "ts": datetime.now(timezone.utc).isoformat(),
         "project_id": project_id,
+        "job_id": job_id,
         "staging_id": staging_id,
         "output_path": output_path,
         "diff_summary": {
@@ -314,41 +327,52 @@ async def submit_tweak(
         raise
     except Exception as exc:  # noqa: BLE001
         _log.exception("decision_log write failed")
+        # Mark the job as failed so the caller polling /jobs sees the truth
+        jobs_module.get_store().update(
+            job_id, status="failed", phase="failed",
+            error=f"decision_log_write_failed: {exc}",
+        )
         raise HTTPException(
             status_code=500,
             detail={"error": "decision_log_write_failed", "message": str(exc)},
         )
 
-    # 5) Dispatch MCP render (blocking for MVP — see plan §3.2)
-    try:
-        client = get_client()
-        result = await client.render_remotion(
-            edit_decisions=full_props,
-            output_path=output_path,
-            staging_id=staging_id,
-        )
-    except MCPError as exc:
-        _log.exception("MCP render failed")
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "mcp_render_failed", "message": str(exc)},
-        )
+    # 7) Dispatch MCP render as a background asyncio task (non-blocking).
+    #    The HTTP handler returns 202 immediately; the render runs on the loop.
+    await queue.submit_render_job(
+        job_id=job_id,
+        project_id=project_id,
+        edit_decisions=full_props,
+        output_path=output_path,
+        staging_id=staging_id,
+    )
 
-    # 6) Translate MCP ToolResult → user-friendly response
-    success = bool(result.get("success")) if isinstance(result, dict) else False
+    # 8) Return the new async-job contract: {job_id, status, decision_log, ...}
     payload = {
-        "success": success,
+        "job_id": job_id,
+        "status": "queued",
         "project_id": project_id,
         "staging_id": staging_id,
-        "output_path": result.get("output_path") or output_path,
-        "duration_seconds": result.get("duration_seconds"),
-        "error": result.get("error") if not success else None,
         "decision_log": log_entry.get("decision_log_path"),
         "comment": tweak.comment,
         "merged_cuts_touched": [c.id for c in tweak.cuts],
     }
-    code = 200 if success else 502
-    return JSONResponse(payload, status_code=code)
+    return JSONResponse(payload, status_code=202)
+
+
+# ---- async job endpoints (Feature B) ----
+
+@app.get("/api/projects/{project_id}/jobs")
+async def list_project_jobs(
+    project_id: str,
+    limit: int = 50,
+    _auth: None = Depends(require_token),
+) -> dict[str, Any]:
+    """List async render jobs for a project, newest first."""
+    return {
+        "project_id": project_id,
+        "jobs": [j.to_dict() for j in queue.list_jobs(project_id, limit)],
+    }
 
 
 # -----------------------------------------------------------------------------
