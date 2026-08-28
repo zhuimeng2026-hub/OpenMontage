@@ -164,3 +164,12 @@ footer {
   font-size: 12px;
 }
 footer a { color: var(--accent); }
+.asset-block { margin: 12px 0; padding: 8px 0; border-top: 1px solid var(--border); }
+.asset-block:first-child { border-top: 0; padding-top: 0; }
+.asset-block h3 { font-size: 13px; margin: 0 0 6px; color: var(--accent); }
+.asset-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.asset-row input[type="file"] { flex: 1; }
+.asset-list { list-style: none; padding: 0; margin: 0; font-size: 12px; color: var(--muted); }
+.asset-list li { padding: 4px 0; display: flex; justify-content: space-between; align-items: center; }
+.asset-list .empty { color: var(--muted); font-style: italic; }
+.asset-list .del-btn { background: transparent; color: var(--error); padding: 2px 8px; font-size: 14px; }

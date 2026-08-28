@@ -40,6 +40,16 @@
       <textarea id="comment" rows="2" maxlength="1000" placeholder="What did you change and why?"></textarea>
     </section>
 
+    <!-- Project assets -->
+    <section class="card">
+      <h2>Project assets</h2>
+      <p class="hint">Upload images / video / audio / music for this project. Files land in
+         <code>projects/&lt;project_id&gt;/assets/&lt;subdir&gt;/</code>.</p>
+      <div id="asset-blocks">
+        <!-- One block per subdir, populated by tweak.js loadAssets() -->
+      </div>
+    </section>
+
     <!-- Submit + result -->
     <section class="card actions">
       <button id="submit-btn" type="button">Submit tweak &amp; render</button>

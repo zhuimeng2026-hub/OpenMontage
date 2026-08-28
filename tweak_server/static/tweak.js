@@ -57,6 +57,9 @@
     buildCuts(resp.template.cuts || []);
     buildAudio(resp.template.audio || {});
     bindSubmit();
+    // Load uploaded assets in the background — failure here doesn't block
+    // the tweak form (an assetless project still works).
+    loadAssets().catch((err) => console.warn("loadAssets failed:", err));
   }
 
   // -------------------------------------------------------------------------
@@ -522,4 +525,93 @@
     els.resultSummary.textContent = "✗ Render failed";
     els.resultError.textContent = msg;
   }
+  async function loadAssets() {
+    const blocks = document.getElementById("asset-blocks");
+    if (!blocks) return;
+    let resp;
+    try {
+      resp = await fetchJSON(
+        `/api/projects/${encodeURIComponent(PROJECT_ID)}/assets`);
+    } catch (err) {
+      // Non-fatal: the tweak form still works without an on-disk project dir.
+      console.error(err);
+      blocks.innerHTML =
+        `<p class="error">Could not load assets: ${escapeHtml(err.message || String(err))}</p>`;
+      return;
+    }
+    blocks.innerHTML = "";
+    for (const sd of ASSET_SUB_DIRS) {
+      const items = (resp.assets && resp.assets[sd.key]) || [];
+      const div = document.createElement("div");
+      div.className = "asset-block";
+      div.innerHTML = `
+        <h3>${sd.label}</h3>
+        <div class="asset-row">
+          <input type="file" data-subdir="${sd.key}" accept="${sd.accept}">
+          <button type="button" data-subdir="${sd.key}" class="upload-btn">Upload</button>
+        </div>
+        <ul class="asset-list" data-subdir="${sd.key}">
+          ${items.map((it) => `<li data-filename="${escapeHtml(it.filename)}">
+            <span>${escapeHtml(it.filename)} <small>(${formatBytes(it.bytes)})</small></span>
+            <button class="del-btn" data-subdir="${sd.key}" data-filename="${escapeHtml(it.filename)}">&times;</button>
+          </li>`).join("") || "<li class='empty'>(none yet)</li>"}
+        </ul>
+      `;
+      blocks.appendChild(div);
+    }
+    // Wire upload + delete buttons
+    blocks.querySelectorAll(".upload-btn").forEach((btn) => {
+      btn.addEventListener("click", () => onUploadAsset(btn.dataset.subdir));
+    });
+    blocks.querySelectorAll(".del-btn").forEach((btn) => {
+      btn.addEventListener("click", () =>
+        onDeleteAsset(btn.dataset.subdir, btn.dataset.filename));
+    });
+  }
+
+  async function onUploadAsset(subdir) {
+    const inp = document.querySelector(`#asset-blocks input[data-subdir="${subdir}"]`);
+    if (!inp || !inp.files[0]) return;
+    const fd = new FormData();
+    fd.append("file", inp.files[0]);
+    const url = `/api/projects/${encodeURIComponent(PROJECT_ID)}/assets/${subdir}`;
+    const headers = {};
+    if (TOKEN) headers["X-Tweak-Token"] = TOKEN;
+    // Note: do NOT set Content-Type — the browser sets the multipart boundary.
+    const resp = await fetch(url, { method: "POST", body: fd, headers });
+    if (!resp.ok) {
+      const txt = await resp.text();
+      alert(`Upload failed: ${resp.status} ${txt.slice(0, 200)}`);
+      return;
+    }
+    inp.value = "";
+    await loadAssets();
+  }
+
+  async function onDeleteAsset(subdir, filename) {
+    if (!confirm(`Delete ${subdir}/${filename}?`)) return;
+    try {
+      await fetchJSON(
+        `/api/projects/${encodeURIComponent(PROJECT_ID)}/assets/` +
+        `${subdir}/${encodeURIComponent(filename)}`,
+        { method: "DELETE" }
+      );
+    } catch (err) {
+      alert("Delete failed: " + (err.message || err));
+    }
+    await loadAssets();
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+      ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+  }
+
+  function formatBytes(b) {
+    if (b < 1024) return b + "B";
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + "KB";
+    return (b / 1024 / 1024).toFixed(1) + "MB";
+  }
+
+  // -------------------------------------------------------------------------
 })();

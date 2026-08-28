@@ -31,11 +31,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from . import assets as assets_module
 from . import jobs as jobs_module
 from . import queue
 from .auth import TWEAK_SERVER_BEARER, require_token
@@ -55,6 +56,11 @@ _log = logging.getLogger("tweak_server.app")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROJECTS_DIR = PROJECT_ROOT / "projects"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# Project the form defaults to when no id is supplied (e.g. the bare static page).
+DEFAULT_PROJECT_ID = os.environ.get(
+    "TWEAK_SERVER_PROJECT_ID", "the-refactor-serenade"
+)
 
 # Baked-in fallback template (matches remotion-composer/public/sample-props/
 # the-refactor-serenade-sample.json shape). Used when a project has no
@@ -390,6 +396,51 @@ app.include_router(progress_router)
 # Local debug (not used in production)
 # -----------------------------------------------------------------------------
 
+# Asset endpoints (Feature C) — upload / list / delete project media
+# -----------------------------------------------------------------------------
+
+@app.post("/api/projects/{project_id}/assets/{subdir}")
+async def upload_asset_endpoint(
+    project_id: str,
+    subdir: str,
+    file: UploadFile = File(...),
+    _auth: None = Depends(require_token),
+) -> dict[str, Any]:
+    """Store one uploaded file under projects/<id>/assets/<subdir>/."""
+    return await assets_module.save_asset(
+        project_id=project_id, subdir=subdir, file=file
+    )
+
+
+@app.get("/api/projects/{project_id}/assets")
+async def list_assets_endpoint(
+    project_id: str,
+    _auth: None = Depends(require_token),
+) -> dict[str, Any]:
+    """List every asset already present, grouped by subdir."""
+    return {
+        "project_id": project_id,
+        "assets": assets_module.list_assets(project_id),
+    }
+
+
+@app.delete("/api/projects/{project_id}/assets/{subdir}/{filename}")
+async def delete_asset_endpoint(
+    project_id: str,
+    subdir: str,
+    filename: str,
+    _auth: None = Depends(require_token),
+) -> dict[str, Any]:
+    """Delete one asset from projects/<id>/assets/<subdir>/."""
+    ok = assets_module.delete_asset(
+        project_id=project_id, subdir=subdir, filename=filename
+    )
+    return {"success": ok, "filename": filename, "subdir": subdir}
+
+
+# -----------------------------------------------------------------------------
+# Local debug (not used in production)
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
 
