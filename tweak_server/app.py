@@ -376,6 +376,17 @@ async def list_project_jobs(
 
 
 # -----------------------------------------------------------------------------
+# Progress endpoints (Feature A — SSE bridge to MCP)
+# -----------------------------------------------------------------------------
+# These endpoints are read-only views into the job store + an SSE pipe to
+# the MCP server. They never mutate Job state. Feature B will populate the
+# store when it refactors ``submit_tweak`` to run async.
+from .progress import router as progress_router
+
+app.include_router(progress_router)
+
+
+# -----------------------------------------------------------------------------
 # Local debug (not used in production)
 # -----------------------------------------------------------------------------
 

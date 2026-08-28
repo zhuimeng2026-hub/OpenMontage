@@ -25,7 +25,14 @@
       resultSummary: document.getElementById("result-summary"),
       resultVideo: document.getElementById("result-video"),
       resultError: document.getElementById("result-error"),
+      progressBlock: document.getElementById("progress-block"),
+      progressBar: document.getElementById("progress-bar"),
+      progressPhase: document.getElementById("progress-phase"),
     };
+
+  // Active SSE connection (set while a render is in-flight). We keep the
+  // reference so we can close it on retry / new submit.
+  let ACTIVE_EVENT_SOURCE = null;
 
   let SCHEMA = null;        // {themes, animations, field_ranges, ...}
   let TEMPLATE = null;      // current props JSON
@@ -261,6 +268,7 @@
     els.submit.disabled = true;
     setStatus("Rendering… (this can take 30-90s for a 60s video)", "");
     hideResult();
+    closeActiveStream();
 
     const payload = collectPayload();
     if (!payload) {
@@ -274,19 +282,147 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      showResult(resp);
-      setStatus(
-        resp.success
-          ? `Rendered in ${resp.duration_seconds}s → ${resp.output_path}`
-          : `Render failed: ${resp.error}`,
-        resp.success ? "ok" : "error"
-      );
+      // Async mode: backend returns {job_id, status:"queued", ...} and the
+      // progress stream lives at /jobs/{job_id}/events. Fall back to the
+      // old synchronous result path if the backend hasn't migrated yet.
+      if (resp && resp.job_id) {
+        await followJob(resp.job_id, resp);
+      } else {
+        showResult(resp);
+        setStatus(
+          resp.success
+            ? `Rendered in ${resp.duration_seconds}s → ${resp.output_path}`
+            : `Render failed: ${resp.error}`,
+          resp.success ? "ok" : "error"
+        );
+      }
     } catch (err) {
       console.error(err);
       setStatus("Error: " + (err.message || err), "error");
       showResultError(err.message || String(err));
     } finally {
       els.submit.disabled = false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Progress stream (SSE) — open EventSource on the per-job endpoint, update
+  // the progress bar + phase text. On terminal phase, fall back to a single
+  // GET /jobs/{id} to get the final state (output_path, error).
+  // -------------------------------------------------------------------------
+
+  function showProgress() {
+    if (els.progressBlock) els.progressBlock.classList.remove("hidden");
+    setProgress(0, "queued");
+  }
+
+  function hideProgress() {
+    if (els.progressBlock) els.progressBlock.classList.add("hidden");
+  }
+
+  function setProgress(percent, phase) {
+    if (els.progressBar) {
+      const v = Math.max(0, Math.min(100, Number(percent) || 0));
+      els.progressBar.value = v;
+    }
+    if (els.progressPhase && phase) {
+      els.progressPhase.textContent = phase;
+    }
+  }
+
+  function closeActiveStream() {
+    if (ACTIVE_EVENT_SOURCE) {
+      try { ACTIVE_EVENT_SOURCE.close(); } catch (_) { /* noop */ }
+      ACTIVE_EVENT_SOURCE = null;
+    }
+  }
+
+  async function followJob(jobId, initialResp) {
+    showProgress();
+    if (els.resultCard) els.resultCard.classList.remove("hidden");
+    if (els.resultSummary) els.resultSummary.textContent = "Rendering…";
+    if (els.resultVideo) { els.resultVideo.removeAttribute("src"); els.resultVideo.load(); }
+    if (els.resultError) els.resultError.textContent = "";
+
+    // Browser EventSource can't send custom headers — token must travel in
+    // the URL when called from the browser directly. The tweak server's
+    // /jobs/{id}/events endpoint still requires X-Tweak-Token via the
+    // require_token dependency. For same-origin deploys, the browser sends
+    // no auth and the server runs with TWEAK_SERVER_BEARER unset; in
+    // production a same-host reverse proxy injects the header. If the token
+    // is in localStorage we append it as ?token= for browser-only auth.
+    const url = new URL(
+      `/api/projects/${encodeURIComponent(PROJECT_ID)}/jobs/${encodeURIComponent(jobId)}/events`,
+      window.location.origin,
+    );
+    if (TOKEN) url.searchParams.set("token", TOKEN);
+
+    await new Promise((resolve) => {
+      const es = new EventSource(url.toString());
+      ACTIVE_EVENT_SOURCE = es;
+      let settled = false;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        try { es.close(); } catch (_) { /* noop */ }
+        if (ACTIVE_EVENT_SOURCE === es) ACTIVE_EVENT_SOURCE = null;
+        resolve();
+      };
+
+      es.addEventListener("error", () => {
+        // Browser fires 'error' on stream close too — only stop if the
+        // stream is actually closed OR the connection failed.
+        if (es.readyState === EventSource.CLOSED) finish();
+      });
+
+      es.addEventListener("message", (ev) => {
+        let data = null;
+        try { data = JSON.parse(ev.data); } catch (_) { return; }
+        if (!data || typeof data !== "object") return;
+        const phase = data.phase || data.status;
+        const percent = data.percent;
+        if (typeof percent === "number") setProgress(percent, phase);
+        else if (phase) setProgress(els.progressBar ? els.progressBar.value : 0, phase);
+        if (data.message && els.progressPhase) {
+          els.progressPhase.textContent = `${phase || ""}${data.message ? " — " + data.message : ""}`.trim();
+        }
+        if (phase === "completed" || phase === "failed") finish();
+      });
+
+      // Named event the backend may emit on failure (we also synthesise this
+      // from progress.py when MCP returns non-200).
+      es.addEventListener("error_event", () => finish());
+    });
+
+    // After the stream closes, fetch the final state to populate the result
+    // card with output_path / error.
+    try {
+      const final = await fetchJSON(
+        `/api/projects/${encodeURIComponent(PROJECT_ID)}/jobs/${encodeURIComponent(jobId)}`,
+      );
+      showResult({
+        success: final.status === "completed",
+        project_id: final.project_id,
+        staging_id: final.staging_id,
+        output_path: final.output_path,
+        duration_seconds: null,
+        error: final.error,
+        decision_log: null,
+        comment: null,
+        merged_cuts_touched: [],
+      });
+      setStatus(
+        final.status === "completed"
+          ? `Rendered → ${final.output_path || "(no output path)"}`
+          : `Render failed: ${final.error || "unknown"}`,
+        final.status === "completed" ? "ok" : "error",
+      );
+      if (final.status === "completed" || final.status === "failed") hideProgress();
+    } catch (err) {
+      console.error("final state fetch failed:", err);
+      setStatus("Stream closed; final state unavailable", "error");
+      hideProgress();
     }
   }
 
@@ -361,6 +497,9 @@
     els.resultVideo.removeAttribute("src");
     els.resultVideo.load();
     els.resultError.textContent = "";
+    if (els.progressBlock) els.progressBlock.classList.add("hidden");
+    if (els.progressBar) els.progressBar.value = 0;
+    if (els.progressPhase) els.progressPhase.textContent = "queued";
   }
 
   function showResult(resp) {

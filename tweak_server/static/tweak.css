@@ -154,6 +154,7 @@ button:hover:not(:disabled) { background: var(--accent); }
 }
 .status.error { color: var(--error); }
 .status.ok { color: var(--ok); }
+.progress { margin-top: 12px; }
 .hidden { display: none; }
 .error { color: var(--error); }
 footer {
