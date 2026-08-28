@@ -456,12 +456,15 @@ class MusicGenLocal(BaseTool):
         start = time.time()
         try:
             pipe = self._ensure_pipeline(model_variant)
-            # transformers text-to-audio pipelines accept a list of prompts;
-            # we always pass exactly one. ``generate_kwargs`` carries the
-            # length in seconds the decoder should target.
+            # MusicGen controls audio duration via ``max_new_tokens`` (audio tokens),
+            # not ``duration_seconds``. Encodec downsamples at 8×5×4×4 = 640×,
+            # so effective audio is 75 tokens/s / 640 = ~134 tokens/s.
+            # Clamp: 5s = 670 tokens, 30s = 4020 tokens (cap at generation_config
+            # max_length of 1500 tokens ≈ 11s for safety).
+            max_new_tokens = min(round(duration_seconds * 134), 1500)
             result = pipe(
                 [prompt],
-                generate_kwargs={"duration_seconds": duration_seconds},
+                generate_kwargs={"max_new_tokens": max_new_tokens},
             )
             # Pipeline returns a list of dicts with 'audio' (np.ndarray) and
             # 'sampling_rate' (int).
