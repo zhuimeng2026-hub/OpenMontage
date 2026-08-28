@@ -6,7 +6,7 @@ PIP = $(RUN_PYTHON) -m pip
 
 .DEFAULT_GOAL := setup
 
-.PHONY: setup install install-dev install-gpu test test-contracts test-integration lint clean preflight demo demo-list hyperframes-doctor hyperframes-warm venv ensure-venv
+.PHONY: setup install install-dev install-gpu test test-contracts test-integration lint clean preflight demo demo-list hyperframes-doctor hyperframes-warm venv ensure-venv tweak-server tweak-server-stop
 
 # ---- Virtual environment ----
 
@@ -131,11 +131,45 @@ demo: ensure-venv
 demo-list: ensure-venv
 	$(RUN_PYTHON) render_demo.py --list
 
+# ---- tweak server (sidecar MCP client for end-user render tweaks) ----
+# Runs FastAPI on :8901 by default. Talks to MCP at :8900 (Bearer if configured).
+TWEAK_SERVER_PORT ?= 8901
+TWEAK_SERVER_HOST ?= 127.0.0.1
+TWEAK_SERVER_PID_FILE ?= /tmp/tweak-server.pid
+TWEAK_SERVER_LOG ?= /tmp/tweak-server.log
+
+tweak-server: ensure-venv
+	@if [ -f "$(TWEAK_SERVER_PID_FILE)" ] && kill -0 $$(cat $(TWEAK_SERVER_PID_FILE)) 2>/dev/null; then \
+		echo "tweak-server already running (pid=$$(cat $(TWEAK_SERVER_PID_FILE))) on :$(TWEAK_SERVER_PORT)"; \
+	else \
+		$(RUN_PYTHON) -m pip install --quiet fastapi 'uvicorn[standard]' jinja2 httpx 2>&1 | tail -3 ; \
+		$(RUN_PYTHON) -m uvicorn tweak_server.app:app \
+			--host $(TWEAK_SERVER_HOST) \
+			--port $(TWEAK_SERVER_PORT) \
+			--log-level info \
+			>> $(TWEAK_SERVER_LOG) 2>&1 & \
+		echo $$! > $(TWEAK_SERVER_PID_FILE) ; \
+		sleep 2 ; \
+		echo "tweak-server started (pid=$$(cat $(TWEAK_SERVER_PID_FILE))) on http://$(TWEAK_SERVER_HOST):$(TWEAK_SERVER_PORT) — log: $(TWEAK_SERVER_LOG)" ; \
+	fi
+
+tweak-server-stop:
+	@if [ -f "$(TWEAK_SERVER_PID_FILE)" ] && kill -0 $$(cat $(TWEAK_SERVER_PID_FILE)) 2>/dev/null; then \
+		kill $$(cat $(TWEAK_SERVER_PID_FILE)) && rm -f $(TWEAK_SERVER_PID_FILE) && echo "tweak-server stopped"; \
+	else \
+		echo "tweak-server not running"; \
+	fi
+
 lint: ensure-venv
 	$(RUN_PYTHON) -m py_compile tools/base_tool.py
 	$(RUN_PYTHON) -m py_compile tools/tool_registry.py
 	$(RUN_PYTHON) -m py_compile tools/cost_tracker.py
 	$(RUN_PYTHON) -m py_compile tools/analysis/composition_validator.py
+	$(RUN_PYTHON) -m py_compile tweak_server/__init__.py
+	$(RUN_PYTHON) -m py_compile tweak_server/props_schema.py
+	$(RUN_PYTHON) -m py_compile tweak_server/mcp_client.py
+	$(RUN_PYTHON) -m py_compile tweak_server/auth.py
+	$(RUN_PYTHON) -m py_compile tweak_server/app.py
 
 clean:
 	$(BASE_PYTHON) -c "import pathlib, shutil; excluded=[pathlib.Path('$(VENV_DIR)'), pathlib.Path('venv')]; skip=lambda p: any(p == root or root in p.parents for root in excluded); roots=[p for p in pathlib.Path('.').rglob('__pycache__') if not skip(p)]; [shutil.rmtree(p) for p in roots]; files=[p for p in pathlib.Path('.').rglob('*.pyc') if not skip(p)]; [p.unlink() for p in files]"
