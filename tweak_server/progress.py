@@ -191,29 +191,24 @@ async def stream_job_events(
                     ).encode("utf-8")
                     return
 
-                changed = (
-                    job.status != last_status
-                    or job.phase != last_phase
-                    or (job.percent or 0.0) != last_percent
-                )
-                if changed:
-                    last_status = job.status
-                    last_phase = job.phase
-                    last_percent = job.percent or 0.0
-                    payload = {
-                        "event": "render_progress",
-                        "render_job_id": job_id,
-                        "phase": job.phase or job.status,
-                        "status": job.status,
-                        "percent": job.percent,
-                        "message": job.message,
-                        "staging_id": job.staging_id,
-                        "output_path": job.output_path,
-                    }
-                    yield (
-                        f"event: progress\n"
-                        f"data: {_json.dumps(payload, default=str)}\n\n"
-                    ).encode("utf-8")
+                # Emit on EVERY tick so the browser sees a continuously
+                # flowing progress stream (otherwise long stable phases —
+                # e.g. 130s of MCP render with no internal updates — would
+                # leave the UI frozen and looking dead).
+                payload = {
+                    "event": "render_progress",
+                    "render_job_id": job_id,
+                    "phase": job.phase or job.status,
+                    "status": job.status,
+                    "percent": job.percent,
+                    "message": job.message,
+                    "staging_id": job.staging_id,
+                    "output_path": job.output_path,
+                }
+                yield (
+                    f"event: progress\n"
+                    f"data: {_json.dumps(payload, default=str)}\n\n"
+                ).encode("utf-8")
 
                 if job.status in ("completed", "failed"):
                     terminal = {
