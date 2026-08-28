@@ -34,6 +34,7 @@ from tools.audio.elevenlabs_tts import ElevenLabsTTS
 from tools.audio.openai_tts import OpenAITTS
 from tools.audio.piper_tts import PiperTTS
 from tools.audio.kokoro_tts import KokoroTTS
+from tools.analysis.transcriber import Transcriber
 from tools.audio.tts_selector import TTSSelector
 from tools.audio.google_tts import GoogleTTS
 from tools.graphics.google_imagen import GoogleImagen
@@ -209,6 +210,161 @@ class TestKokoroTTS:
         assert LANG_NAMES["z"] == "Mandarin Chinese"
         assert LANG_NAMES["a"] == "American English"
         assert "zf_xiaobei"[0] == "z"
+
+
+class TestTranscriber:
+    """F-12-style rewrite for `tools/analysis/transcriber.py`.
+
+    Mirror of the piper_tts / kokoro_tts lessons: an importable package is not
+    enough to mark the provider available, and execute() must surface an
+    actionable download hint instead of a network-stack traceback when the
+    requested model is not cached locally. faster-whisper's `WhisperModel(...)`
+    otherwise re-resolves metadata against huggingface.co on every load,
+    which is the wall this rewrite removes.
+    """
+
+    @staticmethod
+    def _enable_faster_whisper_import(monkeypatch):
+        """faster_whisper is normally installed in CI; fake the import so the
+        tests do not depend on its presence in dev venvs."""
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "faster_whisper":
+                return object()
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    @staticmethod
+    def _block_faster_whisper_import(monkeypatch):
+        """Force the package to look uninstalled, regardless of venv state."""
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "faster_whisper":
+                raise ImportError("faster_whisper is not installed")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    @staticmethod
+    def _build_usable_snapshot(cache_root: Path, repo: str = "Systran/faster-whisper-base", sha: str = "deadbeef") -> Path:
+        """Lay down a fake but valid HF snapshot dir tree at `cache_root`."""
+        snapshot = cache_root / f"models--{repo.replace('/', '--')}" / "snapshots" / sha
+        snapshot.mkdir(parents=True)
+        for fname in ("model.bin", "config.json", "tokenizer.json"):
+            (snapshot / fname).write_bytes(b"")
+        refs = cache_root / f"models--{repo.replace('/', '--')}" / "refs" / "main"
+        refs.parent.mkdir(parents=True, exist_ok=True)
+        refs.write_text(f"{sha}\n")
+        return snapshot
+
+    def test_status_requires_cached_default_model(self, monkeypatch, tmp_path):
+        """Empty HF cache + importable package must report DEGRADED, not
+        AVAILABLE — same lesson as the piper_tts F-12 rewrite. False-positive
+        AVAILABLE was the wall that broke offline hosts at execute() time."""
+        self._enable_faster_whisper_import(monkeypatch)
+        monkeypatch.setenv("FASTER_WHISPER_MODEL_DIR", str(tmp_path))
+
+        assert Transcriber().get_status() == ToolStatus.DEGRADED
+
+    def test_status_available_when_default_is_cached(self, monkeypatch, tmp_path):
+        """The other half of the rewrite — must not degenerate into
+        always-unavailable. Build a usable snapshot and assert AVAILABLE."""
+        self._enable_faster_whisper_import(monkeypatch)
+        self._build_usable_snapshot(tmp_path)
+        monkeypatch.setenv("FASTER_WHISPER_MODEL_DIR", str(tmp_path))
+
+        assert Transcriber().get_status() == ToolStatus.AVAILABLE
+
+    def test_status_unavailable_when_package_missing(self, monkeypatch):
+        """If faster_whisper is not importable at all, the tool is UNAVAILABLE
+        regardless of cache state."""
+        self._block_faster_whisper_import(monkeypatch)
+
+        assert Transcriber().get_status() == ToolStatus.UNAVAILABLE
+
+    def test_execute_reports_missing_model_with_download_hint(self, monkeypatch, tmp_path):
+        """execute() must surface a clear snapshot_download command when the
+        requested model is not cached, not a network stack traceback. Error
+        text must contain 'not found' (preserves test_transcriber_missing_file
+        contract) and 'snapshot_download' (actionable hint)."""
+        self._enable_faster_whisper_import(monkeypatch)
+        monkeypatch.setenv("FASTER_WHISPER_MODEL_DIR", str(tmp_path))  # empty
+
+        # Need a real input file so we don't trip the not-found check first.
+        audio = tmp_path / "input.wav"
+        audio.write_bytes(b"RIFF$\x00\x00\x00WAVEfmt ")
+
+        result = Transcriber().execute({
+            "input_path": str(audio),
+            "model_size": "large-v3",
+            "output_dir": str(tmp_path / "out"),
+        })
+
+        assert result.success is False
+        assert "not found" in result.error.lower()
+        assert "snapshot_download" in result.error
+        assert "Systran/faster-whisper-large-v3" in result.error
+
+    def test_resolution_chain_prefers_tool_scoped_env(self, monkeypatch, tmp_path):
+        """FASTER_WHISPER_MODEL_DIR takes precedence over HF_HUB_CACHE so a
+        caller can pin the transcriber's cache without affecting the rest of
+        the toolchain (mirrors piper_tts's PIPER_DATA_DIR)."""
+        self._enable_faster_whisper_import(monkeypatch)
+
+        # HF_HUB_CACHE points at a populated base.
+        hf_root = tmp_path / "hf_hub"
+        self._build_usable_snapshot(hf_root)
+        monkeypatch.setenv("HF_HUB_CACHE", str(hf_root))
+
+        # FASTER_WHISPER_MODEL_DIR points at an empty cache. The tool must
+        # pick the tool-scoped env and report DEGRADED, not AVAILABLE.
+        fwm_dir = tmp_path / "fwm"
+        fwm_dir.mkdir()
+        monkeypatch.setenv("FASTER_WHISPER_MODEL_DIR", str(fwm_dir))
+
+        assert Transcriber().get_status() == ToolStatus.DEGRADED
+
+    def test_input_overrides_env(self, monkeypatch, tmp_path):
+        """The `model_dir` input field must take precedence over both env vars."""
+        self._enable_faster_whisper_import(monkeypatch)
+
+        # Env points at an empty cache; input points at a populated cache.
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.setenv("FASTER_WHISPER_MODEL_DIR", str(empty))
+
+        populated = tmp_path / "populated"
+        self._build_usable_snapshot(populated)
+
+        # Drive get_status() with `inputs=` so the input override is honoured.
+        from tools.analysis.transcriber import _resolve_cache_root
+
+        assert str(_resolve_cache_root({"model_dir": str(populated)})) == str(populated.resolve())
+
+    def test_size_to_repo_mapping(self):
+        """Bare sizes map to their repo id; repo ids pass through; unknown
+        sizes raise ValueError with the supported set spelled out."""
+        from tools.analysis.transcriber import _resolve_repo
+
+        assert _resolve_repo("base") == "Systran/faster-whisper-base"
+        assert _resolve_repo("tiny") == "Systran/faster-whisper-tiny"
+        assert _resolve_repo("large-v3") == "Systran/faster-whisper-large-v3"
+        assert _resolve_repo("large") == "Systran/faster-whisper-large-v3"
+        assert _resolve_repo("turbo") == "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+        assert _resolve_repo("Systran/faster-distil-whisper-large-v3") == (
+            "Systran/faster-distil-whisper-large-v3"
+        )
+        with pytest.raises(ValueError, match="Unknown faster-whisper"):
+            _resolve_repo("huge")
+
+    def test_is_local_path_helper(self, tmp_path):
+        from tools.analysis.transcriber import _is_local_path
+
+        assert _is_local_path(str(tmp_path)) is True
+        assert _is_local_path(str(tmp_path / "nonexistent")) is False
 
 
 class TestGoogleTTS:
