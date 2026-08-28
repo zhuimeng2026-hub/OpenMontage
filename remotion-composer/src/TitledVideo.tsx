@@ -1,3 +1,4 @@
+import { SERIF } from "./fonts";
 import {
   AbsoluteFill,
   CalculateMetadataFunction,
@@ -12,7 +13,7 @@ import {
 import { getVideoMetadata } from "@remotion/media-utils";
 
 // Offline-friendly serif fallback; the renderer cannot fetch Google Fonts.
-const fontFamily = "Georgia, 'Times New Roman', serif";
+const fontFamily = SERIF;
 
 export interface TitledVideoProps {
   videoSrc: string;

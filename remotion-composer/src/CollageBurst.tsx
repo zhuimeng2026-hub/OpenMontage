@@ -1,3 +1,4 @@
+import { SERIF } from "./fonts";
 import {
   AbsoluteFill,
   Img,
@@ -11,10 +12,6 @@ import {
   useVideoConfig,
 } from "remotion";
 import React from "react";
-// Use local fallbacks so unrelated registered compositions do not trigger
-// network font requests while the e-commerce composition renders.
-const playfairFamily = "Georgia, 'Times New Roman', serif";
-const playfairItalic = "Georgia, 'Times New Roman', serif";
 
 // Resolve asset path — pass through URLs/data URIs; everything else routes
 // through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
@@ -137,7 +134,7 @@ const OpeningText: React.FC<{
         />
         <div
           style={{
-            fontFamily: playfairFamily,
+            fontFamily: SERIF,
             fontWeight: 400,
             fontSize: 46,
             color: cream,
@@ -150,7 +147,7 @@ const OpeningText: React.FC<{
         </div>
         <div
           style={{
-            fontFamily: playfairItalic,
+            fontFamily: SERIF,
             fontStyle: "italic",
             fontWeight: 400,
             fontSize: 78,

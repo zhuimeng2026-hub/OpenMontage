@@ -1,3 +1,4 @@
+import { SANS } from "./fonts";
 import React from "react";
 import {
   AbsoluteFill,
@@ -36,7 +37,7 @@ const FPS = 30;
 
 // Keep local rendering self-contained: remote Google Fonts are unavailable to
 // the sandboxed Chromium process, so use the platform's sans-serif stack.
-const fontFamily = "Arial, Helvetica, sans-serif";
+const fontFamily = SANS;
 
 const toneGradient = (tone: CinematicTone) => {
   switch (tone) {

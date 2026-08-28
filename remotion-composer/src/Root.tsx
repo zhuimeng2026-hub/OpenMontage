@@ -1,3 +1,4 @@
+import { CJK, DISPLAY } from "./fonts";
 import { Composition, CalculateMetadataFunction } from "remotion";
 import { Explainer, ExplainerProps } from "./Explainer";
 import {
@@ -25,6 +26,7 @@ import {
   ECOMMERCE_PRODUCT_DEMO_DURATION,
 } from "../../demo/src/EcommerceProductDemo";
 import { CustomComposition } from "./CustomComposition";
+import { FontVerify } from "./components/FontVerify";
 
 // Runtime-compiled user composition: duration is derived from how many images
 // the user supplied (images.length × durationPerImage). Falls back to 30s.
@@ -325,8 +327,8 @@ export const Root: React.FC = () => {
           secondaryColor: "#E2E8F0",
           secondaryHighlightColor: "#FBBF24",
           backgroundColor: "rgba(15, 23, 42, 0.78)",
-          primaryFontFamily: "Space Grotesk, Inter, system-ui, sans-serif",
-          secondaryFontFamily: "Noto Sans CJK SC, Noto Sans SC, system-ui, sans-serif",
+          primaryFontFamily: DISPLAY,
+          secondaryFontFamily: CJK,
         }}
       />
       <Composition
@@ -404,6 +406,14 @@ export const Root: React.FC = () => {
           durationPerImage: 3,
         }}
         calculateMetadata={calculateCustomMetadata}
+      />
+      <Composition
+        id="FontVerify"
+        component={FontVerify}
+        durationInFrames={1}
+        fps={30}
+        width={1920}
+        height={1080}
       />
     </>
   );

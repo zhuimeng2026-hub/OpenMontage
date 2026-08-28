@@ -1,3 +1,4 @@
+import { SANS } from "./fonts";
 import {
   AbsoluteFill,
   Audio,
@@ -53,7 +54,7 @@ import type { ParticleType } from "./components/ParticleOverlay";
 import { resolveTheme, type ThemeConfig, DEFAULT_THEME } from "./Root";
 
 // Use only local system fonts so offline Chromium renders do not fetch fonts.
-const fontFamily = "Arial, Helvetica, sans-serif";
+const fontFamily = SANS;
 
 // ---------------------------------------------------------------------------
 // Animated Background — Gradient Mesh + Floating Orbs

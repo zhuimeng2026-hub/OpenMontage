@@ -1,3 +1,4 @@
+import { SERIF } from "./fonts";
 import {
   AbsoluteFill,
   Audio,
@@ -8,8 +9,6 @@ import {
   useVideoConfig,
 } from "remotion";
 import React from "react";
-// Local fallback prevents the renderer from requesting a remote Google Font.
-const playfairItalic = "Georgia, 'Times New Roman', serif";
 
 // Resolve asset path — pass through URLs/data URIs; everything else routes
 // through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
@@ -111,7 +110,7 @@ const LyricLine: React.FC<{ lyric: Lyric; bottomY: number }> = ({ lyric, bottomY
       >
         <div
           style={{
-            fontFamily: playfairItalic,
+            fontFamily: SERIF,
             fontStyle: "italic",
             fontWeight: 400,
             fontSize: 54,

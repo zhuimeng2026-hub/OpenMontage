@@ -1,3 +1,4 @@
+import { SANS } from "../fonts";
 import {
   AbsoluteFill,
   Img,
@@ -400,7 +401,7 @@ const OverlayForStep: React.FC<OverlayProps> = ({
           display: "flex",
           alignItems: "center",
           paddingLeft: Math.round(rect.w * 0.012),
-          fontFamily: "Inter, -apple-system, sans-serif",
+          fontFamily: SANS,
           fontSize: fontPx,
           color: step.color ?? "#E5E7EB",
           pointerEvents: "none",
@@ -479,7 +480,7 @@ const OverlayForStep: React.FC<OverlayProps> = ({
           border: `1px solid ${border}`,
           borderRadius: Math.round(rect.w * 0.008),
           padding: `${Math.round(rect.h * 0.015)}px ${Math.round(rect.w * 0.012)}px`,
-          fontFamily: "Inter, -apple-system, sans-serif",
+          fontFamily: SANS,
           fontSize: fontPx,
           color: "#F1F5F9",
           lineHeight: 1.5,
@@ -652,7 +653,7 @@ const OverlayForStep: React.FC<OverlayProps> = ({
           width: maxW,
           background: color,
           color: "#0B0F1A",
-          fontFamily: "Inter, -apple-system, sans-serif",
+          fontFamily: SANS,
           fontWeight: 600,
           fontSize: fontPx,
           lineHeight: 1.35,
