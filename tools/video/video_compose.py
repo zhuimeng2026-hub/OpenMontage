@@ -1754,15 +1754,25 @@ class VideoCompose(BaseTool):
         # restricted networks the default 30s browser setup times out with an
         # opaque failure. Pass it through and give the subprocess enough headroom
         # so run_command() does not kill Remotion before its own timeout fires.
+        #
+        # Default to 120s (was Remotion's built-in 28s). The 28s default is too
+        # tight when src/fonts.ts must register 30 woff2 faces via the FontFace
+        # API in headless Chrome — 30 sequential network round-trips + FontFace
+        # decode regularly exceed 30s on cold caches, and a hang there surfaces
+        # upstream as a misleadingly opaque "Remotion render failed" with the
+        # real delayRender() timeout swallowed by the 80-char log truncation
+        # in mcp_server.execute_tool. 120s comfortably covers cold-cache font
+        # loads while still failing fast enough for the user to iterate.
         remotion_timeout_ms = inputs.get("remotion_timeout_ms")
+        if remotion_timeout_ms is None:
+            remotion_timeout_ms = 120_000
         subprocess_timeout = 600
-        if remotion_timeout_ms:
-            try:
-                ms = int(remotion_timeout_ms)
-                cmd.append(f"--timeout={ms}")
-                subprocess_timeout = max(subprocess_timeout, ms // 1000 + 60)
-            except (TypeError, ValueError):
-                pass
+        try:
+            ms = int(remotion_timeout_ms)
+            cmd.append(f"--timeout={ms}")
+            subprocess_timeout = max(subprocess_timeout, ms // 1000 + 60)
+        except (TypeError, ValueError):
+            pass
 
         # 闸门：限制并发 Remotion 进程数，防止多用户无界扇出打爆宿主。
         # 排队/拿到槽位的状态经 progress_callback 上行，SSE 借此显示「排队→渲染」，
