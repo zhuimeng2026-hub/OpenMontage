@@ -10,7 +10,7 @@ Before responding to ANY user message:
 2. [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) — architecture, key files, conventions. Single source of truth.
 3. `skills/pipelines/<pipeline>/<stage>-director.md` for whatever stage you are about to execute.
 
-`AGENTS.md`, `CURSOR.md`, `COPILOT.md`, `CODEX.md`, `.cursor/rules/openmontage.mdc`, `.github/copilot-instructions.md`, and this file are all thin pointers to the two files above. Do not duplicate content between them.
+`AGENTS.md`, `CURSOR.md`, `COPILOT.md`, `CODEX.md`, `.cursor/rules/openmontage.mdc`, and `.github/copilot-instructions.md` are all thin pointers to the two files above. Do not duplicate content between them.
 
 ## Identity
 
@@ -73,7 +73,7 @@ For a production run, also learn `python -m backlot open <project-id>` — it st
 
 ## Three-Layer Knowledge Model
 
-This is the single most important architectural insight. Internalize it before touching anything else.
+See `PROJECT_CONTEXT.md` § "Knowledge Architecture" for the canonical description.
 
 - **Layer 1 — `tools/` + `tools/tool_registry.py`** — what exists (capabilities, status, cost). Every tool subclasses `tools/base_tool.py` `BaseTool` and is auto-discovered. Never import tools ad hoc; always go through the registry.
 - **Layer 2 — `skills/`** — how OpenMontage wants those tools used (project conventions, quality bars, pipeline director skills, meta skills for review/checkpoints/onboarding).
@@ -92,21 +92,23 @@ This is the single most important architectural insight. Internalize it before t
 
 ## Project Layout (one-liner per area)
 
-- `tools/` — Python `BaseTool` subclasses, one file per capability (`tools/audio/`, `tools/video/`, `tools/tts/`, `tools/analysis/`, `tools/enhancement/`, …). All tools call via `.execute(params)` returning `ToolResult`. Discovery flows through `tools/tool_registry.py` — never hardcode tool lists.
-- `pipeline_defs/` — declarative YAML manifests, one per pipeline (12 production pipelines listed in `PROJECT_CONTEXT.md`).
-- `skills/pipelines/<pipeline>/<stage>-director.md` — the **HOW** for each stage. Read the director skill before executing any stage.
-- `skills/meta/` — cross-cutting meta skills: `reviewer.md`, `checkpoint-protocol.md`, `onboarding.md`, `bespoke-composition.md`, `taste-direction.md`, `animation-runtime-selector.md`, `video-reference-analyst.md`, `voice-performance-director.md`.
-- `skills/core/` — Layer-2 hub skills (e.g. `hyperframes.md` — when to pick HyperFrames vs Remotion).
-- `.agents/skills/` — Layer 3 vendor knowledge (HyperFrames, ElevenLabs, Remotion, FLUX, Kling, Manim, …). Every generation tool exposes its Layer-3 pointer via the `agent_skills` field — read that before calling the tool.
-- `schemas/` — JSON schemas: `schemas/artifacts/` (canonical artifacts), `schemas/pipelines/`, `schemas/styles/`, `schemas/tools/`, `schemas/checkpoints/`.
-- `styles/*.yaml` — visual playbooks (`clean-professional`, `premium-minimalist`, `flat-motion-graphics`, `minimalist-diagram`, `ink-sketch`, `anime-ghibli`). Schema: `schemas/styles/playbook.schema.json`.
-- `lib/` — persistence helpers: `checkpoint.py`, `pipeline_loader.py`, `media_profiles.py`, `config_model.py`, `hyperframes_style_bridge.py`.
-- `remotion-composer/` — the React/Remotion scene stack. `SCENE_TYPES.md` lists the stock `cut.type` catalog.
-- `projects/` — gitignored. Each production run creates `projects/<project-id>/` with `artifacts/`, `assets/{images,video,audio,music}/`, `renders/final.mp4`. **All tool outputs must write under here — never to the repo root.** Outputs that have no project (smoke-test TTS, ad-hoc renders, debug dumps) belong in `projects/_scratch/<category>/` — see `projects/_scratch/README.md`.
-- `sources/` — gitignored binaries (`.gitignore` excludes `*.wav`, `*.mp4`, `*.mov`). Holds reference inputs that drive `video-reference-analyst` and similar skills: scene annotations, transcripts, and the source media itself. Keep the `.json` annotations tracked; the binaries stay local.
-- `mcp_server.py` — the FastMCP server. Start with `./start_mcp_server.sh` (cross-platform: locks npm install to `package-lock.json`, neutralizes WorkBuddy safe-delete shim on Windows, pre-pulls headless Chrome).
-- `ink-theater/` — hand-drawn doodle engine + Ink Puppet mocap (`skills/creative/ink-theater.md`).
-- `backlot/` — the local storyboard server (`python -m backlot open <project-id>`). The agent's only board duty is to open it; the board derives everything else from disk.
+See `PROJECT_CONTEXT.md` § "Key Files" for the authoritative mapping. At a glance:
+
+- `tools/` — Python `BaseTool` subclasses (auto-discovered via `tools/tool_registry.py`)
+- `pipeline_defs/` — declarative YAML manifests, one per pipeline
+- `skills/pipelines/<pipeline>/<stage>-director.md` — the **HOW** for each stage
+- `skills/meta/` — cross-cutting meta skills (reviewer, checkpoint-protocol, onboarding, …)
+- `skills/core/` — Layer-2 hub skills (e.g. hyperframes.md)
+- `.agents/skills/` — Layer 3 vendor knowledge (Remotion, ElevenLabs, FLUX, …)
+- `schemas/` — JSON schemas (artifacts, pipelines, styles, tools, checkpoints)
+- `styles/*.yaml` — visual playbooks
+- `lib/` — persistence helpers (checkpoint.py, pipeline_loader.py, media_profiles.py, config_model.py)
+- `remotion-composer/` — React/Remotion scene stack
+- `projects/` — gitignored; one directory per production run
+- `sources/` — gitignored binaries (reference inputs)
+- `mcp_server.py` — FastMCP server (start with `./start_mcp_server.sh`)
+- `ink-theater/` — hand-drawn doodle engine + Ink Puppet mocap
+- `backlot/` — local live storyboard server (`python -m backlot open <project-id>`)
 
 ## Project Workspace
 
@@ -132,6 +134,8 @@ Every production run creates `projects/<project-id>/` (gitignored) with `artifac
 | `localization-dub` | Subtitle / dub / translated variants (beta) |
 | `documentary-montage` | Real-footage edit from free/open archives (no paid video APIs) |
 | `framework-smoke` | Test: minimal 2-stage smoke test (test) |
+
+Full pipeline roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelines" and `PROJECT_CONTEXT.md` § "Available Pipelines".
 
 ## Deep-Dive Docs (When You Need More)
 
