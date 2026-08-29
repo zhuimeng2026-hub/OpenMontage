@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -982,15 +983,41 @@ async def execute_tool(
         # （get_mcp_session_id() 返回 None → "Mcp-Session-Id is required"）。
         # 显式复制当前上下文并带入线程，使 session 跨线程可见。
         ctx = contextvars.copy_context()
-        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+        # 同时把 session id 注入 inputs dict，这样像 upload_asset 那样直接读
+        # inputs["mcp_session_id"] 的子工具也能拿到。复制避免污染调用方。
+        inputs_for_call = dict(inputs)
+        if "mcp_session_id" not in inputs_for_call:
+            sid = get_mcp_session_id()
+            if sid:
+                inputs_for_call["mcp_session_id"] = sid
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs_for_call)
         _log.info("execute_tool done: %s success=%s duration=%.2fs",
                   tool_name, result.success, result.duration_seconds or 0)
         _log.info("execute_tool response: tool=%s success=%s data_keys=%s error=%s",
                   tool_name, result.success, list(result.data.keys()) if result.data else None,
                   result.error[:80] if result.error else None)
+
+        # Build the data envelope. If the sub-tool returned no "data" key (or an
+        # empty dict), fall back to forwarding all non-reserved top-level fields
+        # from the ToolResult — this handles tools such as upload_asset that
+        # project their payload onto the result dict rather than into result.data.
+        RESERVED = {"success", "error", "artifacts", "data",
+                    "cost_usd", "duration_seconds", "seed", "model"}
+        if result.data:
+            envelope_data = result.data
+        else:
+            # dataclasses.asdict yields {"success": ..., "data": {}, ...}.
+            # Strip reserved keys (incl. the empty "data" field itself) AND any
+            # None/empty values so the envelope stays clean for failed runs.
+            raw = dataclasses.asdict(result)
+            envelope_data = {
+                k: v for k, v in raw.items()
+                if k not in RESERVED and v
+            }
+
         return ExecuteResult(
             success=result.success,
-            data=result.data,
+            data=envelope_data,
             artifacts=result.artifacts,
             error=result.error,
             cost_usd=result.cost_usd,

@@ -1539,6 +1539,15 @@ class VideoCompose(BaseTool):
         # Deep-copy props so we don't mutate the original
         props = json.loads(json.dumps(composition_data))
 
+        # Ensure every cut has in_seconds / out_seconds defaults so the
+        # Remotion Sequence "from" prop (from = in_seconds * fps) never becomes
+        # NaN when a client omits fps or timing fields from edit_decisions.
+        for cut in props.get("cuts") or []:
+            if cut.get("in_seconds") is None:
+                cut["in_seconds"] = 0
+            if cut.get("out_seconds") is None and cut.get("in_seconds") is not None:
+                cut["out_seconds"] = cut["in_seconds"] + 3.0
+
         # Stage local media files into Remotion's public/ dir and reference
         # them by relative path so Img/OffthreadVideo/Audio load via
         # staticFile().
