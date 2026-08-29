@@ -37,9 +37,12 @@ make test-integration     # tests/integration/ — voicebox live-MCP roundtrip; 
 make preflight            # dump the full tool provider menu via registry.provider_menu() — firehose; use provider_menu_summary() for human-ready output
 make hyperframes-doctor   # runtime check: node/ffmpeg/npx + `hyperframes doctor`
 make hyperframes-warm     # refresh the HyperFrames npx cache to latest (re-fetch the npm package)
+make musicgen-fetch       # pre-download MusicGen-small weights (~300MB) so music_gen_local works offline
 
 make demo                 # render zero-key demo videos (Remotion only, no API keys needed)
 make demo-list            # list available demos
+make tweak-server         # start the tweak sidecar (FastAPI on :8901; talks to MCP at :8900)
+make tweak-server-stop    # stop the tweak sidecar
 make lint                 # py_compile spot-check on core modules
 make clean                # remove __pycache__ and .pyc files (preserves venv)
 ```
@@ -99,7 +102,7 @@ This is the single most important architectural insight. Internalize it before t
 - `remotion-composer/` — the React/Remotion scene stack. `SCENE_TYPES.md` lists the stock `cut.type` catalog.
 - `projects/` — gitignored. Each production run creates `projects/<project-id>/` with `artifacts/`, `assets/{images,video,audio,music}/`, `renders/final.mp4`. **All tool outputs must write under here — never to the repo root.** Outputs that have no project (smoke-test TTS, ad-hoc renders, debug dumps) belong in `projects/_scratch/<category>/` — see `projects/_scratch/README.md`.
 - `sources/` — gitignored binaries (`.gitignore` excludes `*.wav`, `*.mp4`, `*.mov`). Holds reference inputs that drive `video-reference-analyst` and similar skills: scene annotations, transcripts, and the source media itself. Keep the `.json` annotations tracked; the binaries stay local.
-- `mcp_server.py` — the FastMCP server. Start with `start_mcp_server.sh`.
+- `mcp_server.py` — the FastMCP server. Start with `./start_mcp_server.sh` (cross-platform: locks npm install to `package-lock.json`, neutralizes WorkBuddy safe-delete shim on Windows, pre-pulls headless Chrome).
 - `ink-theater/` — hand-drawn doodle engine + Ink Puppet mocap (`skills/creative/ink-theater.md`).
 - `backlot/` — the local storyboard server (`python -m backlot open <project-id>`). The agent's only board duty is to open it; the board derives everything else from disk.
 
@@ -128,3 +131,14 @@ Every production run creates `projects/<project-id>/` (gitignored) with `artifac
 | `framework-smoke` | Test: minimal 2-stage smoke test (test) |
 
 `AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
+
+## Deep-Dive Docs (When You Need More)
+
+- `README.md` — project pitch, prompt gallery, pipeline overview, sponsors
+- `docs/PROVIDERS.md` — every provider with setup, pricing, and free-tier notes
+- `docs/PR_REVIEW_GUIDE.md` — review checklist for landing changes
+- `docs/ARCHITECTURE.md` — full technical reference (decision log, schema internals)
+- `docs/tweak-server.md` — end-user render-tweak sidecar protocol
+- `MCP_SERVER.md` — MCP tool surface and request/response contract
+- `skills/INDEX.md` — full Layer-2 skill index (which skill for which job)
+- `backlot/README.md` — how the live storyboard derives state from disk
