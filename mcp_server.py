@@ -27,7 +27,7 @@ import traceback
 import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -1165,7 +1165,7 @@ async def upload_asset(
 
 @mcp.tool()
 async def upload_asset_chunk(
-    operation: str,
+    operation: Literal["start", "append", "complete"],
     project_id: Optional[str] = None,
     filename: Optional[str] = None,
     total_bytes: Optional[int] = None,
@@ -1179,6 +1179,18 @@ async def upload_asset_chunk(
 
     Call in order: start, append one or more chunks, complete. Each chunk
     should be at most 1 MiB; the server verifies size, offset and SHA-256.
+
+    Required arguments per operation (missing ones are rejected before
+    anything is written):
+
+    - start:    project_id, filename, total_bytes
+    - append:   upload_id, offset, chunk_base64
+    - complete: upload_id
+
+    ``project_id`` must be a safe basename: 1-128 chars, starting with a
+    letter or digit, followed by letters, digits, '.', '_' or '-' (for
+    example ``mclaw-demo``). Send the same project_id on every call of one
+    upload.
     """
     tool = registry.get("upload_asset_chunk")
     if tool is None:

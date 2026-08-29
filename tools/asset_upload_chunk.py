@@ -22,6 +22,23 @@ from tools.asset_upload import UploadAsset, _ALLOWED_EXTENSIONS, _max_upload_byt
 from lib.workbuddy_session import register_image, replace_asset_by_sha, require_session
 from tools.base_tool import BaseTool, ResourceProfile, ToolResult, ToolRuntime, ToolStability, ToolTier
 
+_PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_PROJECT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+# Arguments each operation cannot work without. Checked before anything is
+# written so a client that omits one gets told which one, instead of tripping
+# over an unrelated downstream error.
+_REQUIRED_BY_OPERATION: dict[str, tuple[str, ...]] = {
+    "start": ("project_id", "filename", "total_bytes"),
+    "append": ("upload_id", "offset", "chunk_base64"),
+    "complete": ("upload_id",),
+}
+
+
+def _is_absent(value: Any) -> bool:
+    """Treat None and blank strings as missing; 0 and False are valid values."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
 
 class UploadAssetChunk(BaseTool):
     name = "upload_asset_chunk"
@@ -38,12 +55,29 @@ class UploadAssetChunk(BaseTool):
         "type": "object", "required": ["operation"],
         "properties": {
             "operation": {"type": "string", "enum": ["start", "append", "complete"]},
-            "project_id": {"type": "string"}, "filename": {"type": "string"},
-            "total_bytes": {"type": "integer", "minimum": 1},
+            "project_id": {"type": "string", "pattern": _PROJECT_ID_PATTERN,
+                           "description": "Safe basename; required when operation=start."},
+            "filename": {"type": "string",
+                         "description": "Required when operation=start."},
+            "total_bytes": {"type": "integer", "minimum": 1,
+                            "description": "Required when operation=start."},
             "mime_type": {"type": "string"}, "sha256": {"type": "string"},
-            "upload_id": {"type": "string"}, "offset": {"type": "integer", "minimum": 0},
-            "chunk_base64": {"type": "string"},
+            "upload_id": {"type": "string",
+                          "description": "Required when operation=append or complete."},
+            "offset": {"type": "integer", "minimum": 0,
+                       "description": "Required when operation=append."},
+            "chunk_base64": {"type": "string",
+                             "description": "Required when operation=append."},
         },
+        # Conditional requirements: the flat "required" list above cannot
+        # express "project_id only matters for start", but allOf/if/then can.
+        "allOf": [
+            {
+                "if": {"properties": {"operation": {"const": op}}, "required": ["operation"]},
+                "then": {"required": list(required)},
+            }
+            for op, required in _REQUIRED_BY_OPERATION.items()
+        ],
     }
 
     @staticmethod
@@ -70,12 +104,24 @@ class UploadAssetChunk(BaseTool):
         started = time.monotonic()
         try:
             operation = inputs.get("operation")
+            if operation not in _REQUIRED_BY_OPERATION:
+                raise ValueError("operation must be start, append, or complete")
+            required = _REQUIRED_BY_OPERATION[operation]
+            missing = [name for name in required if _is_absent(inputs.get(name))]
+            if missing:
+                raise ValueError(
+                    f"operation={operation} is missing required argument(s): {', '.join(missing)}. "
+                    f"Required for operation={operation}: {', '.join(required)}."
+                )
             root = self._root()
             root.mkdir(parents=True, exist_ok=True)
             if operation == "start":
                 project_id, original_filename = inputs.get("project_id"), inputs.get("filename")
-                if not isinstance(project_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", project_id):
-                    raise ValueError("project_id must be a safe basename")
+                if not isinstance(project_id, str) or not _PROJECT_ID_RE.fullmatch(project_id):
+                    raise ValueError(
+                        "project_id must be a safe basename: 1-128 chars, start with a letter "
+                        "or digit, then letters, digits, '.', '_' or '-' only (e.g. 'mclaw-demo')"
+                    )
                 filename, original_filename = UploadAsset._sanitize_filename(original_filename)
                 if Path(filename).suffix.lower() not in _ALLOWED_EXTENSIONS:
                     raise ValueError("unsupported media extension")
