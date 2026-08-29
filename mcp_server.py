@@ -2069,6 +2069,8 @@ def get_pipeline_status(
     Returns a structured status showing which stages are done, what's next,
     and the latest checkpoint data. Use this to decide what to execute next.
     """
+    if pipeline_type is None:
+        pipeline_type = pipeline_loader.get_default_pipeline_name()
     completed = ckpt.get_completed_stages(_pipeline_dir(), project_id, pipeline_type)
     next_stage = ckpt.get_next_stage(_pipeline_dir(), project_id, pipeline_type)
     latest = ckpt.get_latest_checkpoint(_pipeline_dir(), project_id)
@@ -2119,6 +2121,8 @@ def write_checkpoint(
     The project resumes from the last checkpoint if interrupted.
     """
     try:
+        if pipeline_type is None:
+            pipeline_type = pipeline_loader.get_default_pipeline_name()
         path = ckpt.write_checkpoint(
             _pipeline_dir(),
             project_id,

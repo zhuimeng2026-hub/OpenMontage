@@ -31,3 +31,6 @@ paths:
   styles_dir: styles
   skills_dir: skills
   output_dir: output
+
+pipeline:
+  default_type: video-template-remix

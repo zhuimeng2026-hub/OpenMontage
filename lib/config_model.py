@@ -62,6 +62,12 @@ class PathsConfig(BaseModel):
     output_dir: str = "output"
 
 
+class PipelineConfig(BaseModel):
+    """Pipeline routing defaults used when a caller omits a pipeline type."""
+
+    default_type: str = "video-template-remix"
+
+
 class OpenMontageConfig(BaseModel):
     """Top-level runtime configuration."""
 
@@ -70,6 +76,7 @@ class OpenMontageConfig(BaseModel):
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "OpenMontageConfig":

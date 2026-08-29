@@ -1,0 +1,134 @@
+name: video-template-remix
+version: "1.0"
+description: >
+  Reference-faithful remix pipeline. Extracts a source video's shot map, timing,
+  transitions, subtitles, and audio structure, then replaces only explicitly
+  approved visual asset slots while preserving the edit grammar.
+category: custom
+stability: beta
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: true
+  analysis_depth: deep
+  analysis_tools:
+    - video_analyzer
+    - video_downloader
+    - scene_detect
+    - frame_sampler
+    - transcriber
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/video-template-remix/executive-producer
+  budget_default_usd: 0.25
+  max_revisions_per_stage: 2
+  max_send_backs: 2
+  max_wall_time_minutes: 20
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+metadata:
+  cost_policy: "Use deterministic local analysis and existing/user assets first; generation requires explicit approval."
+  remix_rules:
+    preserve: [shot_boundaries, shot_durations, pacing, transitions, subtitles, subtitle_position, source_audio, loudness]
+    replace: [explicitly_approved_asset_slots_only]
+    delete: [only_explicitly_approved_slots]
+    forbid: [carbon_copy_without_rights, silent_slot_substitution, unapproved_audio_replacement, duration_drift]
+
+required_skills:
+  - pipelines/video-template-remix/executive-producer
+  - pipelines/video-template-remix/idea-director
+  - pipelines/video-template-remix/script-director
+  - pipelines/video-template-remix/scene-director
+  - pipelines/video-template-remix/asset-director
+  - pipelines/video-template-remix/edit-director
+  - pipelines/video-template-remix/compose-director
+  - pipelines/video-template-remix/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended: [clean-professional, premium-minimalist]
+  also_works: [flat-motion-graphics]
+  custom_allowed: true
+
+stages:
+  - name: idea
+    skill: pipelines/video-template-remix/idea-director
+    optional_artifacts_in: [source_media_review, video_analysis_brief]
+    produces: [brief, decision_log]
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus: [Source and rights are identified, preserve/replace/delete scope is explicit, delivery promise is realistic]
+    success_criteria: [Schema-valid brief artifact, approved replacement scope, source audio policy recorded]
+  - name: script
+    skill: pipelines/video-template-remix/script-director
+    required_artifacts_in: [brief]
+    optional_artifacts_in: [video_analysis_brief, source_media_review]
+    produces: [script]
+    optional_tools: [transcriber, scene_detect]
+    tools_available: [transcriber, scene_detect]
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus: [Transcript is source-grounded, speech timing is preserved, no new claims are invented]
+    success_criteria: [Schema-valid script artifact, sections map to source time ranges]
+  - name: scene_plan
+    skill: pipelines/video-template-remix/scene-director
+    required_artifacts_in: [script]
+    optional_artifacts_in: [brief, video_analysis_brief]
+    produces: [scene_plan]
+    optional_tools: [video_analyzer, scene_detect, frame_sampler]
+    tools_available: [video_analyzer, scene_detect, frame_sampler]
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus: [Every shot has exact timing, slot policy is explicit, transitions and subtitle zones are captured]
+    success_criteria: [Schema-valid scene_plan artifact, complete source timeline, no unclassified replacement slot]
+  - name: assets
+    skill: pipelines/video-template-remix/asset-director
+    required_artifacts_in: [scene_plan]
+    optional_artifacts_in: [brief, script]
+    produces: [asset_manifest]
+    optional_tools: [image_selector, video_selector, subtitle_gen, audio_enhance]
+    tools_available: [image_selector, video_selector, subtitle_gen, audio_enhance]
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus: [Each replacement has provenance and rights, aspect ratio and duration fit, original assets remain untouched]
+    success_criteria: [Schema-valid asset_manifest artifact, every replace slot has an approved asset or explicit hold]
+  - name: edit
+    skill: pipelines/video-template-remix/edit-director
+    required_artifacts_in: [scene_plan, asset_manifest]
+    optional_artifacts_in: [script]
+    produces: [edit_decisions]
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus: [Preserved timing is exact, only approved slots change, audio/subtitle decisions are explicit]
+    success_criteria: [Schema-valid edit_decisions artifact, preserve/replace/delete audit covers every scene]
+  - name: compose
+    skill: pipelines/video-template-remix/compose-director
+    required_artifacts_in: [edit_decisions, asset_manifest]
+    optional_artifacts_in: [scene_plan]
+    produces: [render_report, final_review]
+    required_tools: [video_compose, audio_mixer]
+    optional_tools: [video_stitch, video_trimmer, audio_enhance]
+    tools_available: [video_compose, audio_mixer, video_stitch, video_trimmer, audio_enhance]
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus: [Duration and cut points match source, source audio is intact unless approved, output passes ffprobe]
+    success_criteria: [Schema-valid render_report artifact, output exists, duration drift is within 1 frame per shot]
+  - name: publish
+    skill: pipelines/video-template-remix/publish-director
+    required_artifacts_in: [render_report, final_review]
+    optional_artifacts_in: [brief, script]
+    produces: [publish_log]
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus: [Derivative exports are labeled, source attribution is retained, replacement provenance is retained]
+    success_criteria: [Schema-valid publish_log artifact, export package includes provenance and QA notes]

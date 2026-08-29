@@ -122,6 +122,7 @@ Violating any of these is a defect:
 
 | Pipeline | Best For |
 |---|---|
+| `video-template-remix` **(default)** | Preserve a reference video's structure while replacing approved asset slots (beta) |
 | `animated-explainer` | Topic → fully generated explainer (production) |
 | `talking-head` | Footage-led speaker videos (beta) |
 | `screen-demo` | Screen recordings + walkthroughs (production) |
