@@ -253,11 +253,71 @@ class TTSSelector(BaseTool):
                 },
             )
 
-        # Normal generation — use scored selection
-        tool, score = self._select_best_tool(inputs, candidates, task_context)
-        if tool is None:
-            return ToolResult(success=False, error="No TTS provider available.")
+        # Normal generation — use scored selection with automatic fallback.
+        # Voicebox is ranked first when available; if it fails (e.g. HF connectivity
+        # edge-case despite cached weights), paid cloud providers are tried in order
+        # until one succeeds — guaranteeing business continuity.
+        rankings = rank_providers(candidates, task_context)
 
+        preferred = inputs.get("preferred_provider", "auto")
+        if preferred != "auto":
+            # Explicit provider requested — try only that one (no fallback loop).
+            for score_item in rankings:
+                if score_item.provider == preferred:
+                    tool = next((t for t in candidates if t.provider == preferred and t.get_status().value == "available"), None)
+                    if tool:
+                        result = self._execute_with_annotations(tool, score_item, inputs, candidates)
+                        return result
+            return ToolResult(success=False, error=f"Requested provider '{preferred}' is not available.")
+
+        # Auto mode: try providers in score order until one succeeds.
+        errors: list[dict[str, str]] = []
+        for score_item in rankings:
+            tool = next(
+                (t for t in candidates
+                 if t.provider == score_item.provider and t.get_status().value == "available"),
+                None
+            )
+            if tool is None:
+                continue
+
+            result = tool.execute(inputs)
+            if result.success:
+                result.data.setdefault("selected_tool", tool.name)
+                result.data["selected_provider"] = tool.provider
+                result.data["selection_reason"] = score_item.explain()
+                result.data["provider_score"] = score_item.to_dict()
+                result.data.update(self._tool_context_payload(tool))
+                result.data["alternatives_considered"] = [
+                    t.name for t in candidates
+                    if t.name != tool.name and t.get_status().value == "available"
+                ]
+                if errors:
+                    result.data["fallback_history"] = errors
+                return result
+
+            errors.append({
+                "provider": tool.provider,
+                "tool": tool.name,
+                "error": result.error or "unknown",
+            })
+
+        # All providers failed.
+        err_detail = "; ".join(f"{e['provider']}:{e['error']}" for e in errors)
+        return ToolResult(
+            success=False,
+            error=f"All TTS providers failed. Errors: {err_detail}",
+            data={"fallback_history": errors},
+        )
+
+    def _execute_with_annotations(
+        self,
+        tool,
+        score,
+        inputs: dict[str, Any],
+        candidates: list,
+    ) -> ToolResult:
+        """Execute a single tool and annotate its result."""
         result = tool.execute(inputs)
         if result.success:
             result.data.setdefault("selected_tool", tool.name)

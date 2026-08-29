@@ -368,10 +368,12 @@ class VoiceboxTTS(BaseTool):
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         # Default op back-compat: if a caller passes only {"text": ...}, treat
         # it as text_to_speech (matches ElevenLabs' pre-clone convention).
-        operation = (
-            inputs.get("operation")
-            or ("text_to_speech" if inputs.get("text") else "list_cloned_voices")
-        )
+        # Also accept "generate" as text_to_speech for cross-provider compatibility.
+        operation = inputs.get("operation")
+        if operation == "generate":
+            operation = "text_to_speech"
+        if operation is None:
+            operation = "text_to_speech" if inputs.get("text") else "list_cloned_voices"
 
         start = time.time()
         try:
