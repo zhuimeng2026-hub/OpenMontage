@@ -125,6 +125,44 @@ def _get_remotion_render_gate():
     )
 
 
+def _resolve_fps(edit_decisions: dict | None) -> float:
+    """Resolve the output frame rate from edit_decisions with cascading fallback.
+
+    Per docs/openmontage-173-server-fixes.md §P2 root-cause fix (Plan B):
+    clients may carry fps in any of five locations (top-level `fps`,
+    top-level `compose_target.fps`, top-level `format.fps`,
+    `metadata.fps`, `metadata.compose_target.fps`). The top-level locations
+    were historically stripped by `additionalProperties:false`; even after the
+    schema fix (Plan A) some clients still emit only `metadata.*`. Picking the
+    first present, valid (positive number) value preserves every shape and
+    avoids the silent `from = seconds * undefined = NaN` Remotion Sequence
+    crash.
+
+    Falls back to 30.0 and emits a WARNING so we can see in the journal when
+    a client emitted *no* fps anywhere — that's the "real cause hidden by
+    NaN" pattern the doc warns about.
+    """
+    ed = edit_decisions or {}
+    md = ed.get("metadata") or {}
+    candidates = (
+        ed.get("fps"),
+        (ed.get("compose_target") or {}).get("fps"),
+        (ed.get("format") or {}).get("fps"),
+        md.get("fps"),
+        (md.get("compose_target") or {}).get("fps"),
+    )
+    for c in candidates:
+        if isinstance(c, (int, float)) and c > 0:
+            return float(c)
+    import logging
+    logging.getLogger("video_compose").warning(
+        "fps missing from edit_decisions (no candidate in top-level fps / "
+        "compose_target.fps / format.fps / metadata.fps / "
+        "metadata.compose_target.fps); falling back to 30.0"
+    )
+    return 30.0
+
+
 class VideoCompose(BaseTool):
     name = "video_compose"
     version = "0.1.0"
@@ -635,7 +673,7 @@ class VideoCompose(BaseTool):
                             f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease",
                             f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black",
                         ]
-                    vf_parts: list[str] = [*geom, "setsar=1", "fps=30"]
+                    vf_parts: list[str] = [*geom, "setsar=1", f"fps={_resolve_fps(edit_decisions):.3f}"]
                     af_parts: list[str] = []
                     if speed != 1.0:
                         vf_parts.append(f"setpts={1.0/speed}*PTS")
@@ -1366,6 +1404,10 @@ class VideoCompose(BaseTool):
             hf_inputs["quality"] = inputs["quality"]
         if "fps" in inputs:
             hf_inputs["fps"] = inputs["fps"]
+        elif "edit_decisions" in inputs:
+            # Cascade fallback: top-level fps → compose_target.fps → metadata.*
+            # (see _resolve_fps for the full priority list).
+            hf_inputs["fps"] = _resolve_fps(inputs["edit_decisions"])
         if "strict" in inputs:
             hf_inputs["strict"] = inputs["strict"]
         if "skip_contrast" in inputs:
@@ -1490,7 +1532,7 @@ class VideoCompose(BaseTool):
             "code": (composition_data or {}).get("custom_code", ""),
             "images": staged_images,
             "durationPerImage": (composition_data or {}).get("duration_per_image", 3),
-            "fps": 30,
+            "fps": _resolve_fps(composition_data),
             "width": ct.get("width", 1080),
             "height": ct.get("height", 1920),
             "renderer_family": "custom-composition",
@@ -1538,6 +1580,34 @@ class VideoCompose(BaseTool):
 
         # Deep-copy props so we don't mutate the original
         props = json.loads(json.dumps(composition_data))
+
+        # Ensure every cut has in_seconds / out_seconds defaults so the
+        # Remotion Sequence "from" prop (from = in_seconds * fps) never becomes
+        # NaN when a client omits fps or timing fields from edit_decisions.
+        for cut in props.get("cuts") or []:
+            if cut.get("in_seconds") is None:
+                cut["in_seconds"] = 0
+            if cut.get("out_seconds") is None and cut.get("in_seconds") is not None:
+                cut["out_seconds"] = cut["in_seconds"] + 3.0
+
+        # Same defensive normalization for overlays. The Remotion Explainer
+        # component reads overlay.in_seconds / overlay.out_seconds (TS interface
+        # at Explainer.tsx:274-277), but OpenMontage's canonical overlay schema
+        # uses start_seconds / end_seconds (schemas/artifacts/edit_decisions.
+        # schema.json:280-283). Without this normalization, every overlay's
+        # `<Sequence from={Math.round(overlay.in_seconds * fps)}>` evaluates
+        # to NaN (undefined * 30) and Remotion crashes with
+        # "TypeError: The 'from' prop of a sequence must be finite, but got NaN."
+        for overlay in props.get("overlays") or []:
+            if overlay.get("in_seconds") is None and "start_seconds" in overlay:
+                overlay["in_seconds"] = overlay["start_seconds"]
+            if overlay.get("out_seconds") is None and "end_seconds" in overlay:
+                overlay["out_seconds"] = overlay["end_seconds"]
+            # Last-resort fill so no overlay ever has NaN timing.
+            if overlay.get("in_seconds") is None:
+                overlay["in_seconds"] = 0
+            if overlay.get("out_seconds") is None:
+                overlay["out_seconds"] = overlay["in_seconds"] + 3.0
 
         # Stage local media files into Remotion's public/ dir and reference
         # them by relative path so Img/OffthreadVideo/Audio load via
@@ -1745,15 +1815,25 @@ class VideoCompose(BaseTool):
         # restricted networks the default 30s browser setup times out with an
         # opaque failure. Pass it through and give the subprocess enough headroom
         # so run_command() does not kill Remotion before its own timeout fires.
+        #
+        # Default to 120s (was Remotion's built-in 28s). The 28s default is too
+        # tight when src/fonts.ts must register 30 woff2 faces via the FontFace
+        # API in headless Chrome — 30 sequential network round-trips + FontFace
+        # decode regularly exceed 30s on cold caches, and a hang there surfaces
+        # upstream as a misleadingly opaque "Remotion render failed" with the
+        # real delayRender() timeout swallowed by the 80-char log truncation
+        # in mcp_server.execute_tool. 120s comfortably covers cold-cache font
+        # loads while still failing fast enough for the user to iterate.
         remotion_timeout_ms = inputs.get("remotion_timeout_ms")
+        if remotion_timeout_ms is None:
+            remotion_timeout_ms = 120_000
         subprocess_timeout = 600
-        if remotion_timeout_ms:
-            try:
-                ms = int(remotion_timeout_ms)
-                cmd.append(f"--timeout={ms}")
-                subprocess_timeout = max(subprocess_timeout, ms // 1000 + 60)
-            except (TypeError, ValueError):
-                pass
+        try:
+            ms = int(remotion_timeout_ms)
+            cmd.append(f"--timeout={ms}")
+            subprocess_timeout = max(subprocess_timeout, ms // 1000 + 60)
+        except (TypeError, ValueError):
+            pass
 
         # 闸门：限制并发 Remotion 进程数，防止多用户无界扇出打爆宿主。
         # 排队/拿到槽位的状态经 progress_callback 上行，SSE 借此显示「排队→渲染」，

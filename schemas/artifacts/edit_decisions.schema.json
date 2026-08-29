@@ -227,6 +227,22 @@
         "verdict": { "type": "string", "enum": ["strong", "acceptable", "revise", "fail"] }
       }
     },
+    "fps": {
+      "type": "number",
+      "minimum": 1,
+      "description": "Output frame rate; consumed by Remotion `from`/`durationInFrames`. Without this, Remotion computes from = seconds * undefined = NaN and the render dies. MUST reach the renderer at the TOP LEVEL — not only inside metadata — so that 173's edit_decisions schema does not strip it via additionalProperties:false."
+    },
+    "compose_target": {
+      "type": "object",
+      "description": "Output canvas + frame rate. Historically also emitted as `format` and `metadata.compose_target`; this top-level block is the contract that video_compose reads at edit_decisions.compose_target.",
+      "properties": {
+        "width":  { "type": "number", "minimum": 1 },
+        "height": { "type": "number", "minimum": 1 },
+        "fps":    { "type": "number", "minimum": 1 },
+        "fit":    { "type": "string", "enum": ["cover", "contain", "pad"] }
+      },
+      "additionalProperties": false
+    },
     "metadata": { "type": "object" }
   },
   "additionalProperties": false
