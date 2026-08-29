@@ -993,9 +993,14 @@ async def execute_tool(
         result = await asyncio.to_thread(ctx.run, tool.execute, inputs_for_call)
         _log.info("execute_tool done: %s success=%s duration=%.2fs",
                   tool_name, result.success, result.duration_seconds or 0)
+        # Log the full error (was [:80] — too short; masked the real cause of
+        # Remotion failures and left the client in a retry loop seeing only
+        # "Remotion render failed ... Underlying error:" with nothing after).
+        # 2000 chars fits the typical "Remotion render failed (exit N):\n<25-line
+        # stderr tail>" shape from video_compose._remotion_render.
         _log.info("execute_tool response: tool=%s success=%s data_keys=%s error=%s",
                   tool_name, result.success, list(result.data.keys()) if result.data else None,
-                  result.error[:80] if result.error else None)
+                  (result.error[:2000] if result.error else None))
 
         # Build the data envelope. If the sub-tool returned no "data" key (or an
         # empty dict), fall back to forwarding all non-reserved top-level fields

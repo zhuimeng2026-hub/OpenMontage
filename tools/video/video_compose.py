@@ -125,6 +125,44 @@ def _get_remotion_render_gate():
     )
 
 
+def _resolve_fps(edit_decisions: dict | None) -> float:
+    """Resolve the output frame rate from edit_decisions with cascading fallback.
+
+    Per docs/openmontage-173-server-fixes.md §P2 root-cause fix (Plan B):
+    clients may carry fps in any of five locations (top-level `fps`,
+    top-level `compose_target.fps`, top-level `format.fps`,
+    `metadata.fps`, `metadata.compose_target.fps`). The top-level locations
+    were historically stripped by `additionalProperties:false`; even after the
+    schema fix (Plan A) some clients still emit only `metadata.*`. Picking the
+    first present, valid (positive number) value preserves every shape and
+    avoids the silent `from = seconds * undefined = NaN` Remotion Sequence
+    crash.
+
+    Falls back to 30.0 and emits a WARNING so we can see in the journal when
+    a client emitted *no* fps anywhere — that's the "real cause hidden by
+    NaN" pattern the doc warns about.
+    """
+    ed = edit_decisions or {}
+    md = ed.get("metadata") or {}
+    candidates = (
+        ed.get("fps"),
+        (ed.get("compose_target") or {}).get("fps"),
+        (ed.get("format") or {}).get("fps"),
+        md.get("fps"),
+        (md.get("compose_target") or {}).get("fps"),
+    )
+    for c in candidates:
+        if isinstance(c, (int, float)) and c > 0:
+            return float(c)
+    import logging
+    logging.getLogger("video_compose").warning(
+        "fps missing from edit_decisions (no candidate in top-level fps / "
+        "compose_target.fps / format.fps / metadata.fps / "
+        "metadata.compose_target.fps); falling back to 30.0"
+    )
+    return 30.0
+
+
 class VideoCompose(BaseTool):
     name = "video_compose"
     version = "0.1.0"
@@ -635,7 +673,7 @@ class VideoCompose(BaseTool):
                             f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease",
                             f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black",
                         ]
-                    vf_parts: list[str] = [*geom, "setsar=1", "fps=30"]
+                    vf_parts: list[str] = [*geom, "setsar=1", f"fps={_resolve_fps(edit_decisions):.3f}"]
                     af_parts: list[str] = []
                     if speed != 1.0:
                         vf_parts.append(f"setpts={1.0/speed}*PTS")
@@ -1366,6 +1404,10 @@ class VideoCompose(BaseTool):
             hf_inputs["quality"] = inputs["quality"]
         if "fps" in inputs:
             hf_inputs["fps"] = inputs["fps"]
+        elif "edit_decisions" in inputs:
+            # Cascade fallback: top-level fps → compose_target.fps → metadata.*
+            # (see _resolve_fps for the full priority list).
+            hf_inputs["fps"] = _resolve_fps(inputs["edit_decisions"])
         if "strict" in inputs:
             hf_inputs["strict"] = inputs["strict"]
         if "skip_contrast" in inputs:
@@ -1490,7 +1532,7 @@ class VideoCompose(BaseTool):
             "code": (composition_data or {}).get("custom_code", ""),
             "images": staged_images,
             "durationPerImage": (composition_data or {}).get("duration_per_image", 3),
-            "fps": 30,
+            "fps": _resolve_fps(composition_data),
             "width": ct.get("width", 1080),
             "height": ct.get("height", 1920),
             "renderer_family": "custom-composition",
