@@ -113,11 +113,16 @@ venv/
 # Backlot local cache (thumbnails)
 .backlot/
 
-# OpenMontage MCP proxy build artifact & local log (regenerable / runtime)
+# OpenMontage MCP proxy build artifact & local log (regenerable / runtime).
+# Cover all binaries the proxy build emits regardless of prefix, plus any
+# *.bak.* timestamped backups and any test/locator env files.
 OpenMontage-mcp-proxy/openmontage-mcp-proxy*
-OpenMontage-mcp-proxy/mcp-proxy.bak.*
+OpenMontage-mcp-proxy/mcp-proxy*
+OpenMontage-mcp-proxy/*.bak.*
 OpenMontage-mcp-proxy/proxy.log
 OpenMontage-mcp-proxy/*.log
+OpenMontage-mcp-proxy/.env.test
+OpenMontage-mcp-proxy/.env.local
 /openmontage-mcp-proxy*
 /proxy.log
 logs/

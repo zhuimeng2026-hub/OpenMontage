@@ -1590,6 +1590,25 @@ class VideoCompose(BaseTool):
             if cut.get("out_seconds") is None and cut.get("in_seconds") is not None:
                 cut["out_seconds"] = cut["in_seconds"] + 3.0
 
+        # Same defensive normalization for overlays. The Remotion Explainer
+        # component reads overlay.in_seconds / overlay.out_seconds (TS interface
+        # at Explainer.tsx:274-277), but OpenMontage's canonical overlay schema
+        # uses start_seconds / end_seconds (schemas/artifacts/edit_decisions.
+        # schema.json:280-283). Without this normalization, every overlay's
+        # `<Sequence from={Math.round(overlay.in_seconds * fps)}>` evaluates
+        # to NaN (undefined * 30) and Remotion crashes with
+        # "TypeError: The 'from' prop of a sequence must be finite, but got NaN."
+        for overlay in props.get("overlays") or []:
+            if overlay.get("in_seconds") is None and "start_seconds" in overlay:
+                overlay["in_seconds"] = overlay["start_seconds"]
+            if overlay.get("out_seconds") is None and "end_seconds" in overlay:
+                overlay["out_seconds"] = overlay["end_seconds"]
+            # Last-resort fill so no overlay ever has NaN timing.
+            if overlay.get("in_seconds") is None:
+                overlay["in_seconds"] = 0
+            if overlay.get("out_seconds") is None:
+                overlay["out_seconds"] = overlay["in_seconds"] + 3.0
+
         # Stage local media files into Remotion's public/ dir and reference
         # them by relative path so Img/OffthreadVideo/Audio load via
         # staticFile().

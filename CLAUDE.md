@@ -85,8 +85,10 @@ This is the single most important architectural insight. Internalize it before t
 2. **Read Layer 3 before any generation tool call.** The tool's `agent_skills` field points to the right file. Generic prompts produce generic output.
 3. **`render_runtime` is locked at proposal.** Never silently swap Remotion ↔ HyperFrames ↔ FFmpeg. If the chosen runtime is unavailable, surface a blocker and log a `render_runtime_selection` decision — do not substitute. When both runtimes are available, **Present Both Composition Runtimes (HARD RULE)** — present both with tradeoffs and a recommendation, then wait for explicit approval.
 4. **Gated stages need `human_approved=True` in the checkpoint.** `lib/checkpoint.py` enforces this; bypassing it raises a GATE VIOLATION. The pipeline manifest's `human_approval_default` is binding — never re-judge it.
-5. **Tool outputs go under `projects/<project-id>/`.** The Backlot board (live storyboard: `python -m backlot open <project-id>`) only watches that directory. Outputs with no real project (smoke-test TTS, ad-hoc renders, debug dumps) go to `projects/_scratch/<category>/` instead — never to the repo root.
-6. **The `decision_log` is append-only.** When a previously-logged choice changes mid-run, append a new entry with the **same `(category, subject)` pair** — never silently mutate the old one or reword the subject. The board keys decisions on the pair.
+5. **Tool outputs go under `projects/<project-id>/`.** Specifying a path outside `projects/` is invisible to the Backlot board and violates the workspace contract. Outputs with no real project (smoke-test TTS, ad-hoc renders, debug dumps) go to `projects/_scratch/<category>/` instead — never to the repo root.
+6. **The `decision_log` is append-only.** When a previously-logged choice changes mid-run, append a new entry with the **same `(category, subject)` pair** — never silently mutate the old one or reword the subject. The board keys decisions on the pair, and a reworded subject reads as a different decision.
+
+`AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
 
 ## Project Layout (one-liner per area)
 
@@ -129,8 +131,6 @@ Every production run creates `projects/<project-id>/` (gitignored) with `artifac
 | `localization-dub` | Subtitle / dub / translated variants (beta) |
 | `documentary-montage` | Real-footage edit from free/open archives (no paid video APIs) |
 | `framework-smoke` | Test: minimal 2-stage smoke test (test) |
-
-`AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
 
 ## Deep-Dive Docs (When You Need More)
 
