@@ -2445,7 +2445,15 @@ class BearerTokenAuthMiddleware:
 
         token = provided[len(b"Bearer "):].strip()
         if not hmac.compare_digest(token, self._expected):
-            _log.warning("401 Unauthorized: Invalid token from %s:%s", client_host, client_port)
+            # Track token identity via SHA-256 prefix so 401 patterns (e.g.
+            # client token drift from 192.168.20.172) can be diagnosed without
+            # leaking raw token bytes into log files.
+            _log.warning(
+                "401 Unauthorized: Invalid token from %s:%s token_hash=%s token_len=%d",
+                client_host, client_port,
+                hashlib.sha256(token).hexdigest()[:16],
+                len(token),
+            )
             return await self._reject(scope, _receive, send)
 
         _log.info("Auth OK: %s:%s", client_host, client_port)
