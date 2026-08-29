@@ -982,6 +982,34 @@ class TestAnimatedExplainerManifest:
         assert "animated-explainer" in list_pipelines()
 
 
+class TestVideoTemplateRemixManifest:
+    def test_loads_with_complete_director_skills(self):
+        manifest = load_pipeline("video-template-remix")
+        assert manifest["name"] == "video-template-remix"
+        assert manifest["reference_input"]["supported"] is True
+        assert set(manifest["metadata"]["remix_rules"]) >= {"preserve", "replace", "delete", "forbid"}
+        for stage in manifest["stages"]:
+            skill = get_stage_skill(manifest, stage["name"])
+            assert skill and skill.startswith("pipelines/video-template-remix/")
+            assert len(get_stage_review_focus(manifest, stage["name"])) >= 3
+            assert Path(__file__).parents[2].joinpath("skills", skill + ".md").exists()
+
+    def test_order_and_default_suggestion(self):
+        manifest = load_pipeline("video-template-remix")
+        assert get_stage_order(manifest) == [
+            "idea", "script", "scene_plan", "assets", "edit", "compose", "publish"
+        ]
+        from tools.analysis.video_analyzer import VideoAnalyzer
+        assert VideoAnalyzer()._suggest_pipeline({
+            "source": {"type": "video"},
+            "structure_analysis": {"pacing_profile": {"pacing_style": "steady_educational"}},
+        }) == "video-template-remix"
+
+    def test_configured_default_is_real_loader_entry(self):
+        from lib.pipeline_loader import get_default_pipeline_name
+        assert get_default_pipeline_name() == "video-template-remix"
+
+
 # ---- Style Playbooks ----
 
 

@@ -246,6 +246,19 @@ Stage director skills teach the agent HOW to execute each pipeline stage. Each s
 | Compose Director | `pipelines/hybrid/compose-director.md` | `compose` | Source/support balance checks, variant verification, coherent mix |
 | Publish Director | `pipelines/hybrid/publish-director.md` | `publish` | Master-vs-derivative packaging, source-mix metadata |
 
+### Video Template Remix Pipeline (`pipelines/video-template-remix/`) — v1.0
+
+| Skill | File | Stage | Key Capabilities |
+|-------|------|-------|-----------------|
+| Executive Producer | `pipelines/video-template-remix/executive-producer.md` | all | Source-timeline governance, low-cost routing, preserve/replace/delete audit |
+| Idea Director | `pipelines/video-template-remix/idea-director.md` | idea | Explicit replacement scope and rights policy |
+| Script Director | `pipelines/video-template-remix/script-director.md` | script | Source-grounded transcript and timing preservation |
+| Scene Director | `pipelines/video-template-remix/scene-director.md` | scene_plan | Shot boundaries, transitions, subtitle zones, slot classification |
+| Asset Director | `pipelines/video-template-remix/asset-director.md` | assets | Provenance-first, duration-safe replacement assets |
+| Edit Director | `pipelines/video-template-remix/edit-director.md` | edit | One-to-one source timeline edit decisions |
+| Compose Director | `pipelines/video-template-remix/compose-director.md` | compose | Deterministic assembly and frame/duration verification |
+| Publish Director | `pipelines/video-template-remix/publish-director.md` | publish | Export labeling, rights and remix audit packaging |
+
 ### Avatar Spokesperson Pipeline (`pipelines/avatar-spokesperson/`) — v2.0
 
 | Skill | File | Stage | Key Capabilities |

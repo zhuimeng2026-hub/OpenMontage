@@ -118,6 +118,7 @@ Every production run creates `projects/<project-id>/` (gitignored) with `artifac
 
 | Pipeline | Best For |
 |---|---|
+| `video-template-remix` **(default)** | Preserve a reference video's structure while replacing approved asset slots (beta) |
 | `animated-explainer` | Topic → fully generated explainer (production) |
 | `talking-head` | Footage-led speaker videos (beta) |
 | `screen-demo` | Screen recordings + walkthroughs (production) |
@@ -142,3 +143,5 @@ Every production run creates `projects/<project-id>/` (gitignored) with `artifac
 - `MCP_SERVER.md` — MCP tool surface and request/response contract
 - `skills/INDEX.md` — full Layer-2 skill index (which skill for which job)
 - `backlot/README.md` — how the live storyboard derives state from disk
+
+`AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
