@@ -82,7 +82,7 @@ This is the single most important architectural insight. Internalize it before t
 2. **Read Layer 3 before any generation tool call.** The tool's `agent_skills` field points to the right file. Generic prompts produce generic output.
 3. **`render_runtime` is locked at proposal.** Never silently swap Remotion ↔ HyperFrames ↔ FFmpeg. If the chosen runtime is unavailable, surface a blocker and log a `render_runtime_selection` decision — do not substitute. When both runtimes are available, **Present Both Composition Runtimes (HARD RULE)** — present both with tradeoffs and a recommendation, then wait for explicit approval.
 4. **Gated stages need `human_approved=True` in the checkpoint.** `lib/checkpoint.py` enforces this; bypassing it raises a GATE VIOLATION. The pipeline manifest's `human_approval_default` is binding — never re-judge it.
-5. **Tool outputs go under `projects/<project-id>/`.** The Backlot board (live storyboard: `python -m backlot open <project-id>`) only watches that directory.
+5. **Tool outputs go under `projects/<project-id>/`.** The Backlot board (live storyboard: `python -m backlot open <project-id>`) only watches that directory. Outputs with no real project (smoke-test TTS, ad-hoc renders, debug dumps) go to `projects/_scratch/<category>/` instead — never to the repo root.
 6. **The `decision_log` is append-only.** When a previously-logged choice changes mid-run, append a new entry with the **same `(category, subject)` pair** — never silently mutate the old one or reword the subject. The board keys decisions on the pair.
 
 ## Project Layout (one-liner per area)
@@ -97,7 +97,8 @@ This is the single most important architectural insight. Internalize it before t
 - `styles/*.yaml` — visual playbooks (`clean-professional`, `premium-minimalist`, `flat-motion-graphics`, `minimalist-diagram`, `ink-sketch`, `anime-ghibli`). Schema: `schemas/styles/playbook.schema.json`.
 - `lib/` — persistence helpers: `checkpoint.py`, `pipeline_loader.py`, `media_profiles.py`, `config_model.py`, `hyperframes_style_bridge.py`.
 - `remotion-composer/` — the React/Remotion scene stack. `SCENE_TYPES.md` lists the stock `cut.type` catalog.
-- `projects/` — gitignored. Each production run creates `projects/<project-id>/` with `artifacts/`, `assets/{images,video,audio,music}/`, `renders/final.mp4`. **All tool outputs must write under here — never to the repo root.**
+- `projects/` — gitignored. Each production run creates `projects/<project-id>/` with `artifacts/`, `assets/{images,video,audio,music}/`, `renders/final.mp4`. **All tool outputs must write under here — never to the repo root.** Outputs that have no project (smoke-test TTS, ad-hoc renders, debug dumps) belong in `projects/_scratch/<category>/` — see `projects/_scratch/README.md`.
+- `sources/` — gitignored binaries (`.gitignore` excludes `*.wav`, `*.mp4`, `*.mov`). Holds reference inputs that drive `video-reference-analyst` and similar skills: scene annotations, transcripts, and the source media itself. Keep the `.json` annotations tracked; the binaries stay local.
 - `mcp_server.py` — the FastMCP server. Start with `start_mcp_server.sh`.
 - `ink-theater/` — hand-drawn doodle engine + Ink Puppet mocap (`skills/creative/ink-theater.md`).
 - `backlot/` — the local storyboard server (`python -m backlot open <project-id>`). The agent's only board duty is to open it; the board derives everything else from disk.
@@ -105,6 +106,8 @@ This is the single most important architectural insight. Internalize it before t
 ## Project Workspace
 
 Every production run creates `projects/<project-id>/` (gitignored) with `artifacts/`, `assets/{images,video,audio,music}/`, and `renders/final.mp4`. Initialize with `python -c "from lib.checkpoint import init_project; init_project('<id>', title='<Title>', pipeline_type='<pipeline>')"`, then open the board with `python -m backlot open <project-id>`. Tools writing to the repo root, cwd, or `/tmp` are invisible to Backlot — that violates the workspace contract.
+
+**Exception — `projects/_scratch/`**: when a tool output genuinely has no project (smoke-testing a TTS provider, an ad-hoc ffmpeg probe, a one-off render), land it in `projects/_scratch/<category>/` instead. This keeps the workspace contract enforceable (nothing escapes `projects/`) while giving agents an honest place to put throwaway output. See `projects/_scratch/README.md` for the category list. Backlot does **not** watch this directory — by design.
 
 ## Pipelines — At a Glance
 
