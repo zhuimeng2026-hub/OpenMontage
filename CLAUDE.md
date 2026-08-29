@@ -93,6 +93,7 @@ Tools must write to these paths via explicit `output_path`. Writing outside `pro
 
 | Pipeline | Category | Manifest |
 |----------|----------|----------|
+| `video-template-remix` **(default)** | custom | `pipeline_defs/video-template-remix.yaml` |
 | `animated-explainer` | generated | `pipeline_defs/animated-explainer.yaml` |
 | `animation` | animation | `pipeline_defs/animation.yaml` |
 | `avatar-spokesperson` | talking_head | `pipeline_defs/avatar-spokesperson.yaml` |

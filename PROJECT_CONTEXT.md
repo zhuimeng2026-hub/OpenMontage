@@ -84,6 +84,7 @@ Each tool's `agent_skills[]` field bridges Layer 1 → Layer 3. See `skills/INDE
 
 | Pipeline | Manifest | Type |
 |----------|----------|------|
+| `video-template-remix` **(default)** | `pipeline_defs/video-template-remix.yaml` | Reference-faithful asset replacement |
 | `talking-head` | `pipeline_defs/talking-head.yaml` | Footage-based |
 | `animated-explainer` | `pipeline_defs/animated-explainer.yaml` | AI-generated |
 | `screen-demo` | `pipeline_defs/screen-demo.yaml` | Screen-recording |

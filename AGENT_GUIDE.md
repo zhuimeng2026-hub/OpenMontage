@@ -245,6 +245,7 @@ If the folder has tracks, the proposal and asset stages should present them as o
 
 | Pipeline | Best For | Stability |
 |----------|----------|-----------|
+| `video-template-remix` **(default)** | Preserve a reference video's structure while replacing approved asset slots | beta |
 | `animated-explainer` | Topic to fully generated explainer | production |
 | `talking-head` | Footage-led speaker videos | beta |
 | `screen-demo` | Screen recordings and walkthroughs | production |
