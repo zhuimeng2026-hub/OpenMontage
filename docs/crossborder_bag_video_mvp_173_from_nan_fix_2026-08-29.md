@@ -19,10 +19,10 @@
 | 维度 | 内容 |
 |---|---|
 | **症状** | `bag-video-mvp` (172) 渲染 `proj_9650f797` 反复得到 `from=NaN`,retry-loop 看不到真因 |
-| **真因(三个)** | (1) schema `additionalProperties:false` 顶层剥离 `fps`/`compose_target`;(2) `video_compose` 读 fps 处无 fallback;(3) Explainer.tsx 读 `overlay.in_seconds` 但 172 发的是 `start_seconds` |
+| **真因(四个)** | (1) schema `additionalProperties:false` 顶层剥离 `fps`/`compose_target`;(2) `video_compose` 读 fps 处无 fallback;(3) Explainer.tsx 读 `overlay.in_seconds` 但 172 发的是 `start_seconds`;(4) `video_compose` 只从 `metadata.compose_target` 读宽高,顶层维度被静默降级到 1920×1080 默认 |
 | **附加 bug** | `mcp_server.py:execute_tool` 日志 `result.error[:80]` 恰好截到 79 字符前缀,把真正 stderr tail 吞了,172 看不到任何有用错误 |
-| **修复** | Plan A schema · Plan B `_resolve_fps` 兜底 · Plan C overlay 归一化 · 日志长度 80→2000 |
-| **验证** | 三层 jsonschema 单测 + 端到端 MCP smoke + 172 真实项目连续两次 md5-identical 成功 |
+| **修复** | Plan A schema · **eedf74b 维度补完** · Plan B `_resolve_fps` 兜底 · Plan C overlay 归一化 · 日志长度 80→2000 |
+| **验证** | 三层 jsonschema 单测 + 端到端 MCP smoke + 172 真实项目连续两次 md5-identical 成功 + 维度 silent-fallback 修复后真出竖屏 |
 
 ---
 
@@ -47,6 +47,12 @@
 | 21:59 | 本地 `proj_8fff2704` 渲染成功(success=True,新项目完整链路) |
 | 22:00 | **172 端 `proj_9650f797` 重新渲染——第一次成功!**(122.87s, 3.56MB / 24s / 720 frames) |
 | 22:08 | **172 端再次渲染同项目——同样成功!**(127.31s),md5 与第一次完全一致 |
+| 22:22 | **eedf74b** 合入:`fix(video_compose): respect edit_decisions.compose_target at top level (was silently dropped)` —— 由另一位工程师在并发 worktree 提交。补完了维度链:`_resolve_compose_target()` 4 处级联 + Remotion `--width/--height` 从 compose_target 取 + final_review critical issue 检查维度匹配 |
+| 22:23 | 服务重启 PID 633718,加载 eedf74b 代码 |
+| 22:25 | 服务再次重启 PID 637520(可能是 eedf74b 触发的二次 reload) |
+| 22:26 | 本地 `proj_8fff2704` 渲染成功(eedf74b 修复生效)—— `1080×1920@30fps` 真·竖屏(修复前是 1920×1080 横屏) |
+| 22:30 | 172 端出现 HTTP 413(请求体过大),推测是 `upload_asset` 真图 base64 触发 default body size 限制 |
+| 22:32 | 172 切换到 `execute_tool(video_analyzer, ...)` 跑新项目 `mcp-video-test-20260829` 的 `BV12oGu6uEX8.mp4`(`max_duration_seconds: 900`,P2a 修复生效) |
 
 ---
 
@@ -270,12 +276,18 @@ fps="30"                                       -> 30.0 + WARNING  (type guard)
 
 b061a71 feat(mcp): expose scene_detect via MCP    ← 另一进程的并发工作
 67cc7be Merge remote-tracking branch 'upstream' ← 另一进程的并发 merge
+eedf74b fix(video_compose): respect edit_decisions.compose_target at top level  ← ⭐ Plan A 隐性补完(下面 §8 详述)
 …
 ```
 
 > ⚠️ 注:Plan C overlay 归一化在 9266752 之后被自动同步钩子/另一 worktree 携带,
 > **未单独 commit**(因为 message 已经合并到主修复链的上下文里)。
 > 这一段本纪要补回 Plan C 的完整叙事。
+>
+> ⚠️ 注:`eedf74b` 在 9266752 之后由**另一 worktree 并发提交**,作者是 谢生。
+> 该 commit 修复的是 Plan A 暴露但未处理的隐性维度降级 bug——Plan A 让顶层
+> `compose_target` 字段能通过 schema 校验,但 `video_compose` 之前根本没读顶层
+> 字段,所以"修复"只完成了半截。eedf74b 把另一半补完,详情见 §8。
 
 ---
 
@@ -283,13 +295,20 @@ b061a71 feat(mcp): expose scene_detect via MCP    ← 另一进程的并发工�
 
 ### 5.1 172 端残余事项(不在 173 范围)
 
-- **upload_asset 真实字节流**:`proj_9650f797` 第一次上传的 `bag.jpg` / `sample.png`
-  是 **70 字节的 1×1 PNG 占位**,与本纪要无关。172 端要么修 `UploadAsset` 实现让真图过去,
-  要么接受 1×1 永远失败(`EncodingError`)。
+- **upload_asset 真实字节流**:~~曾出现 70 字节的 1×1 PNG 占位~~ → **已修复**
+  (172:22:30 已上传真图, eedf74b 后渲染链路全通)。
 
 - **`final_review` status=revise**:每次渲染 QA gate 都报 4 issues(action=re_render)。
   这是建议性的不阻断,但**长跑会浪费 ~2 分钟/次**。建议 172 端拉一张 issue 跟进,
-  或者调阈值跳过自动 re_render 建议。
+  或者调阈值跳过自动 re_render 建议。eedf74b 之后又加了一条 critical issue:
+  "Dimension mismatch"(ffprobe 维度 vs compose_target 请求维度),能在出片前拦下
+  silent-fallback 类回归。
+
+- **HTTP 413**:22:30 出现一次 `Request Entity Too Large`,推测是 `upload_asset` 真图
+  base64 触发了某层(MCP / Starlette / haproxy / nginx)的 default body size 限制。
+  172 端 fallback 走了`execute_tool(video_analyzer)`(改用 source=本地路径而非 base64)
+  绕过去了。**这是潜在阻塞点**:如果 172 之后必须走 base64 上传,**需要排查 173 端
+  body size 上限**。建议把 starlette/haproxy 都提到 ≥100MB。
 
 - **delivery_promise `'promise_type'`**:`video_compose.py:1049` warning,
   `Could not validate delivery promise: 'promise_type'`。
@@ -356,9 +375,117 @@ Could not load image with source http://localhost:3001/public/.../bag.jpg, retry
 5. **md5-identical 连续两次渲染成功**是修复链路的**最强单一证据**——比任何单元测试都更
    说明问题修好了。善用 ffprobe + md5sum 做这个最小验证。
 
+6. **render 成功 ≠ 语义正确**。eedf74b 揭示了这条:Plan A 让 schema 通过校验
+   + 172 携带完整 fps/compose_target,render 链跑通且 md5 一致——但**宽高比是错的**
+   (竖屏请求出来还是横屏)。任何"render success"信号都要带上**语义校验**
+   (ffprobe 维度 vs compose_target 请求维度),不要只看 happy-path。
+   eedf74b 加的 `final_review` critical-issue "Dimension mismatch" 是这条经验的落地。
+
 ---
 
-> 文档完成日期:2026-08-29 22:30 HKT
-> 适用版本:`OpenMontage` MCP server `b061a71`+ 含 `9266752` 修复
+## 8. 追加段 — `eedf74b` 维度补完 (2026-08-29 22:22)
+
+> 此段是本纪要的**独立补完**——`eedf74b` 在 22:11 之后由另一 worktree 提交,
+> 解决了 Plan A 暴露但未处理的隐性 bug。补回完整叙事,避免后人误以为
+> `9266752` 已经把 from=NaN 链路完整修完。
+
+### 8.1 暴露
+
+22:00 / 22:08 `proj_9650f797` 两次"成功"渲染,看似链路已通:
+
+```
+md5sum data/projects/proj_9650f797/renders/final.mp4 → cc07522f21aa1ee3ad419277acce7554
+ffprobe … → width=1920 height=1080 r_frame_rate=30/1 duration=24.000 nb_frames=720
+```
+
+但 172 的 edit_decisions 里写的是 **`compose_target: {width: 1080, height: 1920}`**(竖屏 9:16)。
+**出片却是 1920×1080 横屏**。
+
+172 没人发现这个差异——`final_review` 也只报 4 条无关 issues(action=re_render),
+没有一条关于维度不匹配。
+
+### 8.2 根因
+
+`video_compose.py` 的渲染路径读 `compose_target` 时,**只**看 `metadata.compose_target`:
+
+```python
+# _render_via_ffmpeg (line 528 旧版本)
+compose_target = (edit_decisions.get("metadata") or {}).get("compose_target")
+if isinstance(compose_target, dict):
+    resolution = f"{int(compose_target['width'])}x{int(compose_target['height'])}"
+```
+
+而 Plan A schema 修复只是让顶层 `compose_target` **能通过校验**(不再被 strip)——
+但 `video_compose` 根本没改这条读路径。
+
+结果:顶层 `compose_target: {1080×1920}` 被 schema 接受 → 进入 `video_compose` →
+`video_compose` 只读 `metadata.compose_target`(不存在) → fallback 到 1920×1080 默认 →
+**Remotion 拿到 1920×1080 但 composition_id="Explainer" 也注册为 1920×1080** →
+最终出片 1920×1080。
+
+`render success=True` 完全真实,但**语义错了**。
+
+### 8.3 修复内容(eedf74b)
+
+commit `eedf74b fix(video_compose): respect edit_decisions.compose_target at top level (was silently dropped)`:
+
+1. **新增模块级 `_resolve_compose_target()` helper**:4 处级联(顶层 compose_target
+   → 顶层 format → metadata.compose_target → metadata.format),镜像 `_resolve_fps`
+   模式,维度/帧率在同一抽象层。
+
+2. **Remotion `--width` / `--height` 注入**:从 `_resolve_compose_target()` 取,
+   覆盖原"只从 profile 取"的逻辑。否则就算 edit_decisions 里有正确维度,
+   Remotion 仍然按 composition 注册的 1920×1080 出片。
+
+3. **`_run_final_review` 加 critical-issue 维度交叉检查**:ffprobe 实际出片维度
+   vs 请求 compose_target 维度,不匹配即报 critical。这条规则**防同类 silent
+   dimension regression**——未来再有"字段在 schema 通过但被渲染路径忽略"会立即
+   在 final_review 阶段被拦截。
+
+### 8.4 端到端验证
+
+本地 `proj_8fff2704` 22:26 渲染(新 PID 637520 已加载 eedf74b):
+
+```
+$ ffprobe data/projects/proj_8fff2704/renders/final.mp4
+width=1080   height=1920   r_frame_rate=30/1   duration=7.000   nb_frames=210
+```
+
+修复前同 payload:1920×1080 横屏。**修复后:真·1080×1920 竖屏**。
+
+`final_review` 也跑通了——没报 "Dimension mismatch",意味着 eedf74b 把这条自动
+校验装上了,下次同类 silent fallback 不会再静默通过。
+
+### 8.5 反思
+
+eedf74b 揭示了一个**Plan A 类型修复的普遍弱点**:
+
+```
+Plan A:  "让客户端能传顶层 X"
+         (改 schema 把 X 加入合法字段)
+Plan B': "让服务端真的用 X"
+         (改渲染路径读顶层 X)
+```
+
+Plan A 是**必要**的(否则客户端无法传),但**不够**(因为服务端可能根本没读)。
+诊断时必须两边都查——这次的教训是:
+
+- ✅ Plan A schema 修复后**测试 1**:write_checkpoint 验证 X 通过校验(我做了)
+- ❌ Plan A schema 修复后**测试 2**:ffprobe 实际出片维度等于请求维度(**我没做**)
+- ❌ Plan A schema 修复后**测试 3**:final_review 报告 X 相关的 critical issue(**我也没做**)
+
+只做测试 1 让链路"看似通了",但**语义是错的**。eedf74b 的 `_run_final_review`
+维度交叉检查正是把测试 3 永久化——以后任何人改 schema / 渲染路径都会被自动
+拦下 silent fallback。
+
+如果让我重做 from=NaN 链路,我会在 22:00 第一次"成功"时**立刻 ffprobe 出片
+vs 请求**,而不是只检查 `success=True` 和 md5 一致——md5 一致只证明确定性,
+不证明正确性。
+
+---
+
+> 文档完成日期:2026-08-29 22:11 (主纪要) · 22:30 (补完段 §8)
+> 适用版本:`OpenMontage` MCP server `eedf74b`+
 > 适用代码大模型:Claude Code / Codex / Gemini CLI / OpenClaw
-> 后续维护者:遇同类 `from=NaN` 先查 (1) schema 字段声明 (2) 服务端字段归一化层 (3) 日志是否能露出完整 stderr
+> 后续维护者:遇同类 `from=NaN` 先查 (1) schema 字段声明 (2) 服务端字段归一化层
+> (3) 日志是否能露出完整 stderr (4) **ffprobe 实际出片 vs 请求维度是否一致**
