@@ -179,7 +179,7 @@ def init_project(
     project_id: str,
     *,
     title: str,
-    pipeline_type: str,
+    pipeline_type: Optional[str] = None,
     pipeline_dir: Optional[Path] = None,
     style_playbook: Optional[str] = None,
 ) -> Path:
@@ -192,6 +192,9 @@ def init_project(
     Idempotent: re-running preserves the original created_at and merges fields.
     Returns the project directory.
     """
+    if pipeline_type is None:
+        from lib.pipeline_loader import get_default_pipeline_name
+        pipeline_type = get_default_pipeline_name()
     base = pipeline_dir or PROJECTS_DIR
     project_dir = base / project_id
     for sub in (

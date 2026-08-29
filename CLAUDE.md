@@ -78,4 +78,6 @@ The agent contract — violating any of these is a defect:
 5. **Tool outputs go under `projects/<project-id>/`.** Specifying a path outside projects/ is invisible to the Backlot board and violates the workspace contract. Outputs with no real project (smoke-test TTS, ad-hoc renders, debug dumps) go to `projects/_scratch/<category>/` instead — never to the repo root.
 6. **The `decision_log` is append-only.** When a previously-logged choice changes mid-run, append a new entry with the **same `(category, subject)` pair** — never silently mutate the old one. A reworded subject reads as a different decision.
 
+The default reference-remix pipeline is `video-template-remix` (`pipeline_defs/video-template-remix.yaml`).
+
 `AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.

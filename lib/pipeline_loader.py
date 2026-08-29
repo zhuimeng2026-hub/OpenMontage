@@ -76,6 +76,16 @@ def list_pipelines(defs_dir: Optional[Path] = None) -> list[str]:
     return [p.stem for p in defs_dir.glob("*.yaml")]
 
 
+def get_default_pipeline_name() -> str:
+    """Return the configured pipeline default and fail closed if invalid."""
+    from lib.config_model import OpenMontageConfig
+
+    name = OpenMontageConfig.load().pipeline.default_type
+    if name not in list_pipelines():
+        raise ValueError(f"Configured default pipeline is not available: {name!r}")
+    return name
+
+
 def _condition_is_active(condition: Optional[str], context: Optional[dict[str, Any]]) -> bool:
     """Evaluate a simple manifest condition against runtime context."""
     if not condition:

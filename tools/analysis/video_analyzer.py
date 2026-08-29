@@ -390,9 +390,20 @@ class VideoAnalyzer(BaseTool):
                     "min_scene_length_seconds": 0.5,
                     "output_path": str(output_dir / "scenes.json"),
                 })
+                # A degraded detector result still contains useful scenes;
+                # retain them for keyframes/pacing, but surface its status in
+                # the analysis audit trail.  Failed results must never vanish.
+                scenes = sd_result.data.get("scenes", [])
+                sd_status = sd_result.data.get("status", "completed")
                 if sd_result.success:
-                    scenes = sd_result.data.get("scenes", [])
-                    steps_completed.append("scene_detect")
+                    steps_completed.append("scene_detect" if sd_status == "completed" else "scene_detect_degraded")
+                    if sd_status == "degraded":
+                        diagnostics = sd_result.data.get("diagnostics", [])
+                        detail = "; ".join(str(item) for item in diagnostics) or "partial segment failure"
+                        steps_failed.append(f"scene_detect degraded: {detail}")
+                else:
+                    detail = sd_result.error or sd_status or "unknown error"
+                    steps_failed.append(f"scene_detect: {detail}")
             except Exception as e:
                 steps_failed.append(f"scene_detect: {e}")
 
@@ -662,7 +673,10 @@ class VideoAnalyzer(BaseTool):
             return "animation"  # Short-form → animation pipeline works well
         if pacing in ("slow_contemplative",):
             return "cinematic"
-        return "animated-explainer"
+        # Reference videos are templates to remix by default.  Keep the
+        # explicit pipeline override available to callers, but do not route a
+        # source-faithful request into a topic-first generated explainer.
+        return "video-template-remix"
 
     def _estimate_complexity(self, brief: dict) -> str:
         """Estimate how complex it would be to recreate this style."""
