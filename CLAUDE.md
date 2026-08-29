@@ -62,7 +62,7 @@ Python 3.10+ is required. The Makefile prefers `uv` if present, otherwise falls 
 - `styles/*.yaml` — visual playbooks (`clean-professional`, `premium-minimalist`, `flat-motion-graphics`, `minimalist-diagram`, `ink-sketch`). Schema: `schemas/styles/playbook.schema.json`.
 - `lib/` — persistence helpers: `checkpoint.py`, `pipeline_loader.py`, `media_profiles.py`, `config_model.py`, `hyperframes_style_bridge.py`.
 - `remotion-composer/` — the React/Remotion scene stack. `SCENE_TYPES.md` lists the stock `cut.type` catalog.
-- `projects/` — gitignored. Each production run creates `projects/<project-id>/` with `artifacts/`, `assets/{images,video,audio,music}/`, `renders/final.mp4`. **All tool outputs must write under here — never to the repo root.**
+- `projects/` — gitignored. Each production run creates `projects/<project-id>/` with `artifacts/`, `assets/{images,video,audio,music}/`, `renders/final.mp4`. **All tool outputs must write under here — never to the repo root.** Outputs that have no project (smoke-test TTS, ad-hoc renders, debug dumps) belong in `projects/_scratch/<category>/` — see `projects/_scratch/README.md`.
 - `mcp_server.py` — the FastMCP server. Start with `start_mcp_server.sh`.
 - `ink-theater/` — hand-drawn doodle engine + Ink Puppet mocap (`skills/creative/ink-theater.md`).
 - `backlot/` — the local storyboard server (`python -m backlot open <project-id>`). The agent's only board duty is to open it; the board derives everything else from disk.
@@ -75,7 +75,7 @@ The agent contract — violating any of these is a defect:
 2. **Read Layer 3 before any generation tool call.** The tool's `agent_skills` field points to the right file. Generic prompts produce generic output.
 3. **`render_runtime` is locked at proposal.** Never silently swap Remotion ↔ HyperFrames ↔ FFmpeg. If the chosen runtime is unavailable, surface a blocker and log a `render_runtime_selection` decision — do not substitute.
 4. **Gated stages need `human_approved=True` in the checkpoint.** `lib/checkpoint.py` enforces this; bypassing it raises a GATE VIOLATION. The pipeline manifest's `human_approval_default` is binding — never re-judge it.
-5. **Tool outputs go under `projects/<project-id>/`.** Specifying a path outside projects/ is invisible to the Backlot board and violates the workspace contract.
+5. **Tool outputs go under `projects/<project-id>/`.** Specifying a path outside projects/ is invisible to the Backlot board and violates the workspace contract. Outputs with no real project (smoke-test TTS, ad-hoc renders, debug dumps) go to `projects/_scratch/<category>/` instead — never to the repo root.
 6. **The `decision_log` is append-only.** When a previously-logged choice changes mid-run, append a new entry with the **same `(category, subject)` pair** — never silently mutate the old one. A reworded subject reads as a different decision.
 
 `AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
