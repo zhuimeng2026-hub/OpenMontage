@@ -939,6 +939,80 @@ async def edge_tts(
 
 
 # ---------------------------------------------------------------------------
+# Analysis Convenience Wrappers
+#
+# Domain-flavored entry points over `tools/analysis/*` tools. They keep the
+# MCP surface vocabulary tied to the user-visible feature instead of the
+# internal `execute_tool(tool_name="...", inputs={...})` envelope.
+# Both still go through the registry, so all governance (cost tracking,
+# review hooks, decision log) applies the same as for any other tool call.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def scene_detect(
+    input_path: str,
+    method: Optional[str] = "content",
+    threshold: Optional[float] = None,
+    min_scene_length_seconds: Optional[float] = 1.0,
+    output_path: Optional[str] = None,
+) -> ExecuteResult:
+    """Detect scene boundaries in a video.
+
+    Thin wrapper over the `scene_detect` tool. When PySceneDetect is installed
+    the detector uses it; otherwise falls back to FFmpeg's
+    `select=gt(scene,...)` filter. The robust long-video path is automatic:
+    videos >= 5 minutes are detected chunk-by-chunk and merged globally so
+    FFmpeg does not blow up on 4K / long-form sources. Partial segment
+    failures are reported but never silently dropped — `status` becomes
+    `degraded` and `diagnostics` carries the chunk-level error trail;
+    `scene_count` / `scenes` still reflect what was recovered.
+
+    Args:
+        input_path: Path to the source video (mp4/mov/mkv/...).
+        method: Detection method — 'content' (default), 'threshold', or
+            'adaptive'.
+        threshold: Detection threshold (interpretation depends on method).
+        min_scene_length_seconds: Minimum scene length; scenes shorter than
+            this are merged with their neighbors. Default 1.0, minimum 0.1.
+        output_path: Where to write the scene list JSON. Defaults to
+            `<input_path>.scenes.json` next to the source.
+    """
+    tool = registry.get("scene_detect")
+    if tool is None:
+        return ExecuteResult(success=False, error="scene_detect tool not registered")
+
+    inputs: dict[str, Any] = {
+        "input_path": input_path,
+        "method": method,
+        "min_scene_length_seconds": min_scene_length_seconds,
+    }
+    if threshold is not None:
+        inputs["threshold"] = threshold
+    if output_path:
+        inputs["output_path"] = output_path
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(
+            success=False,
+            error=f"scene_detect failed: {type(e).__name__}: {e}",
+        )
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Execution tools
 # ---------------------------------------------------------------------------
 
