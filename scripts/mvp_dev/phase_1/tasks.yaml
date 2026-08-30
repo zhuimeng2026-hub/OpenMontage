@@ -2,23 +2,85 @@ phase: 1
 scope: §17.B + §17.H — 多租户 + 文件权限
 section_ref: docs/openmontage_product_video_mvp_golang_scope.md#17.1-必须的
 
-status: STUB   # 改成 READY 才允许 orchestrator 实际跑 run.sh
+status: READY   # 改成 READY 才允许 orchestrator 实际跑 run.sh
 last_edited_by: human
 
-files_to_create: []
-files_to_modify: []
+# Phase 1 把租户隔离 + 文件鉴权这两块 SaaS 基础搭起来。
+# 不实现具体业务端点(POST /api/products 等是 Phase 2+),只把"谁能调用哪个租户下的资源"
+# + "谁能下载/预览哪个文件"这两条横切关注点落到中间件 + signed URL 层。
 
-sql_migrations: []
+files_to_create:
+  - frameflow/bff/internal/middleware/tenant.go          # TenantScope 中间件(X-Tenant-Id header → tenant_users 校验)
+  - frameflow/bff/internal/middleware/auth.go            # RequireJWT() 薄封装(转调 auth.JWTService.JWTAuthMiddleware)
+  - frameflow/bff/internal/filesvc/signed.go             # Sign(file_key, ttl) + Verify(file_key, exp, sig)
+  - frameflow/bff/internal/filesvc/store.go              # file_acl 表访问:Register / LookupTenant / list by tenant
+  - frameflow/bff/cmd/mvp/handlers_tenant.go             # POST /api/tenants / POST /api/tenants/:id/members / GET /api/tenants
+  - frameflow/bff/cmd/mvp/handlers_file.go               # GET /api/files/sign / GET /api/files/:key
 
-go_tests: []
+files_to_modify:
+  - frameflow/bff/cmd/mvp/main.go                        # 挂载新路由 + RequireJWT + TenantScope
+  - frameflow/bff/cmd/mvp/db.go                          # 加 file_acl 表 schema
+
+sql_migrations: |
+  -- 多租户:每个用户可属于多个 tenant,角色 owner/member
+  CREATE TABLE IF NOT EXISTS tenants (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_tenants_created_by ON tenants(created_by);
+
+  CREATE TABLE IF NOT EXISTS tenant_users (
+    tenant_id   TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    role        TEXT NOT NULL DEFAULT 'member',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (tenant_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_tenant_users_user ON tenant_users(user_id);
+
+  -- 文件 ACL:每个 file_key 绑定一个 tenant_id
+  -- 上传时由 Phase 2+ 写入,MVP seed 几条用于 gate
+  CREATE TABLE IF NOT EXISTS file_acl (
+    file_key      TEXT PRIMARY KEY,
+    tenant_id     TEXT NOT NULL,
+    uploaded_by   TEXT NOT NULL,
+    media_type    TEXT NOT NULL DEFAULT 'image',
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_file_acl_tenant ON file_acl(tenant_id);
+
+go_tests:
+  - frameflow/bff/internal/middleware/tenant_test.go     # X-Tenant-Id 缺/无成员/有成员 三个分支
+  - frameflow/bff/internal/filesvc/signed_test.go        # Sign + Verify 往返 + 过期 + 改 sig + 改 file_key
 
 gate_endpoints:
-  - "(fill from gate description below)"
+  - POST /api/tenants                                    # 创建租户,创建者自动 owner
+  - POST /api/tenants/:id/members                        # 添加成员(仅 owner)
+  - GET  /api/tenants                                    # 列出当前用户所在的所有 tenant
+  - GET  /api/files/sign?key=<file_key>                  # 签发带 TTL 的下载 URL(必须 JWT + tenant member)
+  - GET  /api/files/<file_key>?exp=<unix>&sig=<hex>      # 凭 signed URL 拿文件内容(占位字节即可)
 
 gate_min_verification: |
-  跨 tenant 调用任何资源接口返回 403;无 tenant header 返回 401;signed URL 过期拒绝
+  跨 tenant 调用任何资源接口返回 403;
+  无 JWT 或无 X-Tenant-Id header 返回 401;
+  signed URL 过期/篡改/跨租户访问 → 403;
+  同租户 + 合法 signed URL → 200。
 
-estimated_changes: "TBD — fill before unstubbing"
+estimated_changes: "6 新文件 + 2 改文件,约 450 LOC Go"
 
 notes: |
-  (operator: 填完后把 status 改成 READY,run.sh / gate.sh 才会真正执行。)
+  实现要点:
+  1. X-Tenant-Id 必须由调用方显式传入;不在 JWT 里塞(用户可能跨多租户)。
+  2. RequireJWT 把 internal_user_id 塞到 gin.Context;TenantScope 再从
+     gin.Context 取 user_id + header tenant_id,查 tenant_users 表。
+  3. signed URL secret 单独用 FILESIGN_SECRET(env),fallback 到 JWT_SECRET。
+     不复用 JWT_SECRET 是为了将来能独立 rotate。
+  4. file_key 走 base64url-safe 字符([A-Za-z0-9_-]+),长度 8-128。
+     gate 里预置 2 个:  "t1-asset-001" / "t2-asset-001"。
+  5. cmd/mvp/main.go 已经在 :18901 上跑(Phase 0)。Phase 1 的 cmd/mvp 改完后
+     build 出新的 binary,gate 用 18902 端口(避免与现存 18901 冲突)。
+  6. 不动主 BFF main.go(plan §10 明确 §19 的 24 个端点不在 phase 内做)。
+     路由全部挂在 cmd/mvp/ 这个独立 binary 上。
