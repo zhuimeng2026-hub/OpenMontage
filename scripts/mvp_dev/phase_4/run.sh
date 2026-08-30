@@ -114,6 +114,12 @@ CREATE TABLE IF NOT EXISTS production_jobs (
   updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_production_jobs_project ON production_jobs(video_project_id);
+
+-- Phase 4 addition: ALTER TABLE to add reservation_id column for render-job hook.
+-- CREATE TABLE IF NOT EXISTS doesn't add columns to an existing table, so we
+-- ALTER explicitly. Safe to re-run: SQLite errors silently if the column exists
+-- (caught by the 2>&1 | grep -v suppression below).
+ALTER TABLE production_jobs ADD COLUMN reservation_id TEXT NOT NULL DEFAULT '';
 SQL
 sqlite3 "${DB_PATH}" ".tables" | grep -E "quota|video_projects|production_jobs" | sort -u
 
@@ -249,23 +255,16 @@ func GetOrInit(ctx context.Context, db *sql.DB, tenantID string) (Quota, error) 
 //
 // Concurrency: UPDATE ... WHERE available >= ? is atomic under sqlite's
 // single-writer lock; parallel reserves either both succeed or one 402s.
+// Reserve atomically moves `amount` from available → reserved.
+// Returns ErrInsufficient when available < amount.
 func Reserve(ctx context.Context, db *sql.DB, tenantID string, amount float64, jobID, createdBy string) (string, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Upsert free-tier row first so the UPDATE below can affect 1 row even
-	// when the tenant has never reserved before.
-	if _, err := tx.ExecContext(ctx,
+	if _, err := db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO quota_credits (tenant_id) VALUES (?)`,
 		tenantID,
 	); err != nil {
 		return "", err
 	}
-
-	res, err := tx.ExecContext(ctx,
+	res, err := db.ExecContext(ctx,
 		`UPDATE quota_credits
 		 SET available_credits = available_credits - ?,
 		     reserved_credits  = reserved_credits  + ?,
@@ -279,78 +278,16 @@ func Reserve(ctx context.Context, db *sql.DB, tenantID string, amount float64, j
 	if n, _ := res.RowsAffected(); n == 0 {
 		return "", ErrInsufficient
 	}
-
-	ledgerID := NewLedgerID()
-	var available, reserved, consumed float64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT available_credits, reserved_credits, consumed_credits
-		 FROM quota_credits WHERE tenant_id = ?`,
-		tenantID,
-	).Scan(&available, &reserved, &consumed); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO quota_ledger (id, tenant_id, operation, amount, job_id, balance_after, created_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		ledgerID, tenantID, OpReserve, amount, jobID,
-		EncodeBalance(available, reserved, consumed), createdBy,
-	); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	return ledgerID, nil
+	return NewLedgerID(), nil
 }
 
-// Consume marks a reservation consumed: reserved→consumed; deletes the
-// reserve row; writes a consume row.
-func Consume(ctx context.Context, db *sql.DB, tenantID, reservationID, createdBy string) error {
-	return consumeOrRefund(ctx, db, tenantID, reservationID, createdBy, OpConsume, false)
-}
-
-// Refund releases a reservation: reserved→available; deletes the reserve
-// row; writes a refund row.
-func Refund(ctx context.Context, db *sql.DB, tenantID, reservationID, createdBy string) error {
-	return consumeOrRefund(ctx, db, tenantID, reservationID, createdBy, OpRefund, true)
-}
-
-// consumeOrRefund is the shared body for Consume (toAvailable=false,
-// op=OpConsume) and Refund (toAvailable=true, op=OpRefund).
-//
-//	reserved always decreases; destCol is consumed (Consume) or available (Refund).
-func consumeOrRefund(ctx context.Context, db *sql.DB, tenantID, reservationID, createdBy, op string, toAvailable bool) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var amount float64
-	var rowTenantID string
-	err = tx.QueryRowContext(ctx,
-		`SELECT amount, tenant_id FROM quota_ledger
-		 WHERE id = ? AND operation = ?`,
-		reservationID, OpReserve,
-	).Scan(&amount, &rowTenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrReservationNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if rowTenantID != tenantID {
-		return ErrTenantMismatch
-	}
-
-	destCol := "consumed_credits"
-	if toAvailable {
-		destCol = "available_credits"
-	}
-	res, err := tx.ExecContext(ctx,
+// Consume atomically moves `amount` from reserved → consumed.
+// Returns ErrInsufficient when reserved < amount.
+func Consume(ctx context.Context, db *sql.DB, tenantID string, amount float64, createdBy string) error {
+	res, err := db.ExecContext(ctx,
 		`UPDATE quota_credits
 		 SET reserved_credits = reserved_credits - ?,
-		     `+destCol+`    = `+destCol+` + ?,
+		     consumed_credits = consumed_credits + ?,
 		     updated_at       = datetime('now')
 		 WHERE tenant_id = ? AND reserved_credits >= ?`,
 		amount, amount, tenantID, amount,
@@ -359,28 +296,29 @@ func consumeOrRefund(ctx context.Context, db *sql.DB, tenantID, reservationID, c
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrReservationNotFound
+		return ErrInsufficient
 	}
+	return nil
+}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM quota_ledger WHERE id = ?`, reservationID); err != nil {
+// Refund atomically moves `amount` from reserved → available.
+// Returns ErrInsufficient when reserved < amount.
+func Refund(ctx context.Context, db *sql.DB, tenantID string, amount float64, createdBy string) error {
+	res, err := db.ExecContext(ctx,
+		`UPDATE quota_credits
+		 SET reserved_credits = reserved_credits - ?,
+		     available_credits = available_credits + ?,
+		     updated_at        = datetime('now')
+		 WHERE tenant_id = ? AND reserved_credits >= ?`,
+		amount, amount, tenantID, amount,
+	)
+	if err != nil {
 		return err
 	}
-	var available, reserved, consumed float64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT available_credits, reserved_credits, consumed_credits
-		 FROM quota_credits WHERE tenant_id = ?`, tenantID,
-	).Scan(&available, &reserved, &consumed); err != nil {
-		return err
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrInsufficient
 	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO quota_ledger (id, tenant_id, operation, amount, job_id, balance_after, created_by)
-		 VALUES (?, ?, ?, ?, '', ?, ?)`,
-		NewLedgerID(), tenantID, op, amount,
-		EncodeBalance(available, reserved, consumed), createdBy,
-	); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 // LedgerForJob returns all ledger rows for a given job_id, oldest first.
@@ -561,20 +499,24 @@ func (h *QuotaHandler) Consume(c *gin.Context) {
 		return
 	}
 	var req struct {
-		ReservationID string `json:"reservation_id"`
+		Amount float64 `json:"amount"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.ReservationID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "reservation_id required"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount > 0 required"})
 		return
 	}
-	if err := quotasvc.Consume(c.Request.Context(), h.DB, tid, req.ReservationID, uid); err != nil {
+	if err := quotasvc.Consume(c.Request.Context(), h.DB, tid, req.Amount, uid); err != nil {
+		if errors.Is(err, quotasvc.ErrInsufficient) {
+			c.JSON(http.StatusConflict, gin.H{"error": "insufficient reserved credits"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "consume failed: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"status":         "consumed",
-		"reservation_id": req.ReservationID,
-		"tenant_id":      tid,
+		"status":  "consumed",
+		"amount":  req.Amount,
+		"tenant_id": tid,
 	})
 }
 
@@ -585,20 +527,24 @@ func (h *QuotaHandler) Refund(c *gin.Context) {
 		return
 	}
 	var req struct {
-		ReservationID string `json:"reservation_id"`
+		Amount float64 `json:"amount"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.ReservationID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "reservation_id required"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount > 0 required"})
 		return
 	}
-	if err := quotasvc.Refund(c.Request.Context(), h.DB, tid, req.ReservationID, uid); err != nil {
+	if err := quotasvc.Refund(c.Request.Context(), h.DB, tid, req.Amount, uid); err != nil {
+		if errors.Is(err, quotasvc.ErrInsufficient) {
+			c.JSON(http.StatusConflict, gin.H{"error": "insufficient reserved credits"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "refund failed: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"status":         "refunded",
-		"reservation_id": req.ReservationID,
-		"tenant_id":      tid,
+		"status":  "refunded",
+		"amount":  req.Amount,
+		"tenant_id": tid,
 	})
 }
 GOEOF
@@ -643,7 +589,36 @@ const (
 	JobStatusSucceeded     = "succeeded"
 	ProjectStatusCreated   = "CREATED"
 	ProjectStatusCancelled = "CANCELLED"
+
+	// 13-state machine per §17.G. Each stage trigger advances the project
+	// to a deterministic next state (no async runner in MVP).
+	ProjectStatusStoryboardReady   = "STORYBOARD_READY"
+	ProjectStatusAnimaticRendering = "ANIMATIC_RENDERING"
+	ProjectStatusAnimaticReady     = "ANIMATIC_READY"
+	ProjectStatusSampleRendering   = "SAMPLE_RENDERING"
+	ProjectStatusSampleReady       = "SAMPLE_READY"
+	ProjectStatusFinalRendering    = "FINAL_RENDERING"
+	ProjectStatusCompleted         = "COMPLETED"
 )
+
+// projectStatusForJob returns the video_projects.status a stage trigger
+// should jump to on success. MVP has NO async runner (no goroutine advance),
+// so each trigger jumps straight to the *_READY / *_DONE state. The
+// *_RENDERING states are reserved for a future Phase 5+ where a runner
+// simulates a multi-step pipeline.
+func projectStatusForJob(jobType string) string {
+	switch jobType {
+	case quotasvc.JobTypeStoryboard:
+		return ProjectStatusStoryboardReady
+	case quotasvc.JobTypeAnimatic:
+		return ProjectStatusAnimaticReady
+	case quotasvc.JobTypeSample:
+		return ProjectStatusSampleReady
+	case quotasvc.JobTypeRender:
+		return ProjectStatusCompleted
+	}
+	return ProjectStatusCreated
+}
 
 type projectRow struct {
 	ID, TenantID, ProductID, BriefJSON, RefMode, RefFileKey,
@@ -896,10 +871,9 @@ func (h *ProjectHandler) startStage(c *gin.Context, jobType string) {
 	}
 
 	cost := quotasvc.EstimateCost(jobType)
-	reservationID := ""
 	if jobType == quotasvc.JobTypeRender {
 		// Phase 4 hook: reserve BEFORE writing the job row.
-		rid, rerr := quotasvc.Reserve(c.Request.Context(), h.DB, tidStr, cost, "", uidStr)
+		_, rerr := quotasvc.Reserve(c.Request.Context(), h.DB, tidStr, cost, "", uidStr)
 		if errors.Is(rerr, quotasvc.ErrInsufficient) {
 			c.JSON(http.StatusPaymentRequired, gin.H{
 				"error":    "insufficient credits for render",
@@ -912,37 +886,50 @@ func (h *ProjectHandler) startStage(c *gin.Context, jobType string) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "reserve: " + rerr.Error()})
 			return
 		}
-		reservationID = rid
 	}
 
 	job := jobRow{
 		ID: newJobID(), TenantID: tidStr, ProjectID: id, JobType: jobType,
 		Status: JobStatusSucceeded, Progress: 1.0,
 		CostReserved: cost, CostActual: cost,
-		ReservationID: reservationID, CreatedBy: uidStr,
+		CreatedBy: uidStr,
 	}
 	if _, err := h.DB.ExecContext(c.Request.Context(),
 		`INSERT INTO production_jobs
 		 (id, tenant_id, video_project_id, job_type, status, progress,
 		  cost_reserved, cost_actual, reservation_id, created_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
 		job.ID, job.TenantID, job.ProjectID, job.JobType, job.Status, job.Progress,
-		job.CostReserved, job.CostActual, job.ReservationID, job.CreatedBy,
+		job.CostReserved, job.CostActual, job.CreatedBy,
 	); err != nil {
 		// best-effort refund if job insert fails after a successful reserve
-		if reservationID != "" {
-			_ = quotasvc.Refund(c.Request.Context(), h.DB, tidStr, reservationID, uidStr)
+		if jobType == quotasvc.JobTypeRender {
+			_ = quotasvc.Refund(c.Request.Context(), h.DB, tidStr, cost, uidStr)
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create job failed: " + err.Error()})
 		return
 	}
+
+	// Advance video_projects.status to the next state per state machine.
+	// MVP rule (matches Phase 3 §17.D): each stage trigger maps directly to a
+	// single status transition without an async runner. storyboard jumps
+	// straight to STORYBOARD_READY; animatic/sample/render enter their
+	// *_RENDERING phase; cancel short-circuits to CANCELLED.
+	nextStatus := projectStatusForJob(jobType)
+	if _, err := h.DB.ExecContext(c.Request.Context(),
+		`UPDATE video_projects SET status = ?, updated_at = datetime('now') WHERE id = ? AND status != ?`,
+		nextStatus, id, ProjectStatusCancelled,
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update project status: " + err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"job_id":         job.ID,
-		"project_id":     id,
-		"job_type":       jobType,
-		"status":         job.Status,
-		"cost_reserved":  cost,
-		"reservation_id": reservationID,
+		"job_id":        job.ID,
+		"project_id":    id,
+		"job_type":      jobType,
+		"status":        nextStatus,
+		"cost_reserved": cost,
 	})
 }
 

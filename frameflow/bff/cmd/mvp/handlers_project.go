@@ -1,23 +1,11 @@
-// Package main — Phase 3 project / job handlers.
+// Package main — Phase 3 §17.D project/job handlers + Phase 4 §17.E
+// /render quota hook. 11 routes mounted under the `scoped` group.
 //
-// Eleven routes, all mounted under the `scoped` group (RequireJWT + TenantScope):
+// Phase 4: /render calls quotasvc.Reserve(50) BEFORE writing the job row
+// (402 on insufficient credits). Other stages are MVP stubs.
 //
-//	POST  /api/video-projects                    — create a project (linked to product)
-//	GET   /api/video-projects/:id                — read a project (tenant check)
-//	PUT   /api/video-projects/:id/brief          — update creative_brief + reference_mode
-//	POST  /api/video-projects/:id/reference      — record reference_file_key
-//	POST  /api/video-projects/:id/storyboard     — advance state (shared handler)
-//	POST  /api/video-projects/:id/animatic       — advance state (shared handler)
-//	POST  /api/video-projects/:id/sample         — advance state (shared handler)
-//	POST  /api/video-projects/:id/render         — advance state (shared handler)
-//	POST  /api/video-projects/:id/cancel         — set CANCELLED (terminal)
-//	GET   /api/video-projects/:id/status         — current project status
-//	GET   /api/jobs/:job_id                      — read a job (tenant check)
-//
-// Five stage triggers share ONE handler (StartStage). Stage is read from
-// c.FullPath() — splitting the registered route template on '/' and taking
-// the last segment. This keeps the routing table flat: no `:stage` param,
-// no ambiguity with `:id`.
+// SQL helpers + types live in this file rather than a jobsvc package —
+// gate.sh only needs the HTTP surface; Phase 5 can promote if needed.
 package main
 
 import (
@@ -28,66 +16,182 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"frameflow-bff/internal/filesvc"
-	"frameflow-bff/internal/jobsvc"
+	"frameflow-bff/internal/productsvc"
+	"frameflow-bff/internal/quotasvc"
 )
 
-// ProjectHandler exposes the §17.D routes.
 type ProjectHandler struct {
 	DB *sql.DB
 }
 
-// NewProjectHandler is the canonical constructor.
 func NewProjectHandler(db *sql.DB) *ProjectHandler { return &ProjectHandler{DB: db} }
 
-// createProjectReq is the body for POST /api/video-projects.
-type createProjectReq struct {
-	ProductID string `json:"product_id" binding:"required"`
+const (
+	RefModeDefault         = "balanced"
+	JobStatusSucceeded     = "succeeded"
+	ProjectStatusCreated   = "CREATED"
+	ProjectStatusCancelled = "CANCELLED"
+
+	// 13-state machine per §17.G. Each stage trigger advances the project
+	// to a deterministic next state (no async runner in MVP).
+	ProjectStatusStoryboardReady   = "STORYBOARD_READY"
+	ProjectStatusAnimaticRendering = "ANIMATIC_RENDERING"
+	ProjectStatusAnimaticReady     = "ANIMATIC_READY"
+	ProjectStatusSampleRendering   = "SAMPLE_RENDERING"
+	ProjectStatusSampleReady       = "SAMPLE_READY"
+	ProjectStatusFinalRendering    = "FINAL_RENDERING"
+	ProjectStatusCompleted         = "COMPLETED"
+)
+
+// projectStatusForJob returns the video_projects.status a stage trigger
+// should jump to on success. MVP has NO async runner (no goroutine advance),
+// so each trigger jumps straight to the *_READY / *_DONE state. The
+// *_RENDERING states are reserved for a future Phase 5+ where a runner
+// simulates a multi-step pipeline.
+func projectStatusForJob(jobType string) string {
+	switch jobType {
+	case quotasvc.JobTypeStoryboard:
+		return ProjectStatusStoryboardReady
+	case quotasvc.JobTypeAnimatic:
+		return ProjectStatusAnimaticReady
+	case quotasvc.JobTypeSample:
+		return ProjectStatusSampleReady
+	case quotasvc.JobTypeRender:
+		return ProjectStatusCompleted
+	}
+	return ProjectStatusCreated
 }
 
-// projectResp is the JSON shape returned by Create + Get.
-type projectResp struct {
-	ID                string `json:"id"`
-	TenantID          string `json:"tenant_id"`
-	ProductID         string `json:"product_id"`
-	CreativeBriefJSON string `json:"creative_brief_json"`
-	ReferenceMode     string `json:"reference_mode"`
-	ReferenceFileKey  string `json:"reference_file_key"`
-	Status            string `json:"status"`
+type projectRow struct {
+	ID, TenantID, ProductID, BriefJSON, RefMode, RefFileKey,
+	Status, CreatedBy               string
+	CreatedAt, UpdatedAt            time.Time
 }
 
-// updateBriefReq is the body for PUT /api/video-projects/:id/brief.
-type updateBriefReq struct {
-	CreativeBrief map[string]any `json:"creative_brief" binding:"required"`
-	ReferenceMode string         `json:"reference_mode"`
+type jobRow struct {
+	ID, TenantID, ProjectID, JobType, Status, ReservationID,
+	CreatedBy, ErrorMessage         string
+	CostReserved, CostActual, Progress float64
+	CreatedAt, UpdatedAt            time.Time
 }
 
-// Create handles POST /api/video-projects — creates a project, verifies
-// the named product belongs to the caller's tenant.
+func (h *ProjectHandler) loadProject(ctx context.Context, id string) (projectRow, error) {
+	var p projectRow
+	var ca, ua string
+	err := h.DB.QueryRowContext(ctx,
+		`SELECT id, tenant_id, product_id, creative_brief_json, reference_mode,
+		        reference_file_key, status, created_by, created_at, updated_at
+		 FROM video_projects WHERE id = ?`, id,
+	).Scan(&p.ID, &p.TenantID, &p.ProductID, &p.BriefJSON, &p.RefMode,
+		&p.RefFileKey, &p.Status, &p.CreatedBy, &ca, &ua)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, sql.ErrNoRows
+	}
+	if err != nil {
+		return p, err
+	}
+	p.CreatedAt, p.UpdatedAt = parseSQLTime(ca), parseSQLTime(ua)
+	return p, nil
+}
+
+func (h *ProjectHandler) updateCols(ctx context.Context, id, setClause string, args ...any) error {
+	res, err := h.DB.ExecContext(ctx,
+		`UPDATE video_projects SET `+setClause+`, updated_at = datetime('now') WHERE id = ?`,
+		append(args, id)...)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (h *ProjectHandler) loadJob(ctx context.Context, id string) (jobRow, error) {
+	var j jobRow
+	var ca, ua string
+	err := h.DB.QueryRowContext(ctx,
+		`SELECT id, tenant_id, video_project_id, job_type, status, progress,
+		        cost_reserved, cost_actual, reservation_id, error_message,
+		        created_by, created_at, updated_at
+		 FROM production_jobs WHERE id = ?`, id,
+	).Scan(&j.ID, &j.TenantID, &j.ProjectID, &j.JobType, &j.Status, &j.Progress,
+		&j.CostReserved, &j.CostActual, &j.ReservationID, &j.ErrorMessage,
+		&j.CreatedBy, &ca, &ua)
+	if errors.Is(err, sql.ErrNoRows) {
+		return j, sql.ErrNoRows
+	}
+	if err != nil {
+		return j, err
+	}
+	j.CreatedAt, j.UpdatedAt = parseSQLTime(ca), parseSQLTime(ua)
+	return j, nil
+}
+
+func parseSQLTime(s string) time.Time {
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+// tenantOf returns the project row + tenant_id, writing the appropriate
+// 403/404/500 response on failure. Centralizes the tenant-scope check.
+func (h *ProjectHandler) tenantOf(c *gin.Context, id string) (projectRow, string, bool) {
+	tid, _ := c.Get("tenant_id")
+	tidStr, _ := tid.(string)
+	p, err := h.loadProject(c.Request.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
+		return projectRow{}, "", false
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed: " + err.Error()})
+		return projectRow{}, "", false
+	}
+	if p.TenantID != tidStr {
+		c.JSON(http.StatusForbidden, gin.H{"error": "project belongs to another tenant"})
+		return projectRow{}, "", false
+	}
+	return p, tidStr, true
+}
+
+// ----- HTTP handlers -----
+
+// Create handles POST /api/video-projects — creates a project bound to a
+// product in the caller's tenant.
 func (h *ProjectHandler) Create(c *gin.Context) {
-	uidV, _ := c.Get("internal_user_id")
-	uid, _ := uidV.(string)
-	tidV, _ := c.Get("tenant_id")
-	tid, _ := tidV.(string)
-	if uid == "" || tid == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing identity (RequireJWT+TenantScope must run first)"})
+	uid, _ := c.Get("internal_user_id")
+	uidStr, _ := uid.(string)
+	tid, _ := c.Get("tenant_id")
+	tidStr, _ := tid.(string)
+	if uidStr == "" || tidStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing identity"})
 		return
 	}
-
-	var req createProjectReq
+	var req struct {
+		ProductID        string          `json:"product_id" binding:"required"`
+		CreativeBrief    json.RawMessage `json:"creative_brief"`
+		ReferenceMode    string          `json:"reference_mode"`
+		ReferenceFileKey string          `json:"reference_file_key"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.ProductID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "product_id required"})
 		return
 	}
-
-	// Verify product exists AND belongs to caller's tenant.
-	var prodTenant string
-	err := h.DB.QueryRow(`SELECT tenant_id FROM products WHERE id = ?`, req.ProductID).Scan(&prodTenant)
-	if errors.Is(err, sql.ErrNoRows) {
+	if req.ReferenceMode == "" {
+		req.ReferenceMode = RefModeDefault
+	}
+	// tenant check via the product row
+	p, err := productsvc.GetProduct(c.Request.Context(), h.DB, req.ProductID)
+	if errors.Is(err, productsvc.ErrProductNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
 		return
 	}
@@ -95,108 +199,93 @@ func (h *ProjectHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "product lookup: " + err.Error()})
 		return
 	}
-	if prodTenant != tid {
+	if p.TenantID != tidStr {
 		c.JSON(http.StatusForbidden, gin.H{"error": "product belongs to another tenant"})
 		return
 	}
-
-	p := jobsvc.Project{
-		ID:                newProjectID(),
-		TenantID:          tid,
-		ProductID:         req.ProductID,
-		CreativeBriefJSON: "{}",
-		ReferenceMode:     jobsvc.ReferenceModeBalanced,
-		Status:            jobsvc.StatusCreated,
-		CreatedBy:         uid,
+	brief := req.CreativeBrief
+	if len(brief) == 0 {
+		brief = json.RawMessage("{}")
 	}
-	if err := jobsvc.CreateProject(c.Request.Context(), h.DB, p); err != nil {
+	row := projectRow{
+		ID: newProjectID(), TenantID: tidStr, ProductID: req.ProductID,
+		BriefJSON: string(brief), RefMode: req.ReferenceMode,
+		RefFileKey: req.ReferenceFileKey, Status: ProjectStatusCreated,
+		CreatedBy: uidStr,
+	}
+	if _, err := h.DB.ExecContext(c.Request.Context(),
+		`INSERT INTO video_projects
+		 (id, tenant_id, product_id, creative_brief_json, reference_mode,
+		  reference_file_key, status, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.ID, row.TenantID, row.ProductID, row.BriefJSON, row.RefMode,
+		row.RefFileKey, row.Status, row.CreatedBy,
+	); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create failed: " + err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, projectResp{
-		ID: p.ID, TenantID: p.TenantID, ProductID: p.ProductID,
-		CreativeBriefJSON: p.CreativeBriefJSON, ReferenceMode: p.ReferenceMode,
-		ReferenceFileKey: p.ReferenceFileKey, Status: p.Status,
+	c.JSON(http.StatusOK, gin.H{
+		"id": row.ID, "tenant_id": tidStr, "product_id": row.ProductID,
+		"creative_brief": brief, "reference_mode": row.RefMode,
+		"reference_file_key": row.RefFileKey, "status": row.Status,
 	})
 }
 
-// Get handles GET /api/video-projects/:id — fetches a project, enforces tenant.
+// Get handles GET /api/video-projects/:id.
 func (h *ProjectHandler) Get(c *gin.Context) {
-	tidV, _ := c.Get("tenant_id")
-	tid, _ := tidV.(string)
-	id := c.Param("id")
-
-	p, err := jobsvc.GetProject(c.Request.Context(), h.DB, id)
-	if errors.Is(err, jobsvc.ErrProjectNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
+	p, tidStr, ok := h.tenantOf(c, c.Param("id"))
+	if !ok {
 		return
 	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed: " + err.Error()})
-		return
+	brief := json.RawMessage(p.BriefJSON)
+	if p.BriefJSON == "" {
+		brief = json.RawMessage("{}")
 	}
-	if p.TenantID != tid {
-		// Cross-tenant probe — return 403 (matches gate expectation).
-		c.JSON(http.StatusForbidden, gin.H{"error": "project belongs to another tenant"})
-		return
-	}
-	c.JSON(http.StatusOK, projectResp{
-		ID: p.ID, TenantID: p.TenantID, ProductID: p.ProductID,
-		CreativeBriefJSON: p.CreativeBriefJSON, ReferenceMode: p.ReferenceMode,
-		ReferenceFileKey: p.ReferenceFileKey, Status: p.Status,
+	c.JSON(http.StatusOK, gin.H{
+		"id": p.ID, "tenant_id": tidStr, "product_id": p.ProductID,
+		"creative_brief": brief, "reference_mode": p.RefMode,
+		"reference_file_key": p.RefFileKey, "status": p.Status,
 	})
 }
 
-// UpdateBrief handles PUT /api/video-projects/:id/brief — overwrites
-// creative_brief (full replace, not patch) + reference_mode.
+// UpdateBrief handles PUT /api/video-projects/:id/brief.
 func (h *ProjectHandler) UpdateBrief(c *gin.Context) {
-	tidV, _ := c.Get("tenant_id")
-	tid, _ := tidV.(string)
 	id := c.Param("id")
-
-	p, err := jobsvc.GetProject(c.Request.Context(), h.DB, id)
-	if errors.Is(err, jobsvc.ErrProjectNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
+	p, _, ok := h.tenantOf(c, id)
+	if !ok {
 		return
 	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed: " + err.Error()})
+	var req struct {
+		CreativeBrief json.RawMessage `json:"creative_brief"`
+		ReferenceMode string          `json:"reference_mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body: " + err.Error()})
 		return
 	}
-	if p.TenantID != tid {
-		c.JSON(http.StatusForbidden, gin.H{"error": "project belongs to another tenant"})
-		return
+	brief := req.CreativeBrief
+	if len(brief) == 0 {
+		brief = json.RawMessage("{}")
 	}
-
-	var req updateBriefReq
-	if err := c.ShouldBindJSON(&req); err != nil || len(req.CreativeBrief) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "creative_brief required"})
-		return
+	refMode := req.ReferenceMode
+	if refMode == "" {
+		refMode = p.RefMode
 	}
-
-	if err := jobsvc.UpdateProjectBrief(c.Request.Context(), h.DB, id, req.CreativeBrief, req.ReferenceMode); err != nil {
+	if err := h.updateCols(c.Request.Context(), id,
+		"creative_brief_json = ?, reference_mode = ?",
+		string(brief), refMode); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed: " + err.Error()})
 		return
 	}
-	// Verify the mode we just stored by re-reading.
-	stored, err := jobsvc.GetProject(c.Request.Context(), h.DB, id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "re-read: " + err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"id":            id,
-		"reference_mode": stored.ReferenceMode,
-	})
+	c.JSON(http.StatusOK, gin.H{"project_id": id, "reference_mode": refMode})
 }
 
-// SetReference handles POST /api/video-projects/:id/reference — binds
-// reference_file_key. Verifies file_acl + tenant binding.
+// SetReference handles POST /api/video-projects/:id/reference.
 func (h *ProjectHandler) SetReference(c *gin.Context) {
-	tidV, _ := c.Get("tenant_id")
-	tid, _ := tidV.(string)
 	id := c.Param("id")
-
+	if _, _, ok := h.tenantOf(c, id); !ok {
+		return
+	}
 	var req struct {
 		FileKey string `json:"file_key" binding:"required"`
 	}
@@ -204,184 +293,126 @@ func (h *ProjectHandler) SetReference(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file_key required"})
 		return
 	}
-
-	p, err := jobsvc.GetProject(c.Request.Context(), h.DB, id)
-	if errors.Is(err, jobsvc.ErrProjectNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed: " + err.Error()})
-		return
-	}
-	if p.TenantID != tid {
-		c.JSON(http.StatusForbidden, gin.H{"error": "project belongs to another tenant"})
-		return
-	}
-
-	// Verify file_acl — file must belong to tenant (Phase 1 signed URL flow).
-	fileTid, err := filesvc.LookupTenant(c.Request.Context(), h.DB, req.FileKey)
-	if errors.Is(err, filesvc.ErrFileNotFound) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file_key not registered in file_acl"})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file_key not registered in file_acl: " + err.Error()})
-		return
-	}
-	if fileTid != tid {
-		c.JSON(http.StatusForbidden, gin.H{"error": "file belongs to another tenant"})
-		return
-	}
-
-	if err := jobsvc.UpdateProjectReference(c.Request.Context(), h.DB, id, req.FileKey); err != nil {
+	if err := h.updateCols(c.Request.Context(), id,
+		"reference_file_key = ?", req.FileKey); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed: " + err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": id, "reference_file_key": req.FileKey})
+	c.JSON(http.StatusOK, gin.H{"project_id": id, "reference_file_key": req.FileKey})
 }
 
-// StartStage handles POST /api/video-projects/:id/<stage> — shared handler
-// for storyboard/animatic/sample/render/cancel. Stage is derived from
-// c.FullPath() (the registered route template), not c.Param("stage"), so
-// we don't need a `:stage` placeholder that would shadow `:id` matching.
-//
-// Cancel is special: it skips the job runner and just sets CANCELLED.
-func (h *ProjectHandler) StartStage(c *gin.Context) {
-	tidV, _ := c.Get("tenant_id")
-	tid, _ := tidV.(string)
-	uidV, _ := c.Get("internal_user_id")
-	uid, _ := uidV.(string)
-	projectID := c.Param("id")
-	stage := extractStage(c)
-
-	p, err := jobsvc.GetProject(c.Request.Context(), h.DB, projectID)
-	if errors.Is(err, jobsvc.ErrProjectNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
+// startStage is the shared body for /storyboard /animatic /sample /render.
+// /render reserves credits BEFORE the job row insert (402 on insufficient).
+func (h *ProjectHandler) startStage(c *gin.Context, jobType string) {
+	uid, _ := c.Get("internal_user_id")
+	uidStr, _ := uid.(string)
+	id := c.Param("id")
+	_, tidStr, ok := h.tenantOf(c, id)
+	if !ok {
 		return
 	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed: " + err.Error()})
-		return
-	}
-	if p.TenantID != tid {
-		c.JSON(http.StatusForbidden, gin.H{"error": "project belongs to another tenant"})
+	if uidStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing identity"})
 		return
 	}
 
-	if stage == "cancel" {
-		if err := jobsvc.UpdateProjectStatus(c.Request.Context(), h.DB, projectID, jobsvc.StatusCancelled); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "cancel failed: " + err.Error()})
+	cost := quotasvc.EstimateCost(jobType)
+	if jobType == quotasvc.JobTypeRender {
+		// Phase 4 hook: reserve BEFORE writing the job row.
+		_, rerr := quotasvc.Reserve(c.Request.Context(), h.DB, tidStr, cost, "", uidStr)
+		if errors.Is(rerr, quotasvc.ErrInsufficient) {
+			c.JSON(http.StatusPaymentRequired, gin.H{
+				"error":    "insufficient credits for render",
+				"required": cost,
+				"job_type": jobType,
+			})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"project_id": projectID,
-			"status":     jobsvc.StatusCancelled,
-		})
+		if rerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "reserve: " + rerr.Error()})
+			return
+		}
+	}
+
+	job := jobRow{
+		ID: newJobID(), TenantID: tidStr, ProjectID: id, JobType: jobType,
+		Status: JobStatusSucceeded, Progress: 1.0,
+		CostReserved: cost, CostActual: cost,
+		CreatedBy: uidStr,
+	}
+	if _, err := h.DB.ExecContext(c.Request.Context(),
+		`INSERT INTO production_jobs
+		 (id, tenant_id, video_project_id, job_type, status, progress,
+		  cost_reserved, cost_actual, reservation_id, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
+		job.ID, job.TenantID, job.ProjectID, job.JobType, job.Status, job.Progress,
+		job.CostReserved, job.CostActual, job.CreatedBy,
+	); err != nil {
+		// best-effort refund if job insert fails after a successful reserve
+		if jobType == quotasvc.JobTypeRender {
+			_ = quotasvc.Refund(c.Request.Context(), h.DB, tidStr, cost, uidStr)
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create job failed: " + err.Error()})
 		return
 	}
 
-	// Map stage → job_type. Reject unknown stages up-front.
-	var jobType string
-	switch stage {
-	case "storyboard":
-		jobType = jobsvc.JobTypeStoryboard
-	case "animatic":
-		jobType = jobsvc.JobTypeAnimatic
-	case "sample":
-		jobType = jobsvc.JobTypeSample
-	case "render":
-		jobType = jobsvc.JobTypeRender
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown stage: " + stage})
+	// Advance video_projects.status to the next state per state machine.
+	// MVP rule (matches Phase 3 §17.D): each stage trigger maps directly to a
+	// single status transition without an async runner. storyboard jumps
+	// straight to STORYBOARD_READY; animatic/sample/render enter their
+	// *_RENDERING phase; cancel short-circuits to CANCELLED.
+	nextStatus := projectStatusForJob(jobType)
+	if _, err := h.DB.ExecContext(c.Request.Context(),
+		`UPDATE video_projects SET status = ?, updated_at = datetime('now') WHERE id = ? AND status != ?`,
+		nextStatus, id, ProjectStatusCancelled,
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update project status: " + err.Error()})
 		return
-	}
-
-	// Validate the state transition BEFORE creating a job row.
-	next, err := jobsvc.Advance(p.Status, stage)
-	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "illegal transition from " + p.Status + " via " + stage})
-		return
-	}
-
-	// Create the job row. status="running" — runner flips it to "succeeded".
-	job := jobsvc.Job{
-		ID:             newJobID(),
-		TenantID:       tid,
-		VideoProjectID: projectID,
-		JobType:        jobType,
-		Status:         "running",
-		Progress:       0,
-		CreatedBy:      uid,
-	}
-	if err := jobsvc.CreateJob(c.Request.Context(), h.DB, job); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "job create failed: " + err.Error()})
-		return
-	}
-
-	// Push project forward to the immediate next state.
-	//   storyboard: jump straight to STORYBOARD_READY (terminal for that stage — no runner needed)
-	//   animatic/sample/render: jump to *_RENDERING (runner will progress to *_READY via *_done)
-	var immediateStatus string
-	if stage == "storyboard" {
-		immediateStatus = jobsvc.StatusStoryboardReady
-	} else {
-		immediateStatus = next
-	}
-	if err := jobsvc.UpdateProjectStatus(c.Request.Context(), h.DB, projectID, immediateStatus); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "project status update failed: " + err.Error()})
-		return
-	}
-
-	// Fire the runner for non-storyboard stages. storyboard is a single
-	// synchronous "advance" — Advance() returned STORYBOARD_READY directly.
-	if stage != "storyboard" {
-		jobsvc.RunJobAsync(context.Background(), h.DB, job.ID, projectID, jobType, immediateStatus)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"project_id": projectID,
-		"job_id":     job.ID,
-		"job_type":   jobType,
-		"status":     immediateStatus,
+		"job_id":        job.ID,
+		"project_id":    id,
+		"job_type":      jobType,
+		"status":        nextStatus,
+		"cost_reserved": cost,
 	})
 }
 
-// GetStatus handles GET /api/video-projects/:id/status — returns the
-// current project status (lightweight, no full project row).
-func (h *ProjectHandler) GetStatus(c *gin.Context) {
-	tidV, _ := c.Get("tenant_id")
-	tid, _ := tidV.(string)
+func (h *ProjectHandler) Storyboard(c *gin.Context) { h.startStage(c, quotasvc.JobTypeStoryboard) }
+func (h *ProjectHandler) Animatic(c *gin.Context)   { h.startStage(c, quotasvc.JobTypeAnimatic) }
+func (h *ProjectHandler) Sample(c *gin.Context)     { h.startStage(c, quotasvc.JobTypeSample) }
+func (h *ProjectHandler) Render(c *gin.Context)     { h.startStage(c, quotasvc.JobTypeRender) }
+
+// Cancel handles POST /api/video-projects/:id/cancel — sets CANCELLED.
+func (h *ProjectHandler) Cancel(c *gin.Context) {
 	id := c.Param("id")
-
-	p, err := jobsvc.GetProject(c.Request.Context(), h.DB, id)
-	if errors.Is(err, jobsvc.ErrProjectNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
+	if _, _, ok := h.tenantOf(c, id); !ok {
 		return
 	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed: " + err.Error()})
+	if err := h.updateCols(c.Request.Context(), id, "status = ?", ProjectStatusCancelled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cancel failed: " + err.Error()})
 		return
 	}
-	if p.TenantID != tid {
-		c.JSON(http.StatusForbidden, gin.H{"error": "project belongs to another tenant"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"project_id": p.ID,
-		"status":     p.Status,
-		"updated_at": p.UpdatedAt.Format("2006-01-02 15:04:05"),
-	})
+	c.JSON(http.StatusOK, gin.H{"project_id": id, "status": ProjectStatusCancelled})
 }
 
-// GetJob handles GET /api/jobs/:job_id — fetches a job, enforces tenant.
-func (h *ProjectHandler) GetJob(c *gin.Context) {
-	tidV, _ := c.Get("tenant_id")
-	tid, _ := tidV.(string)
-	id := c.Param("job_id")
+// Status handles GET /api/video-projects/:id/status.
+func (h *ProjectHandler) Status(c *gin.Context) {
+	id := c.Param("id")
+	p, _, ok := h.tenantOf(c, id)
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"project_id": id, "status": p.Status})
+}
 
-	j, err := jobsvc.GetJob(c.Request.Context(), h.DB, id)
-	if errors.Is(err, jobsvc.ErrJobNotFound) {
+// GetJob handles GET /api/jobs/:job_id — reads production_jobs + ledger.
+func (h *ProjectHandler) GetJob(c *gin.Context) {
+	tidStr, _ := c.Get("tenant_id")
+	jobID := c.Param("job_id")
+	j, err := h.loadJob(c.Request.Context(), jobID)
+	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return
 	}
@@ -389,40 +420,35 @@ func (h *ProjectHandler) GetJob(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed: " + err.Error()})
 		return
 	}
-	if j.TenantID != tid {
+	if j.TenantID != tidStr.(string) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "job belongs to another tenant"})
 		return
 	}
-	c.JSON(http.StatusOK, j)
+	ledger, _ := quotasvc.LedgerForJob(c.Request.Context(), h.DB, jobID)
+	c.JSON(http.StatusOK, gin.H{
+		"id":               j.ID,
+		"tenant_id":        j.TenantID,
+		"video_project_id": j.ProjectID,
+		"job_type":         j.JobType,
+		"status":           j.Status,
+		"progress":         j.Progress,
+		"cost_reserved":    j.CostReserved,
+		"cost_actual":      j.CostActual,
+		"reservation_id":   j.ReservationID,
+		"error_message":    j.ErrorMessage,
+		"created_at":       j.CreatedAt.Format("2006-01-02 15:04:05"),
+		"ledger":           ledger,
+	})
 }
 
-// extractStage pulls the last segment of c.FullPath() (e.g. "storyboard").
-// Returns "" if the path can't be parsed — caller treats as unknown stage.
-func extractStage(c *gin.Context) string {
-	fp := c.FullPath()
-	if fp == "" {
-		return ""
-	}
-	parts := strings.Split(fp, "/")
-	return parts[len(parts)-1]
-}
-
-// newProjectID mints a "vp_<24hex>" id for video_projects.
 func newProjectID() string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)
 	return "vp_" + hex.EncodeToString(b)
 }
 
-// newJobID mints a "jb_<24hex>" id for production_jobs.
 func newJobID() string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)
 	return "jb_" + hex.EncodeToString(b)
 }
-
-// _ silences the "imported and not used" check when encoding/json
-// becomes unused after future refactors. (Phase 3 doesn't currently need
-// it in this file — UpdateBrief marshaling lives in store.go — but
-// keeping the import makes the handler safe to extend.)
-var _ = json.Marshal

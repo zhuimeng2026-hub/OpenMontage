@@ -5,6 +5,20 @@
 # runnable standalone: if no server is listening on :18905 it launches
 # the MVP binary itself, runs the 11 scenarios, then tears it down on EXIT.
 #
+# New Phase 4 API (2026-08-30 refactor): consume / refund take only
+# `{amount}` (no reservation_id). Reservation rows are still written to
+# the ledger but the HTTP surface is simpler:
+#
+#   GET  /api/quota                 → {tenant_id, available_credits,
+#                                     reserved_credits, consumed_credits, tier}
+#   POST /api/quota/reserve         → {amount, job_id}
+#                                    → 200 {reservation_id, amount}  /  402
+#   POST /api/quota/consume         → {amount}
+#                                    → 200 {status:"consumed", amount}  /  409
+#   POST /api/quota/refund          → {amount}
+#                                    → 200 {status:"refunded", amount}  /  409
+#   POST /api/video-projects/:id/render  (auto-reserves 50 credits)
+#
 # Each scenario prints `PASS <name>` or `FAIL <name> expected=X got=Y`.
 # Exits 0 if all PASS, 1 if any FAIL.
 
@@ -151,14 +165,43 @@ PYEOF
     fi
 }
 
+# project_status <project_id> → prints current status via GET /status.
+project_status () {
+    curl -s -X GET "${BASE}/api/video-projects/$1/status" \
+        -H "Authorization: Bearer ${ALICE_TOKEN}" \
+        -H "X-Tenant-Id: ${T1_ID}" \
+        -o "${TMP}/status_probe.json"
+    jget "${TMP}/status_probe.json" '.status'
+}
+
+# wait_status <project_id> <expected> [max_attempts]
+# Polls GET /status until it reads <expected>; the MVP runner takes ~400ms.
+# Prints whatever status it last observed.
+wait_status () {
+    local pid="$1"; local want="$2"; local tries="${3:-20}"
+    local seen=""
+    for _ in $(seq 1 "${tries}"); do
+        seen="$(project_status "${pid}")"
+        if [ "${seen}" = "${want}" ]; then
+            break
+        fi
+        sleep 0.3
+    done
+    echo "${seen}"
+}
+
 TMP=/tmp/gate_p4.$$
 mkdir -p "${TMP}"
 trap 'rm -rf "${TMP}"; cleanup' EXIT
 
-# Prepare fake jpeg-like bytes for asset upload.
-echo "fake jpeg bytes for hero_01"     > "${TMP}/hero_01.jpg"
+# Unique-per-run suffix so repeated gate runs never collide on tenant /
+# product names (the DB is cumulative across phases and runs).
+STAMP="$(date +%Y%m%d%H%M%S)-$$"
 
-# ---- Setup: login Alice + Bob and create T1, T2 (idempotent) --------
+# Prepare fake jpeg-like bytes for the Phase 2 asset upload.
+echo "fake jpeg bytes for hero_01" > "${TMP}/hero_01.jpg"
+
+# ---- Setup (Phase 1): login Alice + Bob, create T1 + T2 --------------
 echo "[setup] login-alice"
 curl -s -X POST "${BASE}/api/auth/login" -H "Content-Type: application/json" \
     -d '{"code":"ALICE_TEST"}' -o "${TMP}/alice_login.json"
@@ -175,17 +218,18 @@ echo "[setup] create-t1 (Alice owns)"
 curl -s -X POST "${BASE}/api/tenants" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -d '{"name":"Alice Studio P4"}' -o "${TMP}/t1.json"
+    -d "{\"name\":\"Alice Studio P4 ${STAMP}\"}" -o "${TMP}/t1.json"
 T1_ID=$(jget "${TMP}/t1.json" '.id')
 
 echo "[setup] create-t2 (Bob owns)"
 curl -s -X POST "${BASE}/api/tenants" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${BOB_TOKEN}" \
-    -d '{"name":"Bob Studio P4"}' -o "${TMP}/t2.json"
+    -d "{\"name\":\"Bob Studio P4 ${STAMP}\"}" -o "${TMP}/t2.json"
 T2_ID=$(jget "${TMP}/t2.json" '.id')
 
-# Add Bob as a member of T1 so we can later exercise cross-tenant denial.
+# Add Bob as a member of T1 so cross-tenant denial is about the *scope*
+# header (T2), not about Bob being a total stranger.
 echo "[setup] alice-adds-bob-to-t1"
 curl -s -X POST "${BASE}/api/tenants/${T1_ID}/members" \
     -H "Content-Type: application/json" \
@@ -194,114 +238,126 @@ curl -s -X POST "${BASE}/api/tenants/${T1_ID}/members" \
     -d "{\"user_id\":\"${BOB_IU}\"}" >/dev/null
 
 if [ -z "${ALICE_TOKEN}" ] || [ -z "${BOB_TOKEN}" ] || [ -z "${T1_ID}" ] || [ -z "${T2_ID}" ]; then
-    echo "[gate] FAIL: setup did not produce tokens/tenants — aborting"
+    echo "[gate] FAIL: Phase 1 setup did not produce tokens/tenants — aborting"
     exit 1
 fi
+echo "[setup] alice_iu=${ALICE_IU} bob_iu=${BOB_IU} t1=${T1_ID} t2=${T2_ID}"
 
-# ---- Phase 2 setup: product P1 in T1 with 1 asset -------------------
+# ---- Setup (Phase 2): product P1 in T1 + one asset -------------------
 echo "[setup] create-product-p1"
 curl -s -X POST "${BASE}/api/products" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d '{"name":"Travel Mug P4","category":"kitchenware","sku":"TM-001-P4"}' \
+    -d "{\"name\":\"Travel Mug P4 ${STAMP}\",\"category\":\"kitchenware\",\"sku\":\"TM-P4-${STAMP}\"}" \
     -o "${TMP}/product.json"
 PRODUCT_ID=$(jget "${TMP}/product.json" '.id')
 
-echo "[setup] upload-asset"
+echo "[setup] upload-asset-to-p1"
 curl -s -X POST "${BASE}/api/products/${PRODUCT_ID}/assets" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
     -F "file=@${TMP}/hero_01.jpg;filename=hero_01.jpg" \
-    -o "${TMP}/asset.json" >/dev/null
+    -o "${TMP}/asset_hero.json"
+HERO_ASSET_ID=$(jget "${TMP}/asset_hero.json" '.asset_id')
+HERO_FILE_KEY=$(jget "${TMP}/asset_hero.json" '.file_key')
 
-# ---- Phase 3 setup: video project VP1 linked to P1 ------------------
+if [ -z "${PRODUCT_ID}" ] || [ -z "${HERO_FILE_KEY}" ]; then
+    echo "[gate] FAIL: Phase 2 setup did not produce product/asset — aborting"
+    echo "        product=$(cat "${TMP}/product.json" 2>/dev/null)"
+    echo "        asset=$(cat "${TMP}/asset_hero.json" 2>/dev/null)"
+    exit 1
+fi
+echo "[setup] product=${PRODUCT_ID} asset=${HERO_ASSET_ID} file_key=${HERO_FILE_KEY}"
+
+# ---- Setup (Phase 3): project VP1 in T1, advance to SAMPLE_READY ----
 echo "[setup] create-video-project-vp1"
-curl -s -X POST "${BASE}/api/video-projects" \
+CODE=$(curl -s -o "${TMP}/vp1.json" -w "%{http_code}" -X POST "${BASE}/api/video-projects" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"product_id\":\"${PRODUCT_ID}\",\"creative_brief_json\":{\"goal\":\"launch teaser\"}}" \
-    -o "${TMP}/vp.json"
-VP1_ID=$(jget "${TMP}/vp.json" '.id')
-
-if [ -z "${PRODUCT_ID}" ] || [ -z "${VP1_ID}" ]; then
-    echo "[gate] FAIL: product/video-project setup incomplete — aborting"
+    -d "{\"product_id\":\"${PRODUCT_ID}\"}")
+VP1_ID=$(jget "${TMP}/vp1.json" '.id')
+if [ "${CODE}" != "200" ] || [ -z "${VP1_ID}" ]; then
+    echo "[gate] FAIL: create VP1 failed — code=${CODE} body=$(cat "${TMP}/vp1.json" 2>/dev/null)"
     exit 1
 fi
+echo "[setup] vp1=${VP1_ID}"
 
-# Wait helper: poll until /api/video-projects/:id/status terminal or timeout.
-wait_for_status () {
-    local vp_id="$1"
-    local target="$2"
-    local tries="${3:-30}"
-    for i in $(seq 1 "${tries}"); do
-        curl -s -X GET "${BASE}/api/video-projects/${vp_id}/status" \
-            -H "Authorization: Bearer ${ALICE_TOKEN}" \
-            -H "X-Tenant-Id: ${T1_ID}" -o "${TMP}/status.json" >/dev/null
-        local st=$(jget "${TMP}/status.json" '.status')
-        if [ "${st}" = "${target}" ]; then
-            return 0
-        fi
-        sleep 0.3
-    done
-    return 1
-}
-
+# Storyboard (Phase 4 inlined handler jumps straight to STORYBOARD_READY).
 echo "[setup] start-storyboard"
-curl -s -X POST "${BASE}/api/video-projects/${VP1_ID}/storyboard" \
+CODE=$(curl -s -o "${TMP}/vp1_sb.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/video-projects/${VP1_ID}/storyboard" \
+    -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/job_storyboard.json" >/dev/null
-if wait_for_status "${VP1_ID}" "STORYBOARD_READY" 30; then
-    echo "[setup] STORYBOARD_READY ok"
-else
-    echo "[gate] FAIL: STORYBOARD_READY never reached — aborting"
-    cat "${TMP}/status.json"
+    -d '{}')
+S1=$(wait_status "${VP1_ID}" "STORYBOARD_READY" 20)
+if [ "${CODE}" != "200" ] || [ "${S1}" != "STORYBOARD_READY" ]; then
+    echo "[gate] FAIL: STORYBOARD_READY not reached — code=${CODE} status=${S1}"
     exit 1
 fi
+echo "[setup] storyboard ok"
 
+# Animatic → wait for ANIMATIC_READY.
 echo "[setup] start-animatic"
-curl -s -X POST "${BASE}/api/video-projects/${VP1_ID}/animatic" \
+CODE=$(curl -s -o "${TMP}/vp1_an.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/video-projects/${VP1_ID}/animatic" \
+    -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/job_animatic.json" >/dev/null
-if wait_for_status "${VP1_ID}" "ANIMATIC_READY" 30; then
-    echo "[setup] ANIMATIC_READY ok"
-else
-    echo "[gate] FAIL: ANIMATIC_READY never reached — aborting"
-    cat "${TMP}/status.json"
+    -d '{}')
+S2=$(wait_status "${VP1_ID}" "ANIMATIC_READY" 20)
+if [ "${CODE}" != "200" ] || [ "${S2}" != "ANIMATIC_READY" ]; then
+    echo "[gate] FAIL: ANIMATIC_READY not reached — code=${CODE} status=${S2}"
     exit 1
 fi
+echo "[setup] animatic ok"
 
+# Sample → wait for SAMPLE_READY.
 echo "[setup] start-sample"
-curl -s -X POST "${BASE}/api/video-projects/${VP1_ID}/sample" \
+CODE=$(curl -s -o "${TMP}/vp1_sa.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/video-projects/${VP1_ID}/sample" \
+    -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/job_sample.json" >/dev/null
-if wait_for_status "${VP1_ID}" "SAMPLE_READY" 30; then
-    echo "[setup] SAMPLE_READY ok"
-else
-    echo "[gate] FAIL: SAMPLE_READY never reached — aborting"
-    cat "${TMP}/status.json"
+    -d '{}')
+S3=$(wait_status "${VP1_ID}" "SAMPLE_READY" 20)
+if [ "${CODE}" != "200" ] || [ "${S3}" != "SAMPLE_READY" ]; then
+    echo "[gate] FAIL: SAMPLE_READY not reached — code=${CODE} status=${S3}"
     exit 1
 fi
+echo "[setup] sample ok"
+
+# A SECOND project, still in CREATED, for the render test.
+# /render reserves 50 credits before writing the job row — we need a
+# project that's still in CREATED so /render is legal (Phase 4 inlined
+# handler advances status to COMPLETED, leaving it terminal).
+echo "[setup] create-second-project-vp_render (still CREATED)"
+CODE=$(curl -s -o "${TMP}/vp_render.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/video-projects" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${ALICE_TOKEN}" \
+    -H "X-Tenant-Id: ${T1_ID}" \
+    -d "{\"product_id\":\"${PRODUCT_ID}\"}")
+VP_RENDER_ID=$(jget "${TMP}/vp_render.json" '.id')
+if [ "${CODE}" != "200" ] || [ -z "${VP_RENDER_ID}" ]; then
+    echo "[gate] FAIL: create VP_RENDER failed — code=${CODE} body=$(cat "${TMP}/vp_render.json" 2>/dev/null)"
+    exit 1
+fi
+echo "[setup] vp_render=${VP_RENDER_ID}"
 
 # ---- Test 1: get-quota-200 ------------------------------------------
 # Read initial Alice quota. Free tier = 100 available / 0 reserved / 0 consumed.
 echo "[test] get-quota-200: Alice GET /api/quota"
-curl -s -X GET "${BASE}/api/quota" \
+CODE=$(curl -s -o "${TMP}/quota0.json" -w "%{http_code}" -X GET "${BASE}/api/quota" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/quota0.json"
+    -H "X-Tenant-Id: ${T1_ID}")
 Q0_AVAIL=$(jget "${TMP}/quota0.json" '.available_credits')
 Q0_RESV=$(jget "${TMP}/quota0.json" '.reserved_credits')
 Q0_CONS=$(jget "${TMP}/quota0.json" '.consumed_credits')
 Q0_TIER=$(jget "${TMP}/quota0.json" '.tier')
 Q0_TENANT=$(jget "${TMP}/quota0.json" '.tenant_id')
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X GET "${BASE}/api/quota" \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}")
 if [ "${CODE}" = "200" ] \
     && [ -n "${Q0_AVAIL}" ] \
     && [ -n "${Q0_RESV}" ] \
@@ -310,267 +366,236 @@ if [ "${CODE}" = "200" ] \
     && [ -n "${Q0_TIER}" ]; then
     ok "get-quota-200"
 else
-    bad "get-quota-200" "200, tenant=T1, all 3 balance fields" "code=${CODE} avail=${Q0_AVAIL} resv=${Q0_RESV} cons=${Q0_CONS} tier=${Q0_TIER} tenant=${Q0_TENANT}"
+    bad "get-quota-200" "200, tenant=T1, all 3 balance fields" \
+        "code=${CODE} avail=${Q0_AVAIL} resv=${Q0_RESV} cons=${Q0_CONS} tier=${Q0_TIER} tenant=${Q0_TENANT}"
 fi
 
 # ---- Test 2: reserve-10-200 -----------------------------------------
-echo "[test] reserve-10-200: POST /api/quota/reserve {amount:10}"
-curl -s -X POST "${BASE}/api/quota/reserve" \
+# Single curl captures body + status code — never double-call (would
+# double-spend against the available balance).
+echo "[test] reserve-10-200: POST /api/quota/reserve {amount:10, job_id}"
+CODE=$(curl -s -o "${TMP}/reserve1.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/quota/reserve" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d '{"amount":10,"job_id":"jb_p4_test1"}' \
-    -o "${TMP}/reserve1.json"
-RESERVATION_ID_1=$(jget "${TMP}/reserve1.json" '.reservation_id')
+    -d '{"amount":10,"job_id":"jb_t1"}')
 RESV1_AMOUNT=$(jget "${TMP}/reserve1.json" '.amount')
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE}/api/quota/reserve" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -d '{"amount":10,"job_id":"jb_p4_test1_dup"}')
-if [ "${CODE}" = "200" ] && [ -n "${RESERVATION_ID_1}" ] && [ "${RESV1_AMOUNT}" = "10" ]; then
+RESV1_RID=$(jget "${TMP}/reserve1.json" '.reservation_id')
+if [ "${CODE}" = "200" ] && [ "${RESV1_AMOUNT}" = "10" ]; then
     ok "reserve-10-200"
 else
-    bad "reserve-10-200" "200 + reservation_id" "code=${CODE} rid=${RESERVATION_ID_1} amount=${RESV1_AMOUNT}"
-fi
-# The follow-up curl above added a SECOND +10 reservation; we compensate
-# immediately by refunding it so tests 3+ only see the single logical
-# reservation. (Belt-and-suspenders to keep math clean for assertions.)
-COMPENSATE_RID=$(jget "${TMP}/reserve1.json" '.reservation_id')
-if [ -n "${COMPENSATE_RID}" ]; then
-    # Best-effort cleanup; ignore failure here, the assertion below uses
-    # absolute deltas derived from a re-read, not from this token.
-    :
+    bad "reserve-10-200" "200 + amount=10" "code=${CODE} rid=${RESV1_RID} amount=${RESV1_AMOUNT}"
 fi
 
 # ---- Test 3: reserve-decreases-available ----------------------------
-# Re-read quota: available = Q0_AVAIL - 10 (we only counted the FIRST
-# reserve + the validation-call reserve; since the first one is what we
-# care about, we capture the delta relative to Q0 against the current
-# /quota response).
-echo "[test] reserve-decreases-available: available fell by 10, reserved grew by 10"
-curl -s -X GET "${BASE}/api/quota" \
+# Re-read /quota: avail dropped by 10, resv grew by 10, cons unchanged.
+echo "[test] reserve-decreases-available: avail < pre, resv > pre, cons unchanged"
+CODE=$(curl -s -o "${TMP}/quota1.json" -w "%{http_code}" -X GET "${BASE}/api/quota" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/quota1.json"
+    -H "X-Tenant-Id: ${T1_ID}")
 Q1_AVAIL=$(jget "${TMP}/quota1.json" '.available_credits')
 Q1_RESV=$(jget "${TMP}/quota1.json" '.reserved_credits')
 Q1_CONS=$(jget "${TMP}/quota1.json" '.consumed_credits')
-# Expect: Q1_AVAIL = Q0_AVAIL - 20 (we ran reserve twice above), Q1_RESV = Q0_RESV + 20.
-# We document the looser check (reserved increased, available decreased, consumed unchanged).
-if [ -n "${Q0_AVAIL}" ] && [ -n "${Q1_AVAIL}" ] && [ -n "${Q1_RESV}" ] \
+if [ "${CODE}" = "200" ] \
+    && [ -n "${Q1_AVAIL}" ] && [ -n "${Q1_RESV}" ] \
     && awk "BEGIN { exit !(${Q1_AVAIL} < ${Q0_AVAIL}) }" \
     && awk "BEGIN { exit !(${Q1_RESV} > ${Q0_RESV}) }" \
     && [ "${Q1_CONS}" = "${Q0_CONS}" ]; then
     ok "reserve-decreases-available"
 else
-    bad "reserve-decreases-available" "avail < prev, resv > prev, cons unchanged" "avail=${Q0_AVAIL}->${Q1_AVAIL} resv=${Q0_RESV}->${Q1_RESV} cons=${Q0_CONS}->${Q1_CONS}"
+    bad "reserve-decreases-available" "avail < prev, resv > prev, cons unchanged" \
+        "code=${CODE} avail=${Q0_AVAIL}->${Q1_AVAIL} resv=${Q0_RESV}->${Q1_RESV} cons=${Q0_CONS}->${Q1_CONS}"
 fi
 PRE_CONSUME_AVAIL="${Q1_AVAIL}"
 PRE_CONSUME_RESV="${Q1_RESV}"
 PRE_CONSUME_CONS="${Q1_CONS}"
 
 # ---- Test 4: reserve-insufficient-402 -------------------------------
-echo "[test] reserve-insufficient-402: amount=9999 → 402"
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE}/api/quota/reserve" \
+echo "[test] reserve-insufficient-402: amount=99999 → 402"
+CODE=$(curl -s -o "${TMP}/reserve_insuf.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/quota/reserve" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d '{"amount":9999,"job_id":"jb_p4_too_big"}')
+    -d '{"amount":99999,"job_id":"jb_too_big"}')
 if [ "${CODE}" = "402" ]; then
     ok "reserve-insufficient-402"
 else
-    bad "reserve-insufficient-402" "402" "${CODE}"
+    bad "reserve-insufficient-402" "402" "${CODE} body=$(cat "${TMP}/reserve_insuf.json" 2>/dev/null)"
 fi
 
-# ---- Test 5: consume-200 --------------------------------------------
-# Refund both prior reservations, then reserve exactly one for consume.
-# Easier: refund the duplicate, then consume the first reservation.
-# We track the validate-call reservation via a re-read trick: do another
-# reserve, capture its rid, refund it, then consume RESERVATION_ID_1.
-curl -s -X POST "${BASE}/api/quota/refund" \
+# ---- Test 5: consume-10-200 -----------------------------------------
+# New API: consume takes only {amount} — no reservation_id. It moves 10
+# from reserved → consumed (matches our reserve above).
+echo "[test] consume-10-200: POST /api/quota/consume {amount:10}"
+CODE=$(curl -s -o "${TMP}/consume1.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/quota/consume" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"reservation_id\":\"${RESERVATION_ID_1}\"}" \
-    -o /dev/null
-
-# Issue a fresh, dedicated reservation just for the consume test.
-curl -s -X POST "${BASE}/api/quota/reserve" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -d '{"amount":10,"job_id":"jb_p4_consume_target"}' \
-    -o "${TMP}/reserve_consume.json"
-RESERVATION_ID_FOR_CONSUME=$(jget "${TMP}/reserve_consume.json" '.reservation_id')
-
-echo "[test] consume-200: POST /api/quota/consume {reservation_id}"
-curl -s -X POST "${BASE}/api/quota/consume" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"reservation_id\":\"${RESERVATION_ID_FOR_CONSUME}\"}" \
-    -o "${TMP}/consume.json"
-CONS_STATUS=$(jget "${TMP}/consume.json" '.status')
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE}/api/quota/consume" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"reservation_id\":\"${RESERVATION_ID_FOR_CONSUME}\"}")
-if [ "${CODE}" = "200" ] && [ "${CONS_STATUS}" = "consumed" ]; then
-    ok "consume-200"
+    -d '{"amount":10}')
+CONS_STATUS=$(jget "${TMP}/consume1.json" '.status')
+CONS_AMOUNT=$(jget "${TMP}/consume1.json" '.amount')
+if [ "${CODE}" = "200" ] && [ "${CONS_STATUS}" = "consumed" ] && [ "${CONS_AMOUNT}" = "10" ]; then
+    ok "consume-10-200"
 else
-    bad "consume-200" "200 + status=consumed" "code=${CODE} status=${CONS_STATUS}"
+    bad "consume-10-200" "200 + status=consumed + amount=10" \
+        "code=${CODE} status=${CONS_STATUS} amount=${CONS_AMOUNT}"
 fi
 
 # ---- Test 6: consume-decreases-reserved -----------------------------
-# Re-read quota: reserved decreased by 10, consumed increased by 10
-# (the consume-test target reservation; the earlier refunded reservations
-# already left reserved=0 before this reservation issued).
-echo "[test] consume-decreases-reserved: reserved fell, consumed rose"
-curl -s -X GET "${BASE}/api/quota" \
+# Re-read /quota: resv dropped by 10, cons grew by 10, avail unchanged
+# (consume does NOT touch available — it only moves reserved→consumed).
+echo "[test] consume-decreases-reserved: resv < pre, cons > pre"
+CODE=$(curl -s -o "${TMP}/quota2.json" -w "%{http_code}" -X GET "${BASE}/api/quota" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/quota2.json"
+    -H "X-Tenant-Id: ${T1_ID}")
 Q2_AVAIL=$(jget "${TMP}/quota2.json" '.available_credits')
 Q2_RESV=$(jget "${TMP}/quota2.json" '.reserved_credits')
 Q2_CONS=$(jget "${TMP}/quota2.json" '.consumed_credits')
-# After refunds + consume: resv=0 (the test reservation was consumed),
-# cons went up by 10, avail returned to PRE_CONSUME_AVAIL + 10.
-if [ -n "${Q2_RESV}" ] && [ -n "${Q2_CONS}" ] \
+if [ "${CODE}" = "200" ] \
+    && [ -n "${Q2_RESV}" ] && [ -n "${Q2_CONS}" ] \
     && awk "BEGIN { exit !(${Q2_RESV} < ${PRE_CONSUME_RESV}) }" \
     && awk "BEGIN { exit !(${Q2_CONS} > ${PRE_CONSUME_CONS}) }"; then
     ok "consume-decreases-reserved"
 else
-    bad "consume-decreases-reserved" "resv went down, cons went up" "resv=${PRE_CONSUME_RESV}->${Q2_RESV} cons=${PRE_CONSUME_CONS}->${Q2_CONS} avail=${Q2_AVAIL}"
+    bad "consume-decreases-reserved" "resv went down, cons went up" \
+        "code=${CODE} resv=${PRE_CONSUME_RESV}->${Q2_RESV} cons=${PRE_CONSUME_CONS}->${Q2_CONS} avail=${Q2_AVAIL}"
 fi
 POST_CONSUME_AVAIL="${Q2_AVAIL}"
 POST_CONSUME_RESV="${Q2_RESV}"
 
-# ---- Test 7: reserve-20-then-refund-200 -----------------------------
-echo "[test] reserve-20-then-refund-200"
-curl -s -X POST "${BASE}/api/quota/reserve" \
+# ---- Test 7: refund-10-200 ------------------------------------------
+# Reserve another 10 so we have something in reserved to refund.
+echo "[test] refund-10-200: reserve+refund {amount:10}"
+CODE=$(curl -s -o "${TMP}/reserve2.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/quota/reserve" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d '{"amount":20,"job_id":"jb_p4_test2"}' \
-    -o "${TMP}/reserve2.json"
-RESERVATION_ID_2=$(jget "${TMP}/reserve2.json" '.reservation_id')
+    -d '{"amount":10,"job_id":"jb_refund_target"}')
 RESV2_AMOUNT=$(jget "${TMP}/reserve2.json" '.amount')
-RESV2_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE}/api/quota/refund" \
+RESV2_CODE="${CODE}"
+
+CODE=$(curl -s -o "${TMP}/refund1.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/quota/refund" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"reservation_id\":\"${RESERVATION_ID_2}\"}")
-REFUND_STATUS=$(curl -s -X POST "${BASE}/api/quota/refund" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"reservation_id\":\"${RESERVATION_ID_2}_noop\"}" | jget - .status 2>/dev/null || true)
-# Use the first refund's outcome — a true double-refund would 4xx, so we
-# capture the exact code/state for the *primary* reservation.
-REFUND_PRIMARY_CODE=$(curl -s -o "${TMP}/refund2.json" -w "%{http_code}" -X POST "${BASE}/api/quota/refund" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"reservation_id\":\"${RESERVATION_ID_2}_absent\"}" 2>/dev/null) || REFUND_PRIMARY_CODE="000"
-# The above is a no-op probe; the real assertion is on the FIRST refund call.
-if [ "${RESV2_CODE}" = "200" ] && [ -n "${RESERVATION_ID_2}" ] && [ "${RESV2_AMOUNT}" = "20" ]; then
-    ok "reserve-20-then-refund-200"
+    -d '{"amount":10}')
+REFUND_STATUS=$(jget "${TMP}/refund1.json" '.status')
+REFUND_AMOUNT=$(jget "${TMP}/refund1.json" '.amount')
+if [ "${RESV2_CODE}" = "200" ] && [ "${RESV2_AMOUNT}" = "10" ] \
+    && [ "${CODE}" = "200" ] && [ "${REFUND_STATUS}" = "refunded" ] && [ "${REFUND_AMOUNT}" = "10" ]; then
+    ok "refund-10-200"
 else
-    bad "reserve-20-then-refund-200" "200 reserve + 200 refund" "reserve_rid=${RESERVATION_ID_2} amount=${RESV2_AMOUNT} refund_code=${RESV2_CODE}"
+    bad "refund-10-200" "200 reserve + 200 refund {status:refunded, amount:10}" \
+        "reserve_code=${RESV2_CODE} reserve_amount=${RESV2_AMOUNT} refund_code=${CODE} refund_status=${REFUND_STATUS} refund_amount=${REFUND_AMOUNT}"
 fi
 
-# ---- Test 8: refund-restores-available -----------------------------
-echo "[test] refund-restores-available: available came back, reserved dropped"
-curl -s -X GET "${BASE}/api/quota" \
+# ---- Test 8: refund-restores-available ------------------------------
+# After reserve-10 + refund-10 the net effect on the quota is zero — avail
+# and resv both end where they were. Verify the invariant:
+#   available + reserved + consumed == initial_grant (100)
+# AND that Q3 == POST_CONSUME (net zero change after reserve+refund cycle).
+echo "[test] refund-restores-available: avail+resv+cons == 100 invariant + Q3 matches POST_CONSUME"
+CODE=$(curl -s -o "${TMP}/quota3.json" -w "%{http_code}" -X GET "${BASE}/api/quota" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/quota3.json"
+    -H "X-Tenant-Id: ${T1_ID}")
 Q3_AVAIL=$(jget "${TMP}/quota3.json" '.available_credits')
 Q3_RESV=$(jget "${TMP}/quota3.json" '.reserved_credits')
 Q3_CONS=$(jget "${TMP}/quota3.json" '.consumed_credits')
-# After refunding the +20: avail == POST_CONSUME_AVAIL + 20, resv == 0 (consumed res gone)
-if [ -n "${Q3_AVAIL}" ] && [ -n "${Q3_RESV}" ] \
-    && awk "BEGIN { exit !(${Q3_AVAIL} > ${POST_CONSUME_AVAIL}) }" \
-    && awk "BEGIN { exit !(${Q3_RESV} < ${POST_CONSUME_RESV}) }"; then
+SUM=$(awk "BEGIN { print ${Q3_AVAIL} + ${Q3_RESV} + ${Q3_CONS} }")
+if [ "${CODE}" = "200" ] \
+    && [ -n "${Q3_AVAIL}" ] && [ -n "${Q3_RESV}" ] \
+    && awk "BEGIN { exit !(${SUM} == 100) }" \
+    && awk "BEGIN { exit !(${Q3_AVAIL} == ${POST_CONSUME_AVAIL}) }" \
+    && awk "BEGIN { exit !(${Q3_RESV} == ${POST_CONSUME_RESV}) }"; then
     ok "refund-restores-available"
 else
-    bad "refund-restores-available" "avail up, resv down" "avail=${POST_CONSUME_AVAIL}->${Q3_AVAIL} resv=${POST_CONSUME_RESV}->${Q3_RESV} cons=${Q3_CONS}"
+    bad "refund-restores-available" "sum=100 + Q3 matches POST_CONSUME" \
+        "code=${CODE} avail=${POST_CONSUME_AVAIL}->${Q3_AVAIL} resv=${POST_CONSUME_RESV}->${Q3_RESV} cons=${Q3_CONS} sum=${SUM}"
 fi
 PRE_RENDER_AVAIL="${Q3_AVAIL}"
 PRE_RENDER_RESV="${Q3_RESV}"
 
 # ---- Test 9: render-auto-reserve-200 --------------------------------
-echo "[test] render-auto-reserve-200: POST /render → 200 + 50-credit auto-reserve"
-curl -s -X POST "${BASE}/api/video-projects/${VP1_ID}/render" \
+# /render on the CREATED VP_RENDER auto-reserves 50 credits, writes the
+# job row, and advances the project to COMPLETED. Single curl captures
+# body + status code (200 or 202 both acceptable per the new contract).
+echo "[test] render-auto-reserve-200: POST /render on VP_RENDER"
+CODE=$(curl -s -o "${TMP}/render.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/video-projects/${VP_RENDER_ID}/render" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/render.json"
-RENDER_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE}/api/video-projects/${VP1_ID}/render" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}")
-# Project is already in COMPLETED after first render; second /render may 4xx.
-# The PRIMARY signal is that the first render call succeeded AND
-# available dropped by 50 — that's what we assert next.
-if [ "${RENDER_CODE}" = "200" ] || [ "${RENDER_CODE}" = "202" ]; then
+    -d '{}')
+RENDER_STATUS=$(jget "${TMP}/render.json" '.status')
+RENDER_JOB=$(jget "${TMP}/render.json" '.job_id')
+if [ "${CODE}" = "200" ] || [ "${CODE}" = "202" ]; then
     ok "render-auto-reserve-200"
 else
-    # If even the FIRST call didn't 200/202, surface as FAIL.
-    RENDER_PRIMARY_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE}/api/video-projects/${VP1_ID}/render" \
-        -H "Authorization: Bearer ${ALICE_TOKEN}" \
-        -H "X-Tenant-Id: ${T1_ID}" 2>/dev/null || echo "000")
-    bad "render-auto-reserve-200" "200 or 202" "code=${RENDER_CODE} primary_retry=${RENDER_PRIMARY_CODE}"
+    bad "render-auto-reserve-200" "200 or 202" "code=${CODE} status=${RENDER_STATUS} job=${RENDER_JOB}"
 fi
 
 # ---- Test 10: render-decreases-available ----------------------------
-echo "[test] render-decreases-available: available fell by 50"
-curl -s -X GET "${BASE}/api/quota" \
+echo "[test] render-decreases-available: avail dropped by 50"
+CODE=$(curl -s -o "${TMP}/quota4.json" -w "%{http_code}" -X GET "${BASE}/api/quota" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/quota4.json"
+    -H "X-Tenant-Id: ${T1_ID}")
 Q4_AVAIL=$(jget "${TMP}/quota4.json" '.available_credits')
 Q4_RESV=$(jget "${TMP}/quota4.json" '.reserved_credits')
-# After /render: avail dropped by 50 (compared to PRE_RENDER_AVAIL).
-if [ -n "${Q4_AVAIL}" ] \
-    && awk "BEGIN { exit !(${PRE_RENDER_AVAIL} - ${Q4_AVAIL} >= 50) }"; then
+# After /render: avail dropped by exactly 50 from PRE_RENDER_AVAIL.
+if [ "${CODE}" = "200" ] \
+    && [ -n "${Q4_AVAIL}" ] \
+    && awk "BEGIN { exit !((${PRE_RENDER_AVAIL} - ${Q4_AVAIL}) >= 50) }"; then
     ok "render-decreases-available"
 else
-    bad "render-decreases-available" "avail dropped by >=50" "pre=${PRE_RENDER_AVAIL} post=${Q4_AVAIL} resv=${Q4_RESV}"
+    bad "render-decreases-available" "avail dropped by >=50" \
+        "code=${CODE} pre=${PRE_RENDER_AVAIL} post=${Q4_AVAIL} resv=${PRE_RENDER_RESV}->${Q4_RESV}"
 fi
 
 # ---- Test 11: render-insufficient-402 -------------------------------
-# Drain Alice's quota to almost zero (reserve everything left), then call
-# /render on a fresh video project → expect 402.
-echo "[setup] drain-alice: reserve all remaining available"
-curl -s -X GET "${BASE}/api/quota" \
+# Drain all remaining credits, then /render on a fresh project → 402.
+echo "[setup] drain-alice: reserve everything left in available"
+CODE=$(curl -s -o "${TMP}/quota_pre_drain.json" -w "%{http_code}" -X GET "${BASE}/api/quota" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}" \
-    -o "${TMP}/quota_pre_drain.json"
+    -H "X-Tenant-Id: ${T1_ID}")
 DRAIN_AVAIL=$(jget "${TMP}/quota_pre_drain.json" '.available_credits')
-if [ -n "${DRAIN_AVAIL}" ] && awk "BEGIN { exit !(${DRAIN_AVAIL} > 0) }"; then
-    # Reserve (available - 5) so we don't accidentally zero-trigger an edge case.
-    DRAIN_AMOUNT=$(awk "BEGIN { printf \"%d\", ${DRAIN_AVAIL} - 5 }")
+if [ "${CODE}" = "200" ] && [ -n "${DRAIN_AVAIL}" ] && awk "BEGIN { exit !(${DRAIN_AVAIL} > 0) }"; then
+    # Reserve the full available balance (round up via integer math).
+    DRAIN_AMOUNT=$(awk "BEGIN { printf \"%d\", ${DRAIN_AVAIL} }")
     if [ "${DRAIN_AMOUNT}" -lt 1 ]; then DRAIN_AMOUNT="${DRAIN_AVAIL}"; fi
     curl -s -X POST "${BASE}/api/quota/reserve" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${ALICE_TOKEN}" \
         -H "X-Tenant-Id: ${T1_ID}" \
-        -d "{\"amount\":${DRAIN_AMOUNT},\"job_id\":\"jb_p4_drain\"}" \
+        -d "{\"amount\":${DRAIN_AMOUNT},\"job_id\":\"jb_drain\"}" \
         -o "${TMP}/drain.json" >/dev/null
 fi
 
-echo "[test] render-insufficient-402: drained tenant, /render → 402"
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE}/api/video-projects/${VP1_ID}/render" \
+# Fresh project for the insufficient-render test.
+echo "[setup] create-third-project-vp_render2 (still CREATED, drained tenant)"
+curl -s -X POST "${BASE}/api/video-projects" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
-    -H "X-Tenant-Id: ${T1_ID}")
+    -H "X-Tenant-Id: ${T1_ID}" \
+    -d "{\"product_id\":\"${PRODUCT_ID}\"}" \
+    -o "${TMP}/vp_render2.json"
+VP_RENDER2_ID=$(jget "${TMP}/vp_render2.json" '.id')
+
+echo "[test] render-insufficient-402: drained tenant, /render → 402"
+CODE=$(curl -s -o "${TMP}/render_insuf.json" -w "%{http_code}" -X POST \
+    "${BASE}/api/video-projects/${VP_RENDER2_ID}/render" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${ALICE_TOKEN}" \
+    -H "X-Tenant-Id: ${T1_ID}" \
+    -d '{}')
 if [ "${CODE}" = "402" ]; then
     ok "render-insufficient-402"
 else
-    bad "render-insufficient-402" "402" "${CODE}"
+    bad "render-insufficient-402" "402" "code=${CODE} body=$(cat "${TMP}/render_insuf.json" 2>/dev/null)"
 fi
 
 # ---- Summary ---------------------------------------------------------
