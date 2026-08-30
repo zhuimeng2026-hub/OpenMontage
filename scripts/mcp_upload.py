@@ -27,6 +27,10 @@ from pathlib import Path
 
 TOKEN_FILE = Path(os.environ.get("MCP_TOKEN_FILE", ".env"))
 SESSION_FILE = Path(os.environ.get("MCP_SESSION_FILE", "/tmp/mcp_session.txt"))
+# Override the MCP endpoint with OPENMONTAGE_MCP_URL; useful for running this
+# script against a remote deployment (e.g. http://192.168.20.173:8900/mcp)
+# without having to edit the source. Defaults to the local dev port.
+MCP_URL = os.environ.get("OPENMONTAGE_MCP_URL", "http://localhost:8900/mcp")
 
 
 def load_token() -> str:
@@ -42,7 +46,7 @@ def mcp_call(name: str, arguments: dict, token: str, session: str):
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": name, "arguments": arguments}}
     req = urllib.request.Request(
-        "http://localhost:8900/mcp",
+        MCP_URL,
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json",
                  "Accept": "application/json, text/event-stream",

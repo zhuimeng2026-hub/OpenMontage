@@ -2954,6 +2954,12 @@ class VideoCompose(BaseTool):
         if not overlays:
             return ToolResult(success=False, error="No overlays provided")
 
+        # Defensive mkdir: callers don't always pre-create the project's
+        # `renders/` or `outputs/` tree, and ffmpeg refuses to write into a
+        # missing parent directory. ``exist_ok=True`` keeps idempotent
+        # re-renders safe (the parent already exists from an earlier run).
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         # Build complex filter for each overlay
         input_args = ["-i", str(input_path)]
         filter_parts = []
