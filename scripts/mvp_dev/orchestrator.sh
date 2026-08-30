@@ -277,17 +277,25 @@ if [ "${PARALLEL}" = "1" ] && [ "${MODE}" != "dry-run" ]; then
     overall_exit=0
     for phase in "${!PIDS[@]}"; do
         pid="${PIDS[$phase]}"
+        # Read the subshell's per-stage exit detail (subshell writes run_exit=N
+        # / gate_exit=N / green to the .exit file before exiting).
+        exit_detail="$(cat "${LOG_DIR}/parallel-phase_${phase}-${DATE_TAG}.exit" 2>/dev/null || echo unknown)"
         if wait "${pid}"; then
-            state_write "${phase}" 0 0 false "${LOG_DIR}/diff-phase_${phase}-${DATE_TAG}.txt"
+            r=0; g=0
+            state_write "${phase}" "${r}" "${g}" false "${LOG_DIR}/diff-phase_${phase}-${DATE_TAG}.txt"
             echo "[$(date -Iseconds)] phase ${phase}: GREEN" | tee -a "${ORCH_LOG}" "${SUMMARY_LOG}"
             auto_commit_phase "${phase}" "parallel"
         else
             we=$?
-            # 读详细 exit 信息
-            extra="$(cat "${LOG_DIR}/parallel-phase_${phase}-${DATE_TAG}.exit" 2>/dev/null || echo unknown)"
-            echo "[$(date -Iseconds)] phase ${phase}: FAILED (${extra}) wait_exit=${we}" \
+            # Parse exit_detail to get real per-stage codes instead of hardcoding 0 0.
+            case "${exit_detail}" in
+                run_exit=*)  r="${exit_detail#run_exit=}"; g=0 ;;
+                gate_exit=*) r=0; g="${exit_detail#gate_exit=}" ;;
+                *)           r="${we}"; g=0 ;;
+            esac
+            echo "[$(date -Iseconds)] phase ${phase}: FAILED (${exit_detail}) wait_exit=${we} run_exit=${r} gate_exit=${g}" \
                 | tee -a "${ORCH_LOG}" "${SUMMARY_LOG}"
-            state_write "${phase}" 0 0 true "${LOG_DIR}/diff-phase_${phase}-${DATE_TAG}.txt"
+            state_write "${phase}" "${r}" "${g}" true "${LOG_DIR}/diff-phase_${phase}-${DATE_TAG}.txt"
             overall_exit=1
         fi
     done

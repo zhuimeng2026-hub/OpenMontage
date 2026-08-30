@@ -12,6 +12,11 @@
 #   7. 启动 bff(后台)+ 留给 gate.sh 跑冒烟
 
 set -u
+set -o pipefail
+# Ensure go is on PATH — cron doesn't source /etc/profile.d; Phase 1+ hit this
+# with "go: command not found" on the most recent run. (Phase 0 had the same
+# issue at 15:42:02 — fixed retroactively so --resume + git reset can re-run.)
+export PATH="/usr/local/go/bin:${PATH:-/usr/bin:/bin}"
 REPO_ROOT="/opt/OpenMontage_Voicebox"
 BFF="${REPO_ROOT}/frameflow/bff"
 PHASE_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -384,7 +389,7 @@ func main() {
 
 	port := os.Getenv("MVP_PORT")
 	if port == "" {
-		port = "18901"  # avoid 8901 (tweak_server uvicorn) and 8900 (frameflow-bff)
+		port = "18901"  // avoid 8901 (tweak_server uvicorn) and 8900 (frameflow-bff)
 	}
 
 	dbPath := os.Getenv("MVP_DB_PATH")

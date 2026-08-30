@@ -18,6 +18,7 @@
 #   - Manifest 在每次 assets 变化后重建(version+1, missing_roles 来自固定 11 个 role 集合)。
 
 set -u
+set -o pipefail
 # Ensure go is on PATH — cron doesn't source /etc/profile.d; Phase 0 hit this
 # with "go: command not found" on the most recent run.
 export PATH="/usr/local/go/bin:${PATH:-/usr/bin:/bin}"

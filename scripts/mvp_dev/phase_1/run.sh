@@ -18,6 +18,7 @@
 #   - 文件 ACL 显式查表,即使签过名也要 recheck tenant(防 row re-binding)。
 
 set -u
+set -o pipefail
 # Ensure go is on PATH — cron doesn't source /etc/profile.d; Phase 0 hit this
 # with "go: command not found" on the most recent run.
 export PATH="/usr/local/go/bin:${PATH:-/usr/bin:/bin}"
