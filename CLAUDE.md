@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read Order — Mandatory
 
@@ -71,6 +71,16 @@ python -m backlot open <project-id>
 
 For a production run, also learn `python -m backlot open <project-id>` — it starts a local board that watches `projects/<id>/` and surfaces stages, scene-by-scene filmstrip, decision log, and cost in real time. Backlot is **read-only observation**; it never blocks the pipeline.
 
+## Runtime Entry Points
+
+| Surface | Command | Port | Purpose |
+|---|---|---|---|
+| **MCP server** | `python mcp_server.py` (or `./start_mcp_server.sh`) | `:8900` | The agent-facing tool surface. Bearer-token auth via `MCP_API_TOKEN`. See [`MCP_SERVER.md`](MCP_SERVER.md). |
+| **Tweak sidecar** | `make tweak-server` | `:8901` | End-user render-tweak UI that talks to MCP. See [`docs/tweak-server.md`](docs/tweak-server.md). |
+| **Backlot board** | `python -m backlot open <project-id>` | `:8902` (auto) | Live, read-only storyboard derived from disk. |
+
+Start the MCP server before any production run that goes through it; tweak-server and Backlot are optional but recommended.
+
 ## Three-Layer Knowledge Model
 
 See `PROJECT_CONTEXT.md` § "Knowledge Architecture" for the canonical description.
@@ -118,6 +128,8 @@ Every production run creates `projects/<project-id>/` (gitignored) with `artifac
 
 ## Pipelines — At a Glance
 
+Full roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelines" and `PROJECT_CONTEXT.md` § "Available Pipelines".
+
 | Pipeline | Best For |
 |---|---|
 | `video-template-remix` **(default)** | Preserve a reference video's structure while replacing approved asset slots (beta) |
@@ -134,8 +146,6 @@ Every production run creates `projects/<project-id>/` (gitignored) with `artifac
 | `localization-dub` | Subtitle / dub / translated variants (beta) |
 | `documentary-montage` | Real-footage edit from free/open archives (no paid video APIs) |
 | `framework-smoke` | Test: minimal 2-stage smoke test (test) |
-
-Full pipeline roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelines" and `PROJECT_CONTEXT.md` § "Available Pipelines".
 
 ## Deep-Dive Docs (When You Need More)
 
