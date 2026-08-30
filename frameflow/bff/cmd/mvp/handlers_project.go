@@ -95,6 +95,7 @@ func projectStatusForJob(jobType string) string {
 type projectRow struct {
 	ID, TenantID, ProductID, BriefJSON, RefMode, RefFileKey,
 	Status, CreatedBy               string
+	ApprovedBy                       sql.NullString
 	CreatedAt, UpdatedAt            time.Time
 }
 
@@ -109,18 +110,22 @@ type jobRow struct {
 func (h *ProjectHandler) loadProject(ctx context.Context, id string) (projectRow, error) {
 	var p projectRow
 	var ca, ua string
+	var approvedBy sql.NullString
 	err := h.DB.QueryRowContext(ctx,
 		`SELECT id, tenant_id, product_id, creative_brief_json, reference_mode,
-		        reference_file_key, status, created_by, created_at, updated_at
+		        reference_file_key, status, created_by,
+		        approved_by, created_at, updated_at
 		 FROM video_projects WHERE id = ?`, id,
 	).Scan(&p.ID, &p.TenantID, &p.ProductID, &p.BriefJSON, &p.RefMode,
-		&p.RefFileKey, &p.Status, &p.CreatedBy, &ca, &ua)
+		&p.RefFileKey, &p.Status, &p.CreatedBy,
+		&approvedBy, &ca, &ua)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, sql.ErrNoRows
 	}
 	if err != nil {
 		return p, err
 	}
+	p.ApprovedBy = approvedBy
 	p.CreatedAt, p.UpdatedAt = parseSQLTime(ca), parseSQLTime(ua)
 	return p, nil
 }
@@ -468,6 +473,65 @@ func (h *ProjectHandler) Cancel(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"project_id": id, "status": ProjectStatusCancelled})
+}
+
+// Approve handles POST /api/video-projects/:id/approve — Phase 7.
+//
+//
+// Transitions the project from SAMPLE_READY → WAITING_APPROVAL (idempotent:
+// calling from WAITING_APPROVAL is a no-op + returns 200). Records the
+// approver's internal_user_id + ISO timestamp in approved_by / approved_at.
+//
+// Does NOT trigger any MCP call — approval is purely a Go-side state
+// transition. After approval the client can trigger /render.
+//
+// Errors:
+//   - 401 if RequireJWT didn't set internal_user_id
+//   - 403 if the project belongs to another tenant
+//   - 404 if the project doesn't exist
+//   - 409 if the project is in a state that doesn't allow approval
+//     (e.g. CREATED, STORYBOARD_READY, FINAL_RENDERING, COMPLETED, FAILED,
+//     CANCELLED) — only SAMPLE_READY and WAITING_APPROVAL are legal.
+func (h *ProjectHandler) Approve(c *gin.Context) {
+	uid, _ := c.Get("internal_user_id")
+	uidStr, _ := uid.(string)
+	if uidStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing identity"})
+		return
+	}
+	id := c.Param("id")
+	p, _, ok := h.tenantOf(c, id)
+	if !ok {
+		return
+	}
+
+	next, err := jobsvc.Advance(p.Status, "approve")
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":          "illegal transition from " + p.Status + " via approve",
+			"allowed_from":   []string{jobsvc.StatusSampleReady, jobsvc.StatusWaitingApproval},
+			"current_status": p.Status,
+		})
+		return
+	}
+
+	// Atomically: stamp approved_by/approved_at + advance status. The
+	// approved_by column stays stable across re-approval (uses uidStr).
+	if _, err := h.DB.ExecContext(c.Request.Context(),
+		`UPDATE video_projects
+		 SET status = ?, approved_by = ?, approved_at = datetime('now'), updated_at = datetime('now')
+		 WHERE id = ?`,
+		next, uidStr, id,
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "approve failed: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"project_id":  id,
+		"status":      next,
+		"approved_by": uidStr,
+		"approved_at": time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 // Status handles GET /api/video-projects/:id/status.

@@ -132,6 +132,8 @@ func main() {
 	scoped.POST("/video-projects/:id/animatic", projects.Animatic)
 	scoped.POST("/video-projects/:id/sample", projects.Sample)
 	scoped.POST("/video-projects/:id/render", projects.Render)
+	// Phase 7: explicit user approval required after sample, before render.
+	scoped.POST("/video-projects/:id/approve", projects.Approve)
 	scoped.POST("/video-projects/:id/cancel", projects.Cancel)
 	scoped.GET("/video-projects/:id/status", projects.Status)
 	scoped.GET("/jobs/:job_id", projects.GetJob)

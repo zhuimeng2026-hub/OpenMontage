@@ -16,7 +16,8 @@ var ErrIllegalTransition = errors.New("jobsvc: illegal state transition")
 //	ANIMATIC_RENDERING   --animatic_done--> ANIMATIC_READY
 //	ANIMATIC_READY       --sample------> SAMPLE_RENDERING
 //	SAMPLE_RENDERING     --sample_done--> SAMPLE_READY
-//	SAMPLE_READY         --render------> FINAL_RENDERING
+//	SAMPLE_READY         --approve----> WAITING_APPROVAL
+//	WAITING_APPROVAL     --render------>  FINAL_RENDERING
 //	FINAL_RENDERING      --render_done--> COMPLETED
 //
 // Cancel transitions from any non-terminal state to CANCELLED.
@@ -48,6 +49,16 @@ func Advance(current, trigger string) (string, error) {
 	case "sample_done":
 		if current == StatusSampleRendering {
 			return StatusSampleReady, nil
+		}
+	case "approve":
+		// Phase 7: explicit user approval is required after sample
+		// completes and before render starts. Idempotent — calling
+		// approve from WAITING_APPROVAL returns the same state.
+		if current == StatusSampleReady {
+			return StatusWaitingApproval, nil
+		}
+		if current == StatusWaitingApproval {
+			return StatusWaitingApproval, nil
 		}
 	case "render":
 		if current == StatusSampleReady || current == StatusWaitingApproval {

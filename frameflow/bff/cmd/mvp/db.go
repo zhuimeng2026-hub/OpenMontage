@@ -26,5 +26,14 @@ func openDB(path string) *sql.DB {
 		// Expected on re-run; log only at debug.
 		log.Printf("[mvp] artifacts_json migration: %v (ignored if column already exists)", err)
 	}
+	// Phase 7: approved_by / approved_at on video_projects — recorded when
+	// the user explicitly approves the sample preview before render.
+	for _, col := range []string{"approved_by", "approved_at"} {
+		if _, err := db.Exec(
+			"ALTER TABLE video_projects ADD COLUMN " + col + " TEXT DEFAULT NULL",
+		); err != nil {
+			log.Printf("[mvp] %s migration: %v (ignored if column already exists)", col, err)
+		}
+	}
 	return db
 }
