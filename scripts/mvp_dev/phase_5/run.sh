@@ -385,7 +385,7 @@ func (h *GatewayHandler) Dispatch(c *gin.Context) {
 			gin.Param{Key: "id", Value: req.ProjectID},
 			gin.Param{Key: "stage", Value: stage},
 		)
-		h.Projects.StartStage(c)
+		h.Projects.StartStage(c, stage)
 		return
 	}
 
@@ -557,6 +557,10 @@ echo "[phase_5] build OK → ${BIN}"
 echo "[phase_5] step 7: start binary on :18906"
 pkill -f frameflow-bff-mvp-p5 2>/dev/null || true
 sleep 1
+
+# DB_PATH used by the env-export below; default mirrors Phase 0/1/2/3/4.
+DB_PATH="${BFF}/data/frameflow.db"
+mkdir -p "${BFF}/data"
 
 WEIXIN_MOCK_AUTH=1 MVP_PORT=18906 MVP_DB_PATH="${DB_PATH}" \
     nohup "${BIN}" > "${REPO_ROOT}/logs/mvp_dev/phase_5-server.log" 2>&1 &

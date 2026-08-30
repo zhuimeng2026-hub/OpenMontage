@@ -857,7 +857,7 @@ func (h *ProjectHandler) SetReference(c *gin.Context) {
 
 // startStage is the shared body for /storyboard /animatic /sample /render.
 // /render reserves credits BEFORE the job row insert (402 on insufficient).
-func (h *ProjectHandler) startStage(c *gin.Context, jobType string) {
+func (h *ProjectHandler) StartStage(c *gin.Context, jobType string) {
 	uid, _ := c.Get("internal_user_id")
 	uidStr, _ := uid.(string)
 	id := c.Param("id")
@@ -933,10 +933,10 @@ func (h *ProjectHandler) startStage(c *gin.Context, jobType string) {
 	})
 }
 
-func (h *ProjectHandler) Storyboard(c *gin.Context) { h.startStage(c, quotasvc.JobTypeStoryboard) }
-func (h *ProjectHandler) Animatic(c *gin.Context)   { h.startStage(c, quotasvc.JobTypeAnimatic) }
-func (h *ProjectHandler) Sample(c *gin.Context)     { h.startStage(c, quotasvc.JobTypeSample) }
-func (h *ProjectHandler) Render(c *gin.Context)     { h.startStage(c, quotasvc.JobTypeRender) }
+func (h *ProjectHandler) Storyboard(c *gin.Context) { h.StartStage(c, quotasvc.JobTypeStoryboard) }
+func (h *ProjectHandler) Animatic(c *gin.Context)   { h.StartStage(c, quotasvc.JobTypeAnimatic) }
+func (h *ProjectHandler) Sample(c *gin.Context)     { h.StartStage(c, quotasvc.JobTypeSample) }
+func (h *ProjectHandler) Render(c *gin.Context)     { h.StartStage(c, quotasvc.JobTypeRender) }
 
 // Cancel handles POST /api/video-projects/:id/cancel — sets CANCELLED.
 func (h *ProjectHandler) Cancel(c *gin.Context) {
