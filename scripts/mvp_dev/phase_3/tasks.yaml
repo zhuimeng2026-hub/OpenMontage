@@ -1,24 +1,103 @@
 phase: 3
-scope: §17.D — Project / Job
+scope: §17.D — Project / Job 管理
 section_ref: docs/openmontage_product_video_mvp_golang_scope.md#17.1-必须的
 
-status: STUB   # 改成 READY 才允许 orchestrator 实际跑 run.sh
+status: READY
 last_edited_by: human
 
-files_to_create: []
-files_to_modify: []
+# Phase 3 把"一个 video_project + 它的生产/预览/渲染 job + 状态机"这块 SaaS
+# 数据模型 + 状态推进落地。不接 OpenMontage MCP(那是 Phase 5 Agent Gateway);
+# job 状态推进用 MVP 启发式(随机 sleep + set status),不调真实 OM/OpenClaw。
 
-sql_migrations: []
+files_to_create:
+  - frameflow/bff/internal/jobsvc/types.go               # Project / Job 类型 + 13 档 status 常量
+  - frameflow/bff/internal/jobsvc/store.go               # Project + Job DB CRUD
+  - frameflow/bff/internal/jobsvc/states.go              # 状态机:AllowedTransitions + Advance()
+  - frameflow/bff/internal/jobsvc/runner.go              # MVP job runner(go func + sleep + 状态推进)
+  - frameflow/bff/cmd/mvp/handlers_project.go           # 11 条路由 handler
+
+files_to_modify:
+  - frameflow/bff/cmd/mvp/main.go                        # 挂载项目路由(scoped 分组)
+
+sql_migrations: |
+  -- 视频项目
+  CREATE TABLE IF NOT EXISTS video_projects (
+    id                  TEXT PRIMARY KEY,
+    tenant_id           TEXT NOT NULL,
+    product_id          TEXT NOT NULL,
+    creative_brief_json TEXT NOT NULL DEFAULT '{}',
+    reference_mode      TEXT NOT NULL DEFAULT 'balanced',
+    reference_file_key  TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT 'CREATED',
+    created_by          TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_video_projects_tenant ON video_projects(tenant_id);
+  CREATE INDEX IF NOT EXISTS idx_video_projects_product ON video_projects(product_id);
+
+  -- 生产/预览/渲染 job — 统一 jobs 表,加 job_type 区分(MVP 简化,不分三张表)
+  CREATE TABLE IF NOT EXISTS production_jobs (
+    id                TEXT PRIMARY KEY,
+    tenant_id         TEXT NOT NULL,
+    video_project_id  TEXT NOT NULL,
+    job_type          TEXT NOT NULL,             -- storyboard | animatic | sample | render
+    external_run_id   TEXT NOT NULL DEFAULT '',
+    om_project_id     TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL DEFAULT 'pending',
+    progress          REAL NOT NULL DEFAULT 0,
+    cost_reserved     REAL NOT NULL DEFAULT 0,
+    cost_actual       REAL NOT NULL DEFAULT 0,
+    error_message     TEXT NOT NULL DEFAULT '',
+    created_by        TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_production_jobs_project ON production_jobs(video_project_id);
+  CREATE INDEX IF NOT EXISTS idx_production_jobs_tenant ON production_jobs(tenant_id);
 
 go_tests: []
 
 gate_endpoints:
-  - "(fill from gate description below)"
+  - POST /api/video-projects                                       # 创建项目(必须 link 到同 tenant 的 product)
+  - GET  /api/video-projects/:id                                   # 读项目
+  - PUT  /api/video-projects/:id/brief                             # 更新 creative_brief_json + reference_mode
+  - POST /api/video-projects/:id/reference                         # 记录 reference_file_key
+  - POST /api/video-projects/:id/storyboard                        # 启动 storyboard job(状态机 → STORYBOARD_READY)
+  - POST /api/video-projects/:id/animatic                          # 启动 animatic(→ ANIMATIC_RENDERING → ANIMATIC_READY)
+  - POST /api/video-projects/:id/sample                            # 启动 sample(→ SAMPLE_RENDERING → SAMPLE_READY)
+  - POST /api/video-projects/:id/render                            # 启动 final render(→ FINAL_RENDERING → COMPLETED)
+  - POST /api/video-projects/:id/cancel                            # 置 CANCELLED(任何状态)
+  - GET  /api/video-projects/:id/status                            # 当前 status
+  - GET  /api/jobs/:job_id                                         # 读 job 详情
 
 gate_min_verification: |
-  POST /api/video-projects 创建;POST /api/video-projects/:id/storyboard 启动后 GET .../status 状态机单调推进
+  POST /api/video-projects 创建,
+  POST /api/video-projects/:id/storyboard 启动后,
+  GET /api/video-projects/:id/status 状态机单调推进;
+  跨 tenant 访问 → 403;
+  GET /api/jobs/:job_id 能查到刚启动的 job。
 
-estimated_changes: "TBD — fill before unstubbing"
+estimated_changes: "5 新文件 + 1 改文件,约 700 LOC Go"
 
 notes: |
-  (operator: 填完后把 status 改成 READY,run.sh / gate.sh 才会真正执行。)
+  实现要点:
+  1. 13 档 status 严格按 §17.G 列出的枚举:
+     CREATED, ASSET_ANALYZING, REFERENCE_ANALYZING, PLANNING,
+     STORYBOARD_READY, ANIMATIC_RENDERING, ANIMATIC_READY,
+     SAMPLE_RENDERING, SAMPLE_READY, WAITING_APPROVAL,
+     FINAL_RENDERING, COMPLETED, FAILED, CANCELLED
+  2. 状态机 monotonic:Advance() 只允许白名单内的下一态;非法转移返回 error。
+     比如 CREATED → STORYBOARD_READY 必须经过 PLANNING;但 MVP gate 允许
+     "跳跃式"标记(直接 setStoryboardReady),由 AdvanceByType() 决定合法路径。
+  3. MVP job runner 不用真异步 — POST /storyboard 启动一个 goroutine,
+     sleep 几百 ms 后 setStatus,完成即可。production_jobs.status 立即从
+     "pending" → "running" → "succeeded" 推进。GATE 关心终态。
+  4. 所有 video_projects / production_jobs 行带 tenant_id,Get/Update
+     都强制 product/project 属于调用方 tenant(返回 403 on mismatch)。
+  5. PUT /brief 接受完整 creative_brief JSON;reference_mode 枚举:
+     description_first | balanced | reference_first(默认 balanced)。
+  6. POST /cancel 任何状态都能调,置 status='CANCELLED'(终态,不再前进)。
+  7. 不实现 approve-* 端点(plan §10 明确不归本 phase)— gate 没要求。
+  8. cmd/mvp/main.go 跨 Phase 累积,只追加 video_projects + jobs 路由。
+  9. port: Phase 0=18901 / 1=18902 / 2=18903 / **3=18904**。

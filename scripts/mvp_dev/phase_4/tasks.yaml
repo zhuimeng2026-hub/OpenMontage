@@ -2,23 +2,78 @@ phase: 4
 scope: §17.E — Quota / Billing
 section_ref: docs/openmontage_product_video_mvp_golang_scope.md#17.1-必须的
 
-status: STUB   # 改成 READY 才允许 orchestrator 实际跑 run.sh
+status: READY
 last_edited_by: human
 
-files_to_create: []
-files_to_modify: []
+# Phase 4 把"credits 的 reserve / consume / refund"这套额度逻辑落地,
+# Final Render 前自动 reserve。三档:available / reserved / consumed。
+# 不接真计费系统 — MVP 只在 DB 里记账 + 简单幂等检查。
 
-sql_migrations: []
+files_to_create:
+  - frameflow/bff/internal/quotasvc/store.go             # quota_credits 表 CRUD + reserve/consume/refund 事务
+  - frameflow/bff/internal/quotasvc/ledger.go            # quota_ledger 表:每次 reserve/consume/refund 一行审计
+  - frameflow/bff/internal/quotasvc/types.go             # Quota 结构 + 默认 tier(free=100 credits)
+  - frameflow/bff/cmd/mvp/handlers_quota.go              # 5 条路由 handler
+
+files_to_modify:
+  - frameflow/bff/cmd/mvp/main.go                        # 挂载 quota 路由(jwtOnly 分组 + 在 render 路径加 reserve hook)
+  - frameflow/bff/cmd/mvp/handlers_project.go            # Phase 3 的 /render 在启动 job 前调 quotasvc.Reserve
+
+sql_migrations: |
+  -- 每个 tenant 一行额度。MVP 默认 free tier = 100 credits。
+  CREATE TABLE IF NOT EXISTS quota_credits (
+    tenant_id         TEXT PRIMARY KEY,
+    available_credits REAL NOT NULL DEFAULT 100,
+    reserved_credits  REAL NOT NULL DEFAULT 0,
+    consumed_credits  REAL NOT NULL DEFAULT 0,
+    tier              TEXT NOT NULL DEFAULT 'free',
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- 审计 ledger:每次 reserve/consume/refund 一行
+  CREATE TABLE IF NOT EXISTS quota_ledger (
+    id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL,
+    operation       TEXT NOT NULL,        -- reserve | consume | refund
+    amount          REAL NOT NULL,
+    job_id          TEXT NOT NULL DEFAULT '',
+    balance_after   TEXT NOT NULL DEFAULT '{}',  -- {"available": N, "reserved": M, "consumed": K}
+    created_by      TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_quota_ledger_tenant ON quota_ledger(tenant_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_quota_ledger_job ON quota_ledger(job_id);
 
 go_tests: []
 
 gate_endpoints:
-  - "(fill from gate description below)"
+  - GET    /api/quota                            # 读 tenant 额度(available / reserved / consumed / tier)
+  - POST   /api/quota/reserve                    # 手动 reserve {amount, job_id} → reserved+=amount, available-=amount
+  - POST   /api/quota/consume                    # 手动 consume {job_id} → consumed+=reserved_for_job, reserved-=amount
+  - POST   /api/quota/refund                     # 手动 refund {job_id} → available+=amount, reserved-=amount
+  - POST   /api/video-projects/:id/render        # (Phase 3 hook) 启动 render 前自动 reserve;失败返还
 
 gate_min_verification: |
-  reserve 后 available 减少;consume 后 reserved 减少;失败返还 reserved
+  reserve 后 available 减少, reserved 增加;
+  consume 后 reserved 减少, consumed 增加;
+  失败 refund → reserved 减少, available 增加(原数);
+  POST /render 触发自动 reserve;
+  跨 tenant → 403;
+  余额不足 → 402。
 
-estimated_changes: "TBD — fill before unstubbing"
+estimated_changes: "4 新文件 + 2 改文件,约 400 LOC Go"
 
 notes: |
-  (operator: 填完后把 status 改成 READY,run.sh / gate.sh 才会真正执行。)
+  实现要点:
+  1. 单事务 atomic reserve:UPDATE quota_credits SET available = available - ?, reserved = reserved + ?
+     WHERE tenant_id = ? AND available >= ?。如果 0 行 affected → 返回 402。
+  2. consume / refund 类似,保证不变量:available + reserved + consumed == tier。
+  3. ledger 每次成功后写一行(审计用,不影响主流程)。
+  4. Reserve 返回 reservation_id (= ledger.id),consume/refund 必须带 reservation_id。
+  5. Phase 3 /render handler 在 RunJobAsync 之前调 Reserve(amount=cost_estimate,
+     job_id=newJobID)。runner 完成时调 Consume(reservation_id);runner 失败时
+    调 Refund(reservation_id)。
+  6. MVP cost_estimate 走固定表(每个 job_type 一档):storyboard=1, animatic=5,
+    sample=10, render=50。写在 quotasvc/cost.go。
+  7. GET /api/quota 自动 upsert 行(如果 tenant 还没有,初始化 free tier)。
+  8. port: Phase 0=18901 / 1=18902 / 2=18903 / 3=18904 / **4=18905**。
