@@ -1288,6 +1288,36 @@ async def read_session_asset(relative_path: str) -> dict[str, Any]:
     }
 
 
+@mcp.tool(structured_output=False)
+async def read_session_asset_image(relative_path: str) -> Any:
+    """Return a session-uploaded image as a native MCP image content block.
+
+    Same input contract as ``read_session_asset``, but the response is an MCP
+    ``image`` content item instead of a JSON dict, so clients that render
+    content natively draw the picture instead of dumping base64 text.
+
+    Only ``.png/.jpg/.jpeg/.gif/.webp`` are supported — those are the formats
+    MCP ``ImageContent`` can carry. For anything else (mp4, srt, mp3) use
+    ``read_session_asset`` and decode ``data_base64`` yourself.
+
+    ``structured_output=False`` is required: FastMCP only runs its
+    ``Image`` -> ``ImageContent`` conversion when there is no output model,
+    and an ``Image`` object cannot be validated against one.
+    """
+    tool = registry.get("read_session_asset_image")
+    if tool is None:
+        return {"success": False, "error": "read_session_asset_image tool is not registered"}
+    result = await _run_tool_sync(tool, {
+        "relative_path": relative_path,
+        "mcp_session_id": get_mcp_session_id(),
+    })
+    if not result.success:
+        return {"success": False, "error": result.error or "read failed"}
+    # Return the Image object itself, not the dict: _convert_to_content only
+    # emits ImageContent for `Image`, everything else degrades to TextContent.
+    return (result.data or {})["image"]
+
+
 def _resolve_session_asset_path(asset: dict) -> Path:
     """Resolve a session asset to an absolute path from its OS-portable
     ``relative_path`` (posix, relative to the repo root).
