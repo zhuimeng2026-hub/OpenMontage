@@ -480,11 +480,10 @@ func main() {
 	tenants := NewTenantHandler(db)
 	files := NewFileHandler(db)
 	products := NewProductHandler(db)
-	// Phase 5: Projects handler is provided by Phase 3's run.sh (handlers_project.go).
-	// When Phase 3 hasn't run yet, projects is nil and gateway state-changing verbs
-	// will return 500 — read-only verbs still work because Dispatch checks Projects
-	// before delegating.
-	var projects *ProjectHandler
+	// Phase 5: Projects handler is provided by Phase 3/4's run.sh (handlers_project.go
+	// on disk). Must ALWAYS be initialized — route registration below captures
+	// the method value, and a nil receiver would panic at request time.
+	projects := NewProjectHandler(db)
 	gw := NewGatewayHandler(db, projects)
 
 	r := gin.Default()
@@ -517,6 +516,20 @@ func main() {
 	scoped.GET("/products/:id/assets", products.ListAssets)
 	scoped.GET("/products/:id/manifest", products.GetManifest)
 	scoped.PUT("/products/:id/manifest/:asset_id", products.CorrectAsset)
+	// Phase 3 (project/job): mounted on `scoped` so /api/video-projects
+	// handlers are reachable for the gate's setup chain (POST/GET project,
+	// POST storyboard/cancel/etc.) AND for the gateway Dispatch delegates.
+	scoped.POST("/video-projects", projects.Create)
+	scoped.GET("/video-projects/:id", projects.Get)
+	scoped.PUT("/video-projects/:id/brief", projects.UpdateBrief)
+	scoped.POST("/video-projects/:id/reference", projects.SetReference)
+	scoped.POST("/video-projects/:id/storyboard", projects.Storyboard)
+	scoped.POST("/video-projects/:id/animatic", projects.Animatic)
+	scoped.POST("/video-projects/:id/sample", projects.Sample)
+	scoped.POST("/video-projects/:id/render", projects.Render)
+	scoped.POST("/video-projects/:id/cancel", projects.Cancel)
+	scoped.GET("/video-projects/:id/status", projects.Status)
+	scoped.GET("/jobs/:job_id", projects.GetJob)
 
 	// --- Phase 5: Agent Gateway (§17.F — 8 verbs) ---
 	// Production-status is GET; all others are POST. Dispatch routes by URL segment.

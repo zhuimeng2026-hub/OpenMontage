@@ -616,6 +616,8 @@ func projectStatusForJob(jobType string) string {
 		return ProjectStatusSampleReady
 	case quotasvc.JobTypeRender:
 		return ProjectStatusCompleted
+	case "cancel":
+		return ProjectStatusCancelled
 	}
 	return ProjectStatusCreated
 }

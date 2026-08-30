@@ -179,7 +179,7 @@ curl -s -X POST "${BASE}/api/video-projects" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"product_id\":\"${P1_ID}\",\"creative_brief_json\":\"{}\",\"reference_mode\":\"balanced\"}" \
+    -d "{\"product_id\":\"${P1_ID}\",\"creative_brief\":{},\"reference_mode\":\"balanced\"}" \
     -o "${TMP}/vp1.json"
 VP1_ID=$(jget "${TMP}/vp1.json" '.id')
 
@@ -189,7 +189,7 @@ curl -s -X POST "${BASE}/api/video-projects" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${ALICE_TOKEN}" \
     -H "X-Tenant-Id: ${T1_ID}" \
-    -d "{\"product_id\":\"${P1_ID}\",\"creative_brief_json\":\"{}\",\"reference_mode\":\"balanced\"}" \
+    -d "{\"product_id\":\"${P1_ID}\",\"creative_brief\":{},\"reference_mode\":\"balanced\"}" \
     -o "${TMP}/vp2.json"
 VP2_ID=$(jget "${TMP}/vp2.json" '.id')
 
