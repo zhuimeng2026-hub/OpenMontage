@@ -254,3 +254,165 @@ crontab -e
 - §18 列出的 11 类不该做的功能 — 反向边界,phase 内不允许越界。
 - §22 提到的 OM MCP 薄封装(`prepare_product_remix` 等)— 在 OM 侧做,不在 Golang 控制面。
 - §25 提到的"第一阶段不做"清单(专业 NLE、自定义 Prompt 工程等)— 全期不做。
+
+
+
+## 开发环境认证模式（必须保留身份模型，允许绕过微信扫码）
+
+为避免开发和调试阶段频繁使用微信扫码，系统需要区分 `dev / staging / prod` 三种认证模式。
+
+### 1. 基本原则
+
+开发环境可以绕过“微信认证过程”，但**不能绕过系统内部的身份、租户、权限模型**。
+
+也就是说，即使在 `dev` 环境中，所有业务请求仍必须具有：
+
+```text
+user_id
+tenant_id
+device_id（桌面 OpenClaw 场景）
+permissions
+```
+
+后续项目、素材、任务、预览、渲染结果等仍然必须按照 `tenant_id` 做隔离。
+
+禁止为了方便开发而使用匿名业务逻辑，例如：
+
+```text
+默认 user_id = 1
+默认 tenant_id = 1
+所有用户共用同一 workspace
+```
+
+---
+
+### 2. Dev 模式
+
+开发环境允许通过配置直接注入测试身份，例如：
+
+```text
+AUTH_MODE=dev
+DEV_USER_ID=dev_user_01
+DEV_TENANT_ID=dev_tenant_01
+DEV_DEVICE_ID=dev_device_01
+```
+
+Gin 可以提供仅在 `dev` 环境启用的测试登录接口，例如：
+
+```http
+POST /api/dev/login-as
+```
+
+返回与正式登录相同格式的 `access_token`。
+
+后续业务代码必须继续走正常的：
+
+```text
+access_token
+→ user_id
+→ tenant_id
+→ permission
+→ resource ownership
+```
+
+不得为 dev 模式另外维护一套业务逻辑。
+
+---
+
+### 3. OpenClaw 桌面端开发模式
+
+OpenClaw 开发阶段允许使用预配置测试设备身份自动登录，无需每次显示小程序码。
+
+例如：
+
+```text
+AUTH_MODE=dev
+DEV_USER_ID=dev_user_01
+DEV_TENANT_ID=dev_tenant_01
+DEV_DEVICE_ID=dev_device_01
+```
+
+启动后由 OpenClaw 自动向 Gin 获取开发环境 access token。
+
+但 OpenClaw 后续执行任务、读取素材、调用 OM 时，仍必须携带：
+
+```text
+user_id
+tenant_id
+device_id
+```
+
+并继续接受 Gin 的权限和租户校验。
+
+---
+
+### 4. Staging 模式
+
+`staging` 环境应尽量接近生产环境：
+
+```text
+AUTH_MODE=wechat
+```
+
+需要真实微信登录 / 小程序设备绑定。
+
+为了提高测试效率，可以允许较长的测试 session 或 refresh token，但不得绕过：
+
+```text
+openid → user_id → tenant_id
+```
+
+的真实映射过程。
+
+---
+
+### 5. Production 模式
+
+生产环境：
+
+```text
+AUTH_MODE=wechat
+```
+
+必须使用正式微信认证、设备绑定、token refresh、权限校验。
+
+生产环境必须禁止：
+
+```text
+/dev/login-as
+DEV_USER_ID
+DEV_TENANT_ID
+```
+
+等任何开发态身份注入能力。
+
+---
+
+### 6. 实现要求
+
+认证模式只负责决定：
+
+> “身份是如何获得的”
+
+不能改变：
+
+> “系统内部如何表示和校验身份”。
+
+因此三种环境最终都必须统一进入同一套业务身份模型：
+
+```text
+user_id
+↓
+tenant_id
+↓
+device_id（如适用）
+↓
+permissions
+↓
+project / asset / job / render
+```
+
+一句话原则：
+
+> **开发环境可以免扫码，但不能免身份、免租户、免权限。**
+
