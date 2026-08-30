@@ -87,6 +87,7 @@ type Job struct {
 	CostReserved   float64   `json:"cost_reserved"`
 	CostActual     float64   `json:"cost_actual"`
 	ErrorMessage   string    `json:"error_message"`
+	ArtifactsJSON  string    `json:"artifacts_json,omitempty"`
 	CreatedBy      string    `json:"created_by"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`

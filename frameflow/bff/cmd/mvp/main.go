@@ -5,26 +5,32 @@
 // Phase 2 (2026-08-30): product / asset / manifest CRUD (6 routes).
 // Phase 5 (2026-08-30): Agent Gateway (§17.F, 8 verbs) + state aggregation
 //                        (§17.G, /status/lookup). Default port :18906.
+// Phase 6 (2026-08-30): real MCP preview rendering — the four stage
+//                        endpoints actually call video_compose instead of
+//                        400ms simulating.
 //
 // Phases 3 + 4 routes (project / job / quota) are mounted by their respective
 // run.sh scripts and are not duplicated here — Phase 5 EXTENDS, not REPLACES,
 // those route groups once they land. Phase 5 only mounts the gateway routes
 // under the `scoped` group.
 //
-// Runs on a separate port from the production BFF (default :18906 in Phase 5)
-// so a crash here can't take down the main server. Doesn't touch main.go.
+// Runs on a separate port from the production BFF (default :18906 in Phase 5
+// — phase 6 keeps the same default).
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"frameflow-bff/internal/auth"
 	"frameflow-bff/internal/config"
 	"frameflow-bff/internal/middleware"
+	"frameflow-bff/internal/mvpclient"
 )
 
 func main() {
@@ -35,8 +41,7 @@ func main() {
 
 	port := os.Getenv("MVP_PORT")
 	if port == "" {
-		// Phase 5 default: 18906 (Phase 4 was 18905, Phase 3 was 18904,
-		// Phase 2 was 18903, Phase 1 was 18902, Phase 0 was 18901).
+		// Phase 6 keeps Phase 5's :18906 default.
 		port = "18906"
 	}
 
@@ -55,8 +60,36 @@ func main() {
 	// Phase 5: Projects handler is provided by Phase 3/4's run.sh (handlers_project.go
 	// on disk). Must ALWAYS be initialized — route registration below captures
 	// the method value, and a nil receiver would panic at request time.
-	projects := NewProjectHandler(db)
+
+	// Phase 6: MCP wiring. If MCP_BASE_URL is unset, we still start (so the
+	// rest of the BFF works) but the four stage endpoints return 503 — per
+	// plan §8.2 fail-loud. This keeps dev / debug starts cheap.
+	var (
+		mcpClient    *mvpclient.Client
+		mcpPoller    *mvpclient.Poller
+		mcpInitError string
+	)
+	if baseURL := os.Getenv("MCP_BASE_URL"); baseURL != "" {
+		token := os.Getenv("MCP_API_TOKEN")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		c, err := mvpclient.New(ctx, baseURL, token)
+		if err != nil {
+			mcpInitError = err.Error()
+			log.Printf("[mvp] WARN MCP init failed: %v — stage endpoints will return 503", err)
+		} else {
+			mcpClient = c
+			mcpPoller = mvpclient.NewPoller(c, 0, 0) // use defaults
+			log.Printf("[mvp] MCP client connected base=%s", baseURL)
+		}
+	} else {
+		mcpInitError = "MCP_BASE_URL not set"
+		log.Printf("[mvp] WARN MCP_BASE_URL unset — stage endpoints will return 503")
+	}
+
+	projects := NewProjectHandlerWithMCP(db, mcpClient, mcpPoller)
 	gw := NewGatewayHandler(db, projects)
+	quota := NewQuotaHandler(db)
 
 	r := gin.Default()
 	r.GET("/healthz", auth.HealthCheck)
@@ -102,6 +135,12 @@ func main() {
 	scoped.POST("/video-projects/:id/cancel", projects.Cancel)
 	scoped.GET("/video-projects/:id/status", projects.Status)
 	scoped.GET("/jobs/:job_id", projects.GetJob)
+	// Phase 4 quota endpoints — needed by Phase 6 gate to verify the
+	// Refund path on render failures.
+	scoped.GET("/quota", quota.Get)
+	scoped.POST("/quota/reserve", quota.Reserve)
+	scoped.POST("/quota/consume", quota.Consume)
+	scoped.POST("/quota/refund", quota.Refund)
 
 	// --- Phase 5: Agent Gateway (§17.F — 8 verbs) ---
 	// Production-status is GET; all others are POST. Dispatch routes by URL segment.
@@ -119,7 +158,12 @@ func main() {
 	// --- Phase 1 signed file serve: NO JWT required (URL itself authorizes) ---
 	api.GET("/files/:key", files.Serve)
 
-	log.Printf("[mvp] phase_5 server listening on :%s WEIXIN_MOCK_AUTH=%s", port, os.Getenv("WEIXIN_MOCK_AUTH"))
+	mcpStatus := "ok"
+	if mcpInitError != "" {
+		mcpStatus = "degraded: " + mcpInitError
+	}
+	log.Printf("[mvp] phase_6 server listening on :%s WEIXIN_MOCK_AUTH=%s mcp=%s",
+		port, os.Getenv("WEIXIN_MOCK_AUTH"), mcpStatus)
 	if err := http.ListenAndServe(":"+port, r); err != nil {
 		log.Fatal(err)
 	}

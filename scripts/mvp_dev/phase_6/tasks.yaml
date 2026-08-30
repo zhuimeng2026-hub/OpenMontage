@@ -1,0 +1,52 @@
+phase: 6
+scope: §21 + §22 — OpenClaw/Hermes Skill 接入:实际预览渲染走 OpenMontage MCP
+section_ref: docs/openmontage_product_video_mvp_golang_scope.md#21-OpenClaw/Hermes-Skill-建议
+
+status: READY
+last_edited_by: human
+
+files_to_create:
+  - frameflow/bff/internal/mvpclient/types.go
+  - frameflow/bff/internal/mvpclient/client.go
+  - frameflow/bff/internal/mvpclient/poller.go
+
+files_to_modify:
+  - frameflow/bff/internal/jobsvc/types.go      # Job.ArtifactsJSON
+  - frameflow/bff/internal/jobsvc/store.go      # UpdateJobArtifacts + UpdateJobExternalRunID + ListJobsByProject 读 artifacts_json
+  - frameflow/bff/internal/jobsvc/runner.go     # 全文重写:接 mvpclient + Poller,失败 refund
+  - frameflow/bff/cmd/mvp/db.go                 # ALTER TABLE artifacts_json
+  - frameflow/bff/cmd/mvp/main.go               # 读 MCP_BASE_URL + MCP_API_TOKEN,wire mvpclient
+  - frameflow/bff/cmd/mvp/handlers_project.go   # StartStage 改异步,wire mvpclient
+
+sql_migrations:
+  - "ALTER TABLE production_jobs ADD COLUMN artifacts_json TEXT DEFAULT NULL"
+
+go_tests: []
+
+gate_endpoints:
+  - "POST /api/video-projects/:id/storyboard → 200 status=STORYBOARD_READY async=true"
+  - "POST /api/video-projects/:id/animatic   → 200 status=ANIMATIC_RENDERING async=true"
+  - "POST /api/video-projects/:id/sample     → 200 status=SAMPLE_RENDERING async=true"
+  - "POST /api/video-projects/:id/render     → 200 status=FINAL_RENDERING async=true"
+  - "GET  /api/jobs/:job_id                  → external_run_id 非空 + artifacts_json 含 scope §23 字段"
+  - "GET  /api/video-projects/:id/status     → 轮询直到 *_READY 或 FAILED"
+  - "POST /api/video-projects/:id/render     → 402 (quota reserved=0)"
+  - "POST /api/video-projects/:id/storyboard → 503 (MCP_BASE_URL 未设置)"
+
+gate_min_verification: |
+  1. MCP_BASE_URL 指向本地 stub MCP → 4 个 stage 端点全异步走通,artifacts_json 非空。
+  2. MCP_BASE_URL 留空 → storyboard 端点返回 503(plan §8.2 fail-loud)。
+  3. quota 预留路径:render 触发 Reserve(50);不足时 402。
+  4. 状态机:animatic 端点返回 ANIMATIC_RENDERING,polling 后到 ANIMATIC_READY。
+  5. 失败 refund:render 失败后 quota available 恢复。
+
+estimated_changes: |
+  新建 ~360 行(mvpclient 三件套);修改 ~120 行(jobsvc + cmd/mvp)。
+
+notes: |
+  设计参照 plan §21 + §22:
+  - 不引入 §22 列出的 prepare_* 薄封装 MCP tool,直接复用现有 video_compose。
+  - profile 差异通过 mvpclient.PerStageDefaultProfile(jobType) 集中控制。
+  - 上游 MCP 同步返回(done=true)与异步返回(done=false)两种情况都支持。
+  - render 失败时 Quota.Refund(runner.failJob);其他 stage 不消耗 credits。
+  - gate 通过本地 stub MCP(端口 18910)应答,模拟 video_compose 同步返回 artifact。

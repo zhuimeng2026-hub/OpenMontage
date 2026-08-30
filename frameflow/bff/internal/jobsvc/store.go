@@ -212,7 +212,7 @@ func ListJobsByProject(ctx context.Context, db *sql.DB, videoProjectID string) (
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, tenant_id, video_project_id, job_type, external_run_id,
 		        om_project_id, status, progress, cost_reserved, cost_actual,
-		        error_message, created_by, created_at, updated_at
+		        error_message, artifacts_json, created_by, created_at, updated_at
 		 FROM production_jobs WHERE video_project_id = ?
 		 ORDER BY created_at ASC`, videoProjectID,
 	)
@@ -224,18 +224,62 @@ func ListJobsByProject(ctx context.Context, db *sql.DB, videoProjectID string) (
 	out := []Job{}
 	for rows.Next() {
 		var j Job
+		var artifactsJSON sql.NullString
 		var createdAt, updatedAt string
 		if err := rows.Scan(&j.ID, &j.TenantID, &j.VideoProjectID, &j.JobType,
 			&j.ExternalRunID, &j.OMProjectID, &j.Status, &j.Progress,
-			&j.CostReserved, &j.CostActual, &j.ErrorMessage, &j.CreatedBy,
-			&createdAt, &updatedAt); err != nil {
+			&j.CostReserved, &j.CostActual, &j.ErrorMessage, &artifactsJSON,
+			&j.CreatedBy, &createdAt, &updatedAt); err != nil {
 			return nil, err
+		}
+		if artifactsJSON.Valid {
+			j.ArtifactsJSON = artifactsJSON.String
 		}
 		j.CreatedAt = parseSQLTime(createdAt)
 		j.UpdatedAt = parseSQLTime(updatedAt)
 		out = append(out, j)
 	}
 	return out, rows.Err()
+}
+
+// UpdateJobArtifacts stores the §23 preview-artifact JSON blob on the row.
+// Phase 6: written by the runner after MCP succeeds. Pass "" to clear.
+func UpdateJobArtifacts(ctx context.Context, db *sql.DB, id, jsonBlob string) error {
+	res, err := db.ExecContext(ctx,
+		`UPDATE production_jobs
+		 SET artifacts_json = ?, updated_at = datetime('now')
+		 WHERE id = ?`,
+		jsonBlob, id,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrJobNotFound
+	}
+	return nil
+}
+
+// UpdateJobExternalRunID stamps the upstream MCP / OM run id onto the row.
+// Phase 6: written by the runner right after the prepare call returns the
+// async handle, so /api/jobs/:id surfaces a non-empty external_run_id
+// even before the run reaches a terminal state.
+func UpdateJobExternalRunID(ctx context.Context, db *sql.DB, id, runID, omProjectID string) error {
+	res, err := db.ExecContext(ctx,
+		`UPDATE production_jobs
+		 SET external_run_id = ?, om_project_id = ?, updated_at = datetime('now')
+		 WHERE id = ?`,
+		runID, omProjectID, id,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrJobNotFound
+	}
+	return nil
 }
 
 // parseSQLTime accepts both "YYYY-MM-DD HH:MM:SS" and RFC3339 — sqlite's

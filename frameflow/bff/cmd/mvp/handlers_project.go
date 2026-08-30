@@ -1,11 +1,15 @@
 // Package main — Phase 3 §17.D project/job handlers + Phase 4 §17.E
-// /render quota hook. 11 routes mounted under the `scoped` group.
+// /render quota hook + Phase 6 real MCP preview rendering.
+//
+// 11 routes mounted under the `scoped` group.
 //
 // Phase 4: /render calls quotasvc.Reserve(50) BEFORE writing the job row
 // (402 on insufficient credits). Other stages are MVP stubs.
 //
-// SQL helpers + types live in this file rather than a jobsvc package —
-// gate.sh only needs the HTTP surface; Phase 5 can promote if needed.
+// Phase 6: StartStage now fires an async runner that calls OpenMontage MCP
+// video_compose via mvpclient. The handler returns immediately with
+// status=*_RENDERING + job_id; the runner advances to *_READY and stamps
+// artifacts_json on success. Render failures refund the reserved credits.
 package main
 
 import (
@@ -20,15 +24,32 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"frameflow-bff/internal/jobsvc"
+	"frameflow-bff/internal/mvpclient"
 	"frameflow-bff/internal/productsvc"
 	"frameflow-bff/internal/quotasvc"
 )
 
+// ProjectHandler exposes the §17.D routes.
+//
+// Phase 6: MCP + Poller are injected from main() so a missing MCP_BASE_URL
+// fails startup loudly (MustNew) rather than silently degrading later.
+// DB must always be set; nil MCP/Poller is treated as "MVP stub mode" by
+// StartStage (returns 503 immediately).
 type ProjectHandler struct {
-	DB *sql.DB
+	DB     *sql.DB
+	MCP    *mvpclient.Client
+	Poller *mvpclient.Poller
 }
 
+// NewProjectHandler is the canonical constructor (Phase 3 compat — no MCP).
+// For Phase 6 production wiring, use NewProjectHandlerWithMCP.
 func NewProjectHandler(db *sql.DB) *ProjectHandler { return &ProjectHandler{DB: db} }
+
+// NewProjectHandlerWithMCP wires the Phase 6 runner dependencies.
+func NewProjectHandlerWithMCP(db *sql.DB, mcpClient *mvpclient.Client, poller *mvpclient.Poller) *ProjectHandler {
+	return &ProjectHandler{DB: db, MCP: mcpClient, Poller: poller}
+}
 
 const (
 	RefModeDefault         = "balanced"
@@ -48,20 +69,23 @@ const (
 )
 
 // projectStatusForJob returns the video_projects.status a stage trigger
-// should jump to on success. MVP has NO async runner (no goroutine advance),
-// so each trigger jumps straight to the *_READY / *_DONE state. The
-// *_RENDERING states are reserved for a future Phase 5+ where a runner
-// simulates a multi-step pipeline.
+// should jump to IMMEDIATELY after the handler validates the transition.
+//
+// Phase 6: with the async runner, the handler sets the project to the
+// intermediate *_RENDERING state and the runner pushes it to the *_READY
+// state on MCP success. storyboard is the exception — there is no
+// STORYBOARD_RENDERING in the §17.G enum, so it goes straight to READY
+// and the runner just stamps artifacts onto the job row.
 func projectStatusForJob(jobType string) string {
 	switch jobType {
 	case quotasvc.JobTypeStoryboard:
 		return ProjectStatusStoryboardReady
 	case quotasvc.JobTypeAnimatic:
-		return ProjectStatusAnimaticReady
+		return ProjectStatusAnimaticRendering
 	case quotasvc.JobTypeSample:
-		return ProjectStatusSampleReady
+		return ProjectStatusSampleRendering
 	case quotasvc.JobTypeRender:
-		return ProjectStatusCompleted
+		return ProjectStatusFinalRendering
 	case "cancel":
 		return ProjectStatusCancelled
 	}
@@ -78,6 +102,7 @@ type jobRow struct {
 	ID, TenantID, ProjectID, JobType, Status, ReservationID,
 	CreatedBy, ErrorMessage         string
 	CostReserved, CostActual, Progress float64
+	ExternalRunID, OMProjectID, ArtifactsJSON string
 	CreatedAt, UpdatedAt            time.Time
 }
 
@@ -116,19 +141,31 @@ func (h *ProjectHandler) updateCols(ctx context.Context, id, setClause string, a
 func (h *ProjectHandler) loadJob(ctx context.Context, id string) (jobRow, error) {
 	var j jobRow
 	var ca, ua string
+	var extRun, omProj, artJSON sql.NullString
 	err := h.DB.QueryRowContext(ctx,
 		`SELECT id, tenant_id, video_project_id, job_type, status, progress,
 		        cost_reserved, cost_actual, reservation_id, error_message,
+		        external_run_id, om_project_id, artifacts_json,
 		        created_by, created_at, updated_at
 		 FROM production_jobs WHERE id = ?`, id,
 	).Scan(&j.ID, &j.TenantID, &j.ProjectID, &j.JobType, &j.Status, &j.Progress,
 		&j.CostReserved, &j.CostActual, &j.ReservationID, &j.ErrorMessage,
+		&extRun, &omProj, &artJSON,
 		&j.CreatedBy, &ca, &ua)
 	if errors.Is(err, sql.ErrNoRows) {
 		return j, sql.ErrNoRows
 	}
 	if err != nil {
 		return j, err
+	}
+	if extRun.Valid {
+		j.ExternalRunID = extRun.String
+	}
+	if omProj.Valid {
+		j.OMProjectID = omProj.String
+	}
+	if artJSON.Valid {
+		j.ArtifactsJSON = artJSON.String
 	}
 	j.CreatedAt, j.UpdatedAt = parseSQLTime(ca), parseSQLTime(ua)
 	return j, nil
@@ -305,6 +342,11 @@ func (h *ProjectHandler) SetReference(c *gin.Context) {
 
 // startStage is the shared body for /storyboard /animatic /sample /render.
 // /render reserves credits BEFORE the job row insert (402 on insufficient).
+//
+// Phase 6: the handler inserts a job row with status=running, advances the
+// project to the immediate next state (*_RENDERING or STORYBOARD_READY),
+// then fires an async runner that talks to upstream MCP. The handler
+// returns immediately so the client can poll GET /api/video-projects/:id/status.
 func (h *ProjectHandler) StartStage(c *gin.Context, jobType string) {
 	uid, _ := c.Get("internal_user_id")
 	uidStr, _ := uid.(string)
@@ -315,6 +357,16 @@ func (h *ProjectHandler) StartStage(c *gin.Context, jobType string) {
 	}
 	if uidStr == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing identity"})
+		return
+	}
+
+	// Phase 6 guard: if MCP is not wired (e.g. MVP stub mode), fail loud
+	// rather than silently 200 the request. Per plan §8.2.
+	if h.MCP == nil || h.Poller == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":    "MCP client not configured — start server with MCP_BASE_URL and MCP_API_TOKEN",
+			"job_type": jobType,
+		})
 		return
 	}
 
@@ -336,9 +388,10 @@ func (h *ProjectHandler) StartStage(c *gin.Context, jobType string) {
 		}
 	}
 
+	// Phase 6: status=running + progress=0 — runner advances to succeeded/1.0.
 	job := jobRow{
 		ID: newJobID(), TenantID: tidStr, ProjectID: id, JobType: jobType,
-		Status: JobStatusSucceeded, Progress: 1.0,
+		Status: "running", Progress: 0,
 		CostReserved: cost, CostActual: cost,
 		CreatedBy: uidStr,
 	}
@@ -358,11 +411,10 @@ func (h *ProjectHandler) StartStage(c *gin.Context, jobType string) {
 		return
 	}
 
-	// Advance video_projects.status to the next state per state machine.
-	// MVP rule (matches Phase 3 §17.D): each stage trigger maps directly to a
-	// single status transition without an async runner. storyboard jumps
-	// straight to STORYBOARD_READY; animatic/sample/render enter their
-	// *_RENDERING phase; cancel short-circuits to CANCELLED.
+	// Advance video_projects.status to the immediate next state per §17.D
+	// state machine. storyboard jumps straight to STORYBOARD_READY (no
+	// STORYBOARD_RENDERING state in §17.G); animatic/sample/render enter
+	// their *_RENDERING phase for the runner to push to *_READY.
 	nextStatus := projectStatusForJob(jobType)
 	if _, err := h.DB.ExecContext(c.Request.Context(),
 		`UPDATE video_projects SET status = ?, updated_at = datetime('now') WHERE id = ? AND status != ?`,
@@ -372,12 +424,31 @@ func (h *ProjectHandler) StartStage(c *gin.Context, jobType string) {
 		return
 	}
 
+	// Snapshot the inputs the runner needs (req ctx is gone after handler returns).
+	proj, _ := jobsvc.GetProject(c.Request.Context(), h.DB, id)
+	go jobsvc.RunJob(jobsvc.RunJobParams{
+		DB:               h.DB,
+		MCP:              h.MCP,
+		Poller:           h.Poller,
+		JobID:            job.ID,
+		ProjectID:        id,
+		JobType:          jobType,
+		TenantID:         tidStr,
+		Cost:             cost,
+		CreatedBy:        uidStr,
+		CurrentStatus:    nextStatus,
+		BriefJSON:        proj.CreativeBriefJSON,
+		ReferenceFileKey: proj.ReferenceFileKey,
+		ReferenceMode:    proj.ReferenceMode,
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"job_id":        job.ID,
 		"project_id":    id,
 		"job_type":      jobType,
 		"status":        nextStatus,
 		"cost_reserved": cost,
+		"async":         true,
 	})
 }
 
@@ -438,6 +509,9 @@ func (h *ProjectHandler) GetJob(c *gin.Context) {
 		"cost_actual":      j.CostActual,
 		"reservation_id":   j.ReservationID,
 		"error_message":    j.ErrorMessage,
+		"external_run_id":  j.ExternalRunID,
+		"om_project_id":    j.OMProjectID,
+		"artifacts_json":   j.ArtifactsJSON,
 		"created_at":       j.CreatedAt.Format("2006-01-02 15:04:05"),
 		"ledger":           ledger,
 	})
