@@ -1,0 +1,24 @@
+phase: 3
+scope: §17.D — Project / Job
+section_ref: docs/openmontage_product_video_mvp_golang_scope.md#17.1-必须的
+
+status: STUB   # 改成 READY 才允许 orchestrator 实际跑 run.sh
+last_edited_by: human
+
+files_to_create: []
+files_to_modify: []
+
+sql_migrations: []
+
+go_tests: []
+
+gate_endpoints:
+  - "(fill from gate description below)"
+
+gate_min_verification: |
+  POST /api/video-projects 创建;POST /api/video-projects/:id/storyboard 启动后 GET .../status 状态机单调推进
+
+estimated_changes: "TBD — fill before unstubbing"
+
+notes: |
+  (operator: 填完后把 status 改成 READY,run.sh / gate.sh 才会真正执行。)

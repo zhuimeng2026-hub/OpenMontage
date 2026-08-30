@@ -1,0 +1,48 @@
+phase: 0
+scope: §17.A — 微信身份
+section_ref: docs/openmontage_product_video_mvp_golang_scope.md#17.1-必须的
+
+status: READY   # 改成 READY 才允许 orchestrator 实际跑 run.sh
+last_edited_by: human
+
+files_to_create:
+  - frameflow/bff/internal/auth/jwt.go
+  - frameflow/bff/internal/auth/wechat.go
+  - frameflow/bff/internal/middleware/auth.go
+  - frameflow/bff/store/migrations/0001_auth.sql
+
+files_to_modify:
+  - frameflow/bff/handlers/auth.go
+  - frameflow/bff/main.go   # 挂载 POST /api/auth/login,移除/保留 GET /api/wechat/login(向后兼容)
+
+sql_migrations: |
+  ALTER TABLE users ADD COLUMN openid TEXT;
+  ALTER TABLE users ADD COLUMN unionid TEXT;
+  ALTER TABLE users ADD COLUMN internal_user_id TEXT NOT NULL DEFAULT '';
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_openid ON users(openid);
+  -- 可选:internal_user_id 全局唯一(给 §17.B 留 hook)
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_internal_user_id ON users(internal_user_id);
+
+go_tests:
+  - frameflow/bff/internal/auth/jwt_test.go   # JWT 签发 / 验签 / 过期
+  - frameflow/bff/internal/auth/wechat_test.go # code → openid 交换(用 mock transport)
+  - frameflow/bff/handlers/auth_test.go       # POST /api/auth/login + GET /api/me 端到端
+
+gate_endpoints:
+  - POST /api/auth/login     # 合法 code 返回 JWT
+  - GET /api/me              # 带 JWT 返回 user_id + internal_user_id + openid(脱敏)
+
+gate_min_verification: |
+  POST /api/auth/login 用合法 code 拿 JWT;GET /api/me 带 JWT 返回 user_id + internal_user_id
+
+estimated_changes: "4 新文件 + 2 改文件,约 350 LOC Go"
+
+notes: |
+  实现要点:
+  1. /api/auth/login 走 POST(code in body),不要做 GET 重定向 — 文档明确这是"静默登录"。
+  2. 现有 /api/wechat/login / /api/wechat/callback / /api/wechat/qrlogin 暂时保留
+     (OAuth 网页跳转流),但新增的 POST /api/auth/login 是 MVP 推荐入口。
+  3. JWT payload 必须含 internal_user_id(不是 openid)— openid 只在 UserIdentity 表存。
+  4. secret 从 config.JWTSecret 读(env JWT_SECRET);24h 过期,与现有保持一致。
+  5. code → openid 调用走 WeChat api.weixin.qq.com/sns/oauth2/access_token,
+     与现有 /api/wechat/callback 共用 client,只换 transport。
