@@ -282,10 +282,12 @@ class SceneDetect(BaseTool):
             )
         escaped_input = self._escape_lavfi_movie_path(input_path)
 
+        # ffprobe lavfi sources don't populate `pts_time`; use `pkt_pts_time`
+        # (we still ask for `pts_time` for back-compat with regular file inputs).
         cmd = [
             "ffprobe",
             "-v", "quiet",
-            "-show_entries", "frame=pts_time",
+            "-show_entries", "frame=pts_time,pkt_pts_time",
             "-of", "json",
             "-f", "lavfi",
             f"movie='{escaped_input}',select='gt(scene,{threshold})'",
@@ -301,7 +303,8 @@ class SceneDetect(BaseTool):
 
         change_points = [0.0]
         for frame in data.get("frames", []):
-            ts = float(frame.get("pts_time", 0))
+            ts_str = frame.get("pkt_pts_time") or frame.get("pts_time") or "0"
+            ts = float(ts_str)
             if ts - change_points[-1] >= min_scene_len:
                 change_points.append(ts)
 

@@ -517,6 +517,18 @@ def score_provider(tool, task_context: dict[str, Any]) -> ProviderScore:
             elif matched >= 1:
                 task_fit = min(1.0, task_fit + 0.05)
 
+    # Voicebox bonus: when the task is voice/TTS and voicebox is available,
+    # it should rank first as the free-local primary option. voicebox is the
+    # only provider that supports voice cloning on this host, making it uniquely
+    # valuable for narration tasks that want custom-voice output.
+    if info.get("provider") == "voicebox" and task_context.get("asset_type") == "voice":
+        task_fit = min(1.0, task_fit + 0.55)
+
+    # Local provider bonus: local providers have zero network cost and no rate-limit
+    # risk, which matters for reliability-sensitive production runs.
+    if info.get("runtime") == "local" and task_context.get("asset_type") == "voice":
+        reliability = min(1.0, reliability + 0.1)
+
     return ProviderScore(
         tool_name=info.get("name", "unknown"),
         provider=info.get("provider", "unknown"),

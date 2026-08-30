@@ -1,3 +1,4 @@
+import { DISPLAY } from "../fonts";
 import {
   AbsoluteFill,
   interpolate,
@@ -141,7 +142,7 @@ export const EndTag: React.FC<EndTagProps> = ({
         <div
           style={{
             fontFamily:
-              "'Space Grotesk', 'Inter', 'Helvetica Neue', system-ui, sans-serif",
+              DISPLAY,
             fontWeight: 900,
             fontSize: 84,
             letterSpacing: "0.12em",

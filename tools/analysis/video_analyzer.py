@@ -99,6 +99,15 @@ class VideoAnalyzer(BaseTool):
                 "type": "string",
                 "description": "Directory for analysis outputs (default: auto-generated)",
             },
+            "max_duration_seconds": {
+                "type": "integer",
+                "default": 600,
+                "description": (
+                    "Reject videos longer than this (in seconds). "
+                    "Increase to allow long-form videos (>10 min) as reference material. "
+                    "Corresponds to video_downloader's max_duration_seconds limit."
+                ),
+            },
         },
     }
 
@@ -150,6 +159,7 @@ class VideoAnalyzer(BaseTool):
         source = inputs["source"]
         depth = inputs.get("analysis_depth", "standard")
         max_keyframes = inputs.get("max_keyframes", 20)
+        max_duration = inputs.get("max_duration_seconds", 600)
 
         # Setup output directory
         if inputs.get("output_dir"):
@@ -206,6 +216,7 @@ class VideoAnalyzer(BaseTool):
                         "url": source,
                         "output_dir": str(output_dir),
                         "format": "metadata_only",
+                        "max_duration_seconds": max_duration,
                     })
                 else:
                     dl_result = downloader.execute({
@@ -213,6 +224,7 @@ class VideoAnalyzer(BaseTool):
                         "output_dir": str(output_dir),
                         "format": "video",
                         "max_resolution": "720p",
+                        "max_duration_seconds": max_duration,
                     })
 
                 if dl_result.success:
@@ -309,6 +321,7 @@ class VideoAnalyzer(BaseTool):
                     "output_dir": str(output_dir),
                     "format": "video",
                     "max_resolution": "720p",
+                    "max_duration_seconds": max_duration,
                 })
                 if dl_result.success:
                     video_path = dl_result.data.get("video_path")

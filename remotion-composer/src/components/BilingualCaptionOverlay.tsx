@@ -1,3 +1,4 @@
+import { CJK, DISPLAY } from "../fonts";
 import {
   AbsoluteFill,
   Sequence,
@@ -215,8 +216,8 @@ export const BilingualCaptionOverlay: React.FC<BilingualCaptionOverlayProps> = (
   secondaryColor = "#E2E8F0",
   secondaryHighlightColor = "#FBBF24",
   backgroundColor = "rgba(15, 23, 42, 0.78)",
-  primaryFontFamily = "Space Grotesk, Inter, system-ui, sans-serif",
-  secondaryFontFamily = "Noto Sans CJK SC, Noto Sans SC, system-ui, sans-serif",
+  primaryFontFamily = DISPLAY,
+  secondaryFontFamily = CJK,
 }) => {
   const { fps } = useVideoConfig();
   const pages = sliceSecondaryByPage(primaryWords, secondaryWords, wordsPerPage);

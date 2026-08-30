@@ -43,6 +43,7 @@ class MusicGen(BaseTool):
         "Get a key at https://elevenlabs.io"
     )
 
+    fallback_tools = ["music_gen_local"]
     agent_skills = ["music", "sound-effects", "elevenlabs"]
 
     capabilities = [

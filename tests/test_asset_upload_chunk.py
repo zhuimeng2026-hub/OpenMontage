@@ -195,3 +195,69 @@ def test_chunk_upload_sanitizes_filename_and_preserves_extension(
     assert asset["original_filename"] == original_filename
     assert Path(asset["relative_path"]).name == safe_filename
     assert (projects.parent / asset["relative_path"]).read_bytes() == content
+
+
+def _tool_over(tmp_path: Path, monkeypatch) -> UploadAssetChunk:
+    projects = tmp_path / "projects"
+    monkeypatch.setattr(UploadAssetChunk, "_root", staticmethod(lambda: projects))
+    return UploadAssetChunk()
+
+
+def test_chunk_start_reports_every_missing_argument(tmp_path: Path, monkeypatch):
+    """Regression: on 2026-08-30 04:53 a client called start with only
+    operation+total_bytes and got a bare "project_id must be a safe basename".
+    It must instead be told exactly which arguments are missing, and nothing
+    may be written to disk.
+    """
+    projects = tmp_path / "projects"
+    tool = _tool_over(tmp_path, monkeypatch)
+
+    result = tool.execute({
+        "operation": "start",
+        "total_bytes": 1_486_629,
+        "mcp_session_id": "bare-start-session",
+    })
+
+    assert not result.success
+    assert "missing required argument" in result.error
+    assert "project_id" in result.error
+    assert "filename" in result.error
+    assert not (projects / ".uploads").exists()
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["my project", "../evil", "/abs/path", "with/slash", "项目A", "-leading", "a" * 129],
+)
+def test_chunk_start_rejects_unsafe_project_id(
+    tmp_path: Path, monkeypatch, project_id: str
+):
+    projects = tmp_path / "projects"
+    tool = _tool_over(tmp_path, monkeypatch)
+
+    result = tool.execute({
+        "operation": "start",
+        "project_id": project_id,
+        "filename": "asset.png",
+        "total_bytes": 4,
+        "mcp_session_id": "unsafe-project-session",
+    })
+
+    assert not result.success
+    assert "safe basename" in result.error
+    assert not (projects / ".uploads").exists()
+
+
+def test_chunk_upload_rejects_unknown_operation(tmp_path: Path, monkeypatch):
+    projects = tmp_path / "projects"
+    tool = _tool_over(tmp_path, monkeypatch)
+
+    result = tool.execute({
+        "operation": "bogus",
+        "project_id": "chunk-test",
+        "mcp_session_id": "bad-operation-session",
+    })
+
+    assert not result.success
+    assert "operation must be start, append, or complete" in result.error
+    assert not (projects / ".uploads").exists()

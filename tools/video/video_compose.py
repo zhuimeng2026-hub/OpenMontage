@@ -163,6 +163,41 @@ def _resolve_fps(edit_decisions: dict | None) -> float:
     return 30.0
 
 
+def _resolve_compose_target(edit_decisions: dict | None) -> dict[str, Any] | None:
+    """Resolve the output canvas (width/height/fit) from edit_decisions.
+
+    Mirrors the cascade in ``_resolve_fps`` so dimensions and frame rate live
+    in the same logical place. Priority (first present wins):
+
+      1. ``edit_decisions.compose_target`` — top-level, schema-canonical
+         (schemas/artifacts/edit_decisions.schema.json:235).
+      2. ``edit_decisions.format`` — top-level legacy.
+      3. ``edit_decisions.metadata.compose_target`` — pre-schema-fix legacy.
+      4. ``edit_decisions.metadata.format`` — oldest legacy.
+
+    Returns the first dict that contains at least ``width`` and ``height`` as
+    positive numbers, or ``None`` if no candidate qualifies. Callers fall back
+    to the 1920x1080 default themselves so the resolution string format stays
+    in one place.
+    """
+    ed = edit_decisions or {}
+    md = ed.get("metadata") or {}
+    candidates = (
+        ed.get("compose_target"),
+        ed.get("format"),
+        md.get("compose_target"),
+        md.get("format"),
+    )
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+        w = c.get("width")
+        h = c.get("height")
+        if isinstance(w, (int, float)) and isinstance(h, (int, float)) and w > 0 and h > 0:
+            return dict(c)
+    return None
+
+
 class VideoCompose(BaseTool):
     name = "video_compose"
     version = "0.1.0"
@@ -556,21 +591,22 @@ class VideoCompose(BaseTool):
         profile_name = inputs.get("profile")
 
         # Resolve target resolution + fit mode. Priority: explicit `profile`
-        # arg > edit_decisions.metadata.compose_target > default (landscape HD).
+        # arg > edit_decisions.compose_target (any of the 4 cascade locations
+        # documented in _resolve_compose_target) > default (landscape HD).
         # compose_target = {"width": W, "height": H, "fit": "pad"|"cover"} lets a
         # caller request vertical (9:16) or any aspect without a named profile.
         # fit="pad" letterboxes (no content loss, the historical default);
         # fit="cover" scales-to-fill and centre-crops (better for vertical social).
         resolution = "1920x1080"
         fit_mode = "pad"
-        compose_target = (edit_decisions.get("metadata") or {}).get("compose_target")
-        if isinstance(compose_target, dict):
+        ct = _resolve_compose_target(edit_decisions)
+        if ct:
             try:
-                resolution = f"{int(compose_target['width'])}x{int(compose_target['height'])}"
+                resolution = f"{int(ct['width'])}x{int(ct['height'])}"
             except (KeyError, ValueError, TypeError):
                 pass
-            if compose_target.get("fit") in ("pad", "cover"):
-                fit_mode = compose_target["fit"]
+            if ct.get("fit") in ("pad", "cover"):
+                fit_mode = ct["fit"]
         if profile_name:
             try:
                 from lib.media_profiles import get_profile
@@ -660,7 +696,7 @@ class VideoCompose(BaseTool):
                     #
                     # Target is target_w x target_h @ 30fps, yuv420p, sar=1
                     # (default 1920x1080; overridable via `profile` or
-                    # edit_decisions.metadata.compose_target — see above).
+                    # edit_decisions.compose_target — see _resolve_compose_target).
                     # fit="pad" letterboxes to preserve all content; fit="cover"
                     # scales-to-fill then centre-crops (no bars, for vertical social).
                     if fit_mode == "cover":
@@ -1527,7 +1563,7 @@ class VideoCompose(BaseTool):
         config, but we also forward them explicitly so the metadata pass and
         scripts that read them directly get consistent values.
         """
-        ct = ((composition_data or {}).get("metadata") or {}).get("compose_target") or {}
+        ct = _resolve_compose_target(composition_data) or {}
         return {
             "code": (composition_data or {}).get("custom_code", ""),
             "images": staged_images,
@@ -1796,13 +1832,34 @@ class VideoCompose(BaseTool):
 
         # Apply media profile dimensions
         profile_name = inputs.get("profile")
+        render_width: int | None = None
+        render_height: int | None = None
         if profile_name:
             try:
                 from lib.media_profiles import get_profile
                 p = get_profile(profile_name)
-                cmd.extend(["--width", str(p.width), "--height", str(p.height)])
+                render_width = int(p.width)
+                render_height = int(p.height)
             except (ImportError, ValueError):
                 pass
+
+        # Fall back to edit_decisions.compose_target (any of the 4 cascade
+        # locations — see _resolve_compose_target). Without this fallback
+        # Remotion renders at the composition's registered width/height
+        # (e.g. Explainer = 1920x1080) regardless of what the caller asked
+        # for, producing silent-dimension bugs where vertical (1080x1920)
+        # edit_decisions yield landscape output.
+        if render_width is None or render_height is None:
+            ct = _resolve_compose_target(composition_data)
+            if ct:
+                try:
+                    render_width = int(ct["width"])
+                    render_height = int(ct["height"])
+                except (KeyError, ValueError, TypeError):
+                    pass
+
+        if render_width is not None and render_height is not None:
+            cmd.extend(["--width", str(render_width), "--height", str(render_height)])
 
         # Override concurrency from inputs if explicitly provided
         custom_concurrency = inputs.get("concurrency")
@@ -2486,6 +2543,29 @@ class VideoCompose(BaseTool):
                     technical_probe["issues"].append(
                         f"Resolution {width}x{height} is very low"
                     )
+
+                # Cross-check rendered dimensions against the requested
+                # compose_target. Catches the silent-dimension bug where the
+                # renderer's registered width/height (e.g. Explainer = 1920x1080)
+                # wins over edit_decisions.compose_target.{width,height}.
+                if edit_decisions:
+                    ct = _resolve_compose_target(edit_decisions)
+                    if ct:
+                        target_w_req = int(ct.get("width", 0))
+                        target_h_req = int(ct.get("height", 0))
+                        technical_probe["target_resolution"] = (
+                            f"{target_w_req}x{target_h_req}"
+                        )
+                        if (target_w_req, target_h_req) != (width, height):
+                            technical_probe["resolution_match"] = False
+                            technical_probe["issues"].append(
+                                f"Dimension mismatch: rendered {width}x{height} "
+                                f"but compose_target requested "
+                                f"{target_w_req}x{target_h_req}. The renderer's "
+                                f"registered width/height won over edit_decisions."
+                            )
+                        else:
+                            technical_probe["resolution_match"] = True
                 if not audio_stream:
                     technical_probe["issues"].append("No audio stream in output")
             else:
@@ -2768,6 +2848,7 @@ class VideoCompose(BaseTool):
                 "silent downgrade", "delivery promise violation",
                 "effectively silent", "ffprobe failed", "suspiciously short",
                 "tts punctuation leak",  # reading literal punctuation aloud
+                "dimension mismatch",  # renderer's registered w/h overrode edit_decisions
             ])
         ]
 

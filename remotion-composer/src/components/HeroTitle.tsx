@@ -1,3 +1,4 @@
+import { DISPLAY } from "../fonts";
 import {
   AbsoluteFill,
   interpolate,
@@ -36,7 +37,7 @@ export const HeroTitle: React.FC<HeroTitleProps> = ({ title, subtitle }) => {
           style={{
             fontSize: 72,
             fontWeight: 800,
-            fontFamily: "Space Grotesk, Inter, system-ui, sans-serif",
+            fontFamily: DISPLAY,
             lineHeight: 1.2,
             display: "flex",
             justifyContent: "center",
@@ -83,7 +84,7 @@ export const HeroTitle: React.FC<HeroTitleProps> = ({ title, subtitle }) => {
               fontSize: 28,
               fontWeight: 400,
               color: "#A78BFA",
-              fontFamily: "Space Grotesk, Inter, system-ui, sans-serif",
+              fontFamily: DISPLAY,
               letterSpacing: "0.1em",
               textTransform: "uppercase",
             }}

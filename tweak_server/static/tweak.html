@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>OpenMontage · Tweak Render</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/tweak.css">
+</head>
+<body>
+  <header>
+    <h1>Tweak Render <small id="project-id-label"></small></h1>
+    <p class="hint">Pick a starting template, tweak the fields below, hit <b>Submit</b>.
+       Render runs through the local MCP server; expect 30-90s for a 60s video.</p>
+  </header>
+
+  <main>
+    <!-- Theme + meta -->
+    <section class="card">
+      <h2>Style</h2>
+      <label>Theme
+        <select id="theme"></select>
+      </label>
+    </section>
+
+    <!-- Per-cut form, dynamically built -->
+    <section class="card">
+      <h2>Cuts</h2>
+      <div id="cuts-container"></div>
+    </section>
+
+    <!-- Audio -->
+    <section class="card">
+      <h2>Audio</h2>
+      <div id="audio-container"></div>
+    </section>
+
+    <!-- Comment -->
+    <section class="card">
+      <h2>Note (saved in decision log)</h2>
+      <textarea id="comment" rows="2" maxlength="1000" placeholder="What did you change and why?"></textarea>
+    </section>
+
+    <!-- Project assets -->
+    <section class="card">
+      <h2>Project assets</h2>
+      <p class="hint">Upload images / video / audio / music for this project. Files land in
+         <code>projects/&lt;project_id&gt;/assets/&lt;subdir&gt;/</code>.</p>
+      <div id="asset-blocks">
+        <!-- One block per subdir, populated by tweak.js loadAssets() -->
+      </div>
+    </section>
+
+    <!-- Submit + result -->
+    <section class="card actions">
+      <button id="submit-btn" type="button">Submit tweak &amp; render</button>
+      <span id="submit-status" class="status"></span>
+    </section>
+
+    <section class="card result hidden" id="result-card">
+      <h2>Result</h2>
+      <p id="result-summary"></p>
+      <video id="result-video" controls></video>
+      <p id="result-error" class="error"></p>
+      <div class="progress hidden" id="progress-block">
+        <progress id="progress-bar" max="100" value="0"></progress>
+        <span id="progress-phase">queued</span>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <small>OpenMontage tweak server · <a href="/">/health</a></small>
+  </footer>
+
+  <script src="/static/tweak.js"></script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+{
+  "project_id": "demo_proj",
+  "sku": "BAG-001",
+  "scenario": "airport_travel",
+  "variant": "default",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "scenes": [
+    {
+      "id": "scene_01",
+      "order": 1,
+      "type": "hook",
+      "duration": 2.5,
+      "headline": "Still packing like this?",
+      "voiceover": "Still carrying too much when you travel?",
+      "transition": "cut"
+    },
+    {
+      "id": "scene_02",
+      "order": 2,
+      "type": "pain_point",
+      "duration": 3.0,
+      "headline": "Heavy bags. Lost time. Missed flights.",
+      "voiceover": "Heavy bags cost you time and energy.",
+      "transition": "cut"
+    },
+    {
+      "id": "scene_03",
+      "order": 3,
+      "type": "product_reveal",
+      "duration": 4.0,
+      "headline": "Meet the 40L Travel Backpack",
+      "voiceover": "Carry-on friendly, ready in seconds.",
+      "asset_id": "bag-front",
+      "transition": "fade"
+    },
+    {
+      "id": "scene_04",
+      "order": 4,
+      "type": "feature_demo",
+      "duration": 5.0,
+      "headline": "Separate shoe compartment",
+      "voiceover": "Shoes stay separate, clothes stay clean.",
+      "asset_id": "bag-side",
+      "transition": "cut"
+    },
+    {
+      "id": "scene_05",
+      "order": 5,
+      "type": "lifestyle",
+      "duration": 6.0,
+      "headline": "Designed for the long haul",
+      "voiceover": "From airport to hotel, all in one carry.",
+      "asset_id": "lifestyle",
+      "transition": "fade"
+    },
+    {
+      "id": "scene_06",
+      "order": 6,
+      "type": "cta",
+      "duration": 3.5,
+      "headline": "Shop Now — Free Shipping",
+      "voiceover": "Click to claim free shipping today.",
+      "transition": "cut"
+    }
+  ]
+}

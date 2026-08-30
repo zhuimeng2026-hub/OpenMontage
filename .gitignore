@@ -170,3 +170,7 @@ nginx/_tools_list.json
 nginx/ssl/
 
 remotion-composer/build.env.test
+.gstack/
+# Runtime logs (regenerable from server runs)
+mcp_server.log
+frameflow/bff/bff.log.new

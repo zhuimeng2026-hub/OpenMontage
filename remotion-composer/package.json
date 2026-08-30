@@ -8,7 +8,9 @@
     "upgrade": "npx remotion upgrade",
     "smoke": "npx remotion compositions src/index.tsx",
     "smoke:bundle": "npx remotion bundle src/index.tsx",
-    "smoke:render": "npx remotion render src/index.tsx EndTag out/smoke.mp4 --chrome-executable \"C:/Program Files/Google/Chrome/Application/chrome.exe\" --chrome-flag=--no-sandbox --chrome-flag=--disable-gpu --chrome-flag=--disable-dev-shm-usage --codec h264"
+    "smoke:render": "npx remotion render src/index.tsx EndTag out/smoke.mp4 --chrome-executable \"C:/Program Files/Google/Chrome/Application/chrome.exe\" --chrome-flag=--no-sandbox --chrome-flag=--disable-gpu --chrome-flag=--disable-dev-shm-usage --codec h264",
+    "studio:zh": "node scripts/patch-studio-zh.js",
+    "postinstall": "node scripts/patch-studio-zh.js 2>/dev/null || true"
   },
   "dependencies": {
     "@babel/standalone": "^8.0.4",

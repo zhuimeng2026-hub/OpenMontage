@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as JsxRuntime from "react/jsx-runtime";
 import * as Babel from "@babel/standalone";
+import { MONO } from "./fonts";
 import * as Remotion from "remotion";
 
 /**
@@ -96,7 +97,7 @@ const ErrorScreen: React.FC<{ message: string }> = ({ message }) => {
       style={{
         backgroundColor: "#7F1D1D",
         color: "#FECACA",
-        fontFamily: "monospace",
+        fontFamily: MONO,
         fontSize: 28,
         display: "flex",
         alignItems: "center",

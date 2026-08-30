@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -26,7 +27,7 @@ import traceback
 import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -561,6 +562,457 @@ def get_provider_menu() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Subtitle & Voice Convenience Wrappers
+#
+# These are domain-flavored entry points over the underlying tools
+# (`video_compose`, `elevenlabs_tts`). They keep the MCP surface small and
+# give external clients a vocabulary tied to the user-visible feature instead
+# of the internal `execute_tool(tool_name="...", inputs={...})` envelope.
+#
+# Both still go through the registry, so all governance (cost tracking,
+# review hooks, decision log) applies the same as for any other tool call.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def burn_subtitles(
+    input_path: str,
+    subtitle_path: str,
+    output_path: Optional[str] = None,
+    subtitle_style: Optional[dict[str, Any]] = None,
+    codec: str = "libx264",
+    crf: int = 23,
+) -> ExecuteResult:
+    """Burn a subtitle file (.srt / .ass / .vtt) into a video.
+
+    Thin wrapper over `video_compose` with `operation=burn_subtitles`. Uses
+    FFmpeg's `subtitles=` filter; codec defaults to `libx264` so the result
+    is widely playable. Audio is copied losslessly (no re-encode).
+    """
+    tool = registry.get("video_compose")
+    if tool is None:
+        return ExecuteResult(success=False, error="video_compose tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "burn_subtitles",
+        "input_path": input_path,
+        "subtitle_path": subtitle_path,
+        "codec": codec,
+        "crf": crf,
+    }
+    if output_path:
+        inputs["output_path"] = output_path
+    if subtitle_style:
+        inputs["subtitle_style"] = subtitle_style
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"burn_subtitles failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def clone_voice(
+    name: str,
+    audio_paths: list[str],
+    description: Optional[str] = None,
+    engine: Optional[str] = "qwen",
+    reference_texts: Optional[list[str]] = None,
+    reference_text: Optional[str] = None,
+) -> ExecuteResult:
+    """Create a cloned voice profile via the local Voicebox service.
+
+    Routes through the `voicebox_tts` tool, which talks to the Voicebox REST
+    API on `http://127.0.0.1:17493` by default (override with
+    `VOICEBOX_REST_URL`). Voice data never leaves the host.
+
+    Engines that support voice cloning on this Voicebox:
+      qwen, luxtts, chatterbox, chatterbox_turbo, tada.
+    Default `qwen` (Qwen3-TTS instant clone). Preset voices like `kokoro`
+    do not accept reference samples.
+
+    Recommended total sample duration >= 30 seconds for a usable Qwen3-TTS
+    clone. Returns the new `profile_id` for use with voicebox text-to-speech.
+
+    Voicebox requires each audio sample to have a matching transcript
+    (`reference_texts` — one entry per audio_paths entry, in order). If you
+    don't have per-sample transcripts, pass `reference_text` to apply the
+    same transcript to every sample (low-quality fallback).
+    """
+    tool = registry.get("voicebox_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "clone_voice",
+        "name": name,
+        "audio_paths": audio_paths,
+        "default_engine": engine or "qwen",
+    }
+    if description:
+        inputs["description"] = description
+    if reference_texts is not None:
+        inputs["reference_texts"] = reference_texts
+    if reference_text is not None:
+        inputs["reference_text"] = reference_text
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"clone_voice failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def list_cloned_voices(
+    include_presets: bool = False,
+) -> ExecuteResult:
+    """List voice profiles on the local Voicebox instance.
+
+    By default returns only `voice_type=cloned` profiles (those created via
+    `clone_voice` / `voicebox_clone_voice`). Set `include_presets=True` to
+    also include preset and designed voices.
+
+    Each entry has `id`, `name`, `voice_type`, and an `is_cloned` flag.
+    """
+    tool = registry.get("voicebox_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "list_cloned_voices",
+        "include_presets": include_presets,
+    }
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"list_cloned_voices failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def voicebox_clone_voice(
+    name: str,
+    audio_paths: list[str],
+    description: Optional[str] = None,
+    default_engine: Optional[str] = "qwen",
+    reference_texts: Optional[list[str]] = None,
+    reference_text: Optional[str] = None,
+) -> ExecuteResult:
+    """Create a Voicebox voice profile and attach 1+ reference audio samples.
+
+    Talks to the local Voicebox REST API (default http://127.0.0.1:17493) via
+    the `voicebox_tts` BaseTool. Returns the new `profile_id` for use with
+    `voicebox_tts` `text_to_speech` to generate narration in the cloned voice.
+
+    Recommended total sample duration >= 30 seconds for a usable Qwen3-TTS
+    clone. Requires Voicebox to be running locally; override
+    VOICEBOX_REST_URL for remote hosts.
+    """
+    tool = registry.get("voicebox_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "clone_voice",
+        "name": name,
+        "audio_paths": audio_paths,
+    }
+    if description is not None:
+        inputs["description"] = description
+    if default_engine is not None:
+        inputs["default_engine"] = default_engine
+    if reference_texts is not None:
+        inputs["reference_texts"] = reference_texts
+    if reference_text is not None:
+        inputs["reference_text"] = reference_text
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"voicebox_clone_voice failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def voicebox_tts(
+    text: str,
+    profile_id: str,
+    language: Optional[str] = "en",
+    engine: Optional[str] = None,
+    model_size: Optional[str] = None,
+    instruct: Optional[str] = None,
+    personality: Optional[bool] = None,
+    seed: Optional[int] = None,
+    output_path: Optional[str] = None,
+    timeout_seconds: Optional[int] = None,
+) -> ExecuteResult:
+    """Synthesize speech via the local Voicebox REST API.
+
+    Uses a VoiceProfile created via `voicebox_clone_voice` (or a preset
+    profile surfaced by `voicebox_list_cloned_voices`). Generates audio on
+    the host running Voicebox — no API keys, no cloud spend, voice data
+    never leaves the machine.
+
+    Returns ExecuteResult with `artifacts=[output_path]` pointing at the
+    synthesized audio file (placed under the active project's
+    assets/audio/ when no `output_path` is given).
+    """
+    tool = registry.get("voicebox_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "text_to_speech",
+        "text": text,
+        "profile_id": profile_id,
+    }
+    if language is not None:
+        inputs["language"] = language
+    if engine is not None:
+        inputs["engine"] = engine
+    if model_size is not None:
+        inputs["model_size"] = model_size
+    if instruct is not None:
+        inputs["instruct"] = instruct
+    if personality is not None:
+        inputs["personality"] = personality
+    if seed is not None:
+        inputs["seed"] = seed
+    if output_path is not None:
+        inputs["output_path"] = output_path
+    if timeout_seconds is not None:
+        inputs["timeout_seconds"] = timeout_seconds
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"voicebox_tts failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def voicebox_list_cloned_voices(
+    include_presets: bool = False,
+) -> ExecuteResult:
+    """List voice profiles on the local Voicebox instance.
+
+    By default returns only `voice_type=cloned` profiles (those created via
+    `voicebox_clone_voice`). Set `include_presets=True` to also include
+    preset and designed voices. Each entry has `id`, `name`, `voice_type`,
+    and an `is_cloned` flag — mirroring ElevenLabs' shape so downstream
+    selectors can filter uniformly across providers.
+    """
+    tool = registry.get("voicebox_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="voicebox_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "operation": "list_cloned_voices",
+        "include_presets": include_presets,
+    }
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"voicebox_list_cloned_voices failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+@mcp.tool()
+async def edge_tts(
+    text: str,
+    voice: str = "zh-CN-XiaoxiaoNeural",
+    rate: str = "+0%",
+    volume: str = "+0%",
+    pitch: str = "+0Hz",
+    output_path: str = "tts_output.mp3",
+) -> ExecuteResult:
+    """Synthesize speech with Microsoft Edge TTS (free, no API key required).
+
+    The upstream tool's default voice `zh-CN-YunxiNeural` is rejected by
+    Microsoft's edge TTS service from many IPs (returns `NoAudioReceived`).
+    This wrapper defaults to `zh-CN-XiaoxiaoNeural` which is reliably
+    reachable. If you want YunxiNeural explicitly, set `voice` — but be
+    ready to fall back if you see "No audio was received".
+
+    Voices verified working from this host:
+      zh-CN-XiaoxiaoNeural   (中文女声，温暖)
+      zh-CN-YunjianNeural    (中文男声，激情)
+      zh-CN-XiaoyiNeural     (中文女声，活泼)
+      zh-CN-liaoning-XiaobeiNeural (东北口音女声)
+      en-US-AvaNeural        (英文女声)
+      en-US-AndrewNeural     (英文男声)
+
+    Returns ExecuteResult with `artifacts=[output_path]`.
+    """
+    tool = registry.get("edge_tts")
+    if tool is None:
+        return ExecuteResult(success=False, error="edge_tts tool not registered")
+
+    inputs: dict[str, Any] = {
+        "text": text,
+        "voice": voice,
+        "rate": rate,
+        "volume": volume,
+        "pitch": pitch,
+        "output_path": output_path,
+    }
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(success=False, error=f"edge_tts failed: {type(e).__name__}: {e}")
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Analysis Convenience Wrappers
+#
+# Domain-flavored entry points over `tools/analysis/*` tools. They keep the
+# MCP surface vocabulary tied to the user-visible feature instead of the
+# internal `execute_tool(tool_name="...", inputs={...})` envelope.
+# Both still go through the registry, so all governance (cost tracking,
+# review hooks, decision log) applies the same as for any other tool call.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def scene_detect(
+    input_path: str,
+    method: Optional[str] = "content",
+    threshold: Optional[float] = None,
+    min_scene_length_seconds: Optional[float] = 1.0,
+    output_path: Optional[str] = None,
+) -> ExecuteResult:
+    """Detect scene boundaries in a video.
+
+    Thin wrapper over the `scene_detect` tool. When PySceneDetect is installed
+    the detector uses it; otherwise falls back to FFmpeg's
+    `select=gt(scene,...)` filter. The robust long-video path is automatic:
+    videos >= 5 minutes are detected chunk-by-chunk and merged globally so
+    FFmpeg does not blow up on 4K / long-form sources. Partial segment
+    failures are reported but never silently dropped — `status` becomes
+    `degraded` and `diagnostics` carries the chunk-level error trail;
+    `scene_count` / `scenes` still reflect what was recovered.
+
+    Args:
+        input_path: Path to the source video (mp4/mov/mkv/...).
+        method: Detection method — 'content' (default), 'threshold', or
+            'adaptive'.
+        threshold: Detection threshold (interpretation depends on method).
+        min_scene_length_seconds: Minimum scene length; scenes shorter than
+            this are merged with their neighbors. Default 1.0, minimum 0.1.
+        output_path: Where to write the scene list JSON. Defaults to
+            `<input_path>.scenes.json` next to the source.
+    """
+    tool = registry.get("scene_detect")
+    if tool is None:
+        return ExecuteResult(success=False, error="scene_detect tool not registered")
+
+    inputs: dict[str, Any] = {
+        "input_path": input_path,
+        "method": method,
+        "min_scene_length_seconds": min_scene_length_seconds,
+    }
+    if threshold is not None:
+        inputs["threshold"] = threshold
+    if output_path:
+        inputs["output_path"] = output_path
+
+    ctx = contextvars.copy_context()
+    try:
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+    except Exception as e:
+        return ExecuteResult(
+            success=False,
+            error=f"scene_detect failed: {type(e).__name__}: {e}",
+        )
+
+    return ExecuteResult(
+        success=result.success,
+        data=result.data,
+        artifacts=result.artifacts,
+        error=result.error,
+        cost_usd=result.cost_usd,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Execution tools
 # ---------------------------------------------------------------------------
 
@@ -605,15 +1057,46 @@ async def execute_tool(
         # （get_mcp_session_id() 返回 None → "Mcp-Session-Id is required"）。
         # 显式复制当前上下文并带入线程，使 session 跨线程可见。
         ctx = contextvars.copy_context()
-        result = await asyncio.to_thread(ctx.run, tool.execute, inputs)
+        # 同时把 session id 注入 inputs dict，这样像 upload_asset 那样直接读
+        # inputs["mcp_session_id"] 的子工具也能拿到。复制避免污染调用方。
+        inputs_for_call = dict(inputs)
+        if "mcp_session_id" not in inputs_for_call:
+            sid = get_mcp_session_id()
+            if sid:
+                inputs_for_call["mcp_session_id"] = sid
+        result = await asyncio.to_thread(ctx.run, tool.execute, inputs_for_call)
         _log.info("execute_tool done: %s success=%s duration=%.2fs",
                   tool_name, result.success, result.duration_seconds or 0)
+        # Log the full error (was [:80] — too short; masked the real cause of
+        # Remotion failures and left the client in a retry loop seeing only
+        # "Remotion render failed ... Underlying error:" with nothing after).
+        # 2000 chars fits the typical "Remotion render failed (exit N):\n<25-line
+        # stderr tail>" shape from video_compose._remotion_render.
         _log.info("execute_tool response: tool=%s success=%s data_keys=%s error=%s",
                   tool_name, result.success, list(result.data.keys()) if result.data else None,
-                  result.error[:80] if result.error else None)
+                  (result.error[:2000] if result.error else None))
+
+        # Build the data envelope. If the sub-tool returned no "data" key (or an
+        # empty dict), fall back to forwarding all non-reserved top-level fields
+        # from the ToolResult — this handles tools such as upload_asset that
+        # project their payload onto the result dict rather than into result.data.
+        RESERVED = {"success", "error", "artifacts", "data",
+                    "cost_usd", "duration_seconds", "seed", "model"}
+        if result.data:
+            envelope_data = result.data
+        else:
+            # dataclasses.asdict yields {"success": ..., "data": {}, ...}.
+            # Strip reserved keys (incl. the empty "data" field itself) AND any
+            # None/empty values so the envelope stays clean for failed runs.
+            raw = dataclasses.asdict(result)
+            envelope_data = {
+                k: v for k, v in raw.items()
+                if k not in RESERVED and v
+            }
+
         return ExecuteResult(
             success=result.success,
-            data=result.data,
+            data=envelope_data,
             artifacts=result.artifacts,
             error=result.error,
             cost_usd=result.cost_usd,
@@ -682,7 +1165,7 @@ async def upload_asset(
 
 @mcp.tool()
 async def upload_asset_chunk(
-    operation: str,
+    operation: Literal["start", "append", "complete"],
     project_id: Optional[str] = None,
     filename: Optional[str] = None,
     total_bytes: Optional[int] = None,
@@ -696,6 +1179,18 @@ async def upload_asset_chunk(
 
     Call in order: start, append one or more chunks, complete. Each chunk
     should be at most 1 MiB; the server verifies size, offset and SHA-256.
+
+    Required arguments per operation (missing ones are rejected before
+    anything is written):
+
+    - start:    project_id, filename, total_bytes
+    - append:   upload_id, offset, chunk_base64
+    - complete: upload_id
+
+    ``project_id`` must be a safe basename: 1-128 chars, starting with a
+    letter or digit, followed by letters, digits, '.', '_' or '-' (for
+    example ``mclaw-demo``). Send the same project_id on every call of one
+    upload.
     """
     tool = registry.get("upload_asset_chunk")
     if tool is None:
@@ -791,6 +1286,36 @@ async def read_session_asset(relative_path: str) -> dict[str, Any]:
         "filename": data.get("filename"),
         "relative_path": data.get("relative_path"),
     }
+
+
+@mcp.tool(structured_output=False)
+async def read_session_asset_image(relative_path: str) -> Any:
+    """Return a session-uploaded image as a native MCP image content block.
+
+    Same input contract as ``read_session_asset``, but the response is an MCP
+    ``image`` content item instead of a JSON dict, so clients that render
+    content natively draw the picture instead of dumping base64 text.
+
+    Only ``.png/.jpg/.jpeg/.gif/.webp`` are supported — those are the formats
+    MCP ``ImageContent`` can carry. For anything else (mp4, srt, mp3) use
+    ``read_session_asset`` and decode ``data_base64`` yourself.
+
+    ``structured_output=False`` is required: FastMCP only runs its
+    ``Image`` -> ``ImageContent`` conversion when there is no output model,
+    and an ``Image`` object cannot be validated against one.
+    """
+    tool = registry.get("read_session_asset_image")
+    if tool is None:
+        return {"success": False, "error": "read_session_asset_image tool is not registered"}
+    result = await _run_tool_sync(tool, {
+        "relative_path": relative_path,
+        "mcp_session_id": get_mcp_session_id(),
+    })
+    if not result.success:
+        return {"success": False, "error": result.error or "read failed"}
+    # Return the Image object itself, not the dict: _convert_to_content only
+    # emits ImageContent for `Image`, everything else degrades to TextContent.
+    return (result.data or {})["image"]
 
 
 def _resolve_session_asset_path(asset: dict) -> Path:
@@ -1962,7 +2487,15 @@ class BearerTokenAuthMiddleware:
 
         token = provided[len(b"Bearer "):].strip()
         if not hmac.compare_digest(token, self._expected):
-            _log.warning("401 Unauthorized: Invalid token from %s:%s", client_host, client_port)
+            # Track token identity via SHA-256 prefix so 401 patterns (e.g.
+            # client token drift from 192.168.20.172) can be diagnosed without
+            # leaking raw token bytes into log files.
+            _log.warning(
+                "401 Unauthorized: Invalid token from %s:%s token_hash=%s token_len=%d",
+                client_host, client_port,
+                hashlib.sha256(token).hexdigest()[:16],
+                len(token),
+            )
             return await self._reject(scope, _receive, send)
 
         _log.info("Auth OK: %s:%s", client_host, client_port)

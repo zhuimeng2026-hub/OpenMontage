@@ -227,24 +227,38 @@ class HyperFramesCompose(BaseTool):
     # We cache per-process so the first call pays ~2-5s and subsequent calls
     # (get_info spam from the registry) are free.
     _npm_resolve_cache: Optional[dict[str, str]] = None
+    # Cache node --version result for the life of the process (subprocess + regex
+    # is cheap but not free, and list_tools calls get_status() for every tool).
+    _node_version_cache: Optional[int] = None
 
     @classmethod
     def _node_major_version(cls) -> Optional[int]:
-        """Return Node.js major version, or None if node isn't installed."""
+        """Return Node.js major version, or None if node isn't installed.
+
+        Result is cached per-process since node --version is slow enough to matter
+        when list_tools iterates all tools without a status filter.
+        """
+        if cls._node_version_cache is not None:
+            return cls._node_version_cache
         node = shutil.which("node")
         if not node:
+            cls._node_version_cache = None
             return None
         try:
             out = subprocess.run(
                 [node, "--version"], capture_output=True, text=True, timeout=5
             )
             if out.returncode != 0:
+                cls._node_version_cache = None
                 return None
             match = re.match(r"v?(\d+)\.", out.stdout.strip())
             if not match:
+                cls._node_version_cache = None
                 return None
-            return int(match.group(1))
+            cls._node_version_cache = int(match.group(1))
+            return cls._node_version_cache
         except (OSError, subprocess.SubprocessError):
+            cls._node_version_cache = None
             return None
 
     @classmethod

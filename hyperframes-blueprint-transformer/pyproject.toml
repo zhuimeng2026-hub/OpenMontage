@@ -1,0 +1,22 @@
+[project]
+name = "hyperframes-blueprint-transformer"
+version = "0.1.0"
+description = "Internal R&D: convert MVP doc target_blueprint.json into HyperFrames cuts, render via existing tools/video/hyperframes_compose.py"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["transformer*"]
