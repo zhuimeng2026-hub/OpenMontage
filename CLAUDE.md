@@ -81,6 +81,26 @@ For a production run, also learn `python -m backlot open <project-id>` — it st
 
 Start the MCP server before any production run that goes through it; tweak-server and Backlot are optional but recommended.
 
+## Layering — Picking the Right Entry for an External Caller
+
+Three entry points exist, each for a different kind of caller. Use the wrong one and you get an awkward fit (e.g. wrapping an agent in a browser-shaped proxy, or calling a business API with raw JSON-RPC).
+
+| External caller | Entry | Why |
+|---|---|---|
+| **Raw MCP client** (Claude Code, Cursor, custom JSON-RPC client) | `mcp_server.py :8900/mcp` with `Authorization: Bearer MCP_API_TOKEN` | The protocol surface. No business layer in the way. |
+| **OpenClaw-style agent** (Node/TS, Python, Go — anything that wants WeChat-小程序 tenancy + billing + audit + job queue) | **`/opt/vclaw/` Control Plane `:8080`** + 8-verb Agent Gateway | Business logic + tenant isolation + quota + durable job queue + signed-URL issuance. vclaw translates business verbs into OpenMontage MCP calls under the hood. |
+| **FrameFlow browser SPA only** | `frameflow/bff/ :8080` | SPA-specific: hides `MCP_API_TOKEN`, manages per-user MCP session affinity (so chunked uploads + final render land on the same `Mcp-Session-Id`), handles WeChat `snsapi` web login. **Not for agents.** |
+
+**Don't** route an OpenClaw-style agent through `frameflow/bff/`. The BFF's per-user session affinity, `ff_sid` cookie, and web-login flow are SPA-shaped — an agent running server-side has none of those constraints and shouldn't pay the cost.
+
+For the full integration recipe (config, auth tokens, verb contracts, render + preview flows), see the vclaw docs:
+
+- `/opt/vclaw/docs/openclaw-integration.md` — layering, config, auth, where to start
+- `/opt/vclaw/docs/render-flow.md` — 4-level render pipeline (storyboard → animatic → sample → render) through the gateway verbs
+- `/opt/vclaw/docs/preview-flow.md` — preview polling + approval gate
+
+The OpenClaw-runtime side lives in `/opt/vclaw/openclaw/solutions/product-video-production/` (`mcp/control-plane-gateway.mjs` is the stdio MCP bridge that calls back into vclaw).
+
 ## Three-Layer Knowledge Model
 
 See `PROJECT_CONTEXT.md` § "Knowledge Architecture" for the canonical description.
