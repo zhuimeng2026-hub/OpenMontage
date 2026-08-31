@@ -386,7 +386,7 @@ print(
 mcp = FastMCP(
     "OpenMontage",
     host="::",
-    port=8900,
+    port=int(os.environ.get("MCP_PORT", "8900")),
     # Keep the MCP transport stateful so clients receive and reuse
     # Mcp-Session-Id.  The session id is also used to isolate uploads.
     stateless_http=False,
@@ -2975,7 +2975,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     transport = sys.argv[1] if len(sys.argv) > 1 else "streamable-http"
-    _log.info("Starting OpenMontage MCP server on port 8900 (transport=%s)", transport)
+    _log.info("Starting OpenMontage MCP server on port %d (transport=%s)", int(os.environ.get("MCP_PORT", "8900")), transport)
     _log.info("%s tools discovered; provider availability is checked lazily", len(_discovered))
 
     _api_token = _load_mcp_token()
@@ -3041,7 +3041,7 @@ if __name__ == "__main__":
             # Windows lacks AF_UNIX; uvicorn's socket.fromfd(fd, AF_UNIX)
             # crashes there. Let uvicorn bind directly via host/port.
             config = uvicorn.Config(
-                app, host="0.0.0.0", port=8900,
+                app, host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8900")),
                 timeout_keep_alive=keep_alive_seconds,
             )
         else:
@@ -3050,7 +3050,8 @@ if __name__ == "__main__":
             sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("::", 8900))
+            _mcp_port = int(os.environ.get("MCP_PORT", "8900"))
+            sock.bind(("::", _mcp_port))
             sock.listen(2048)
             config = uvicorn.Config(
                 app, fd=sock.fileno(), timeout_keep_alive=keep_alive_seconds,
