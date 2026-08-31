@@ -1358,6 +1358,108 @@ async def get_session_assets() -> dict[str, Any]:
     return {"success": True, "assets": assets}
 
 
+# Keyword → animation token map for the templated branch's effects parser.
+# Tokens must match the Explainer.tsx switch in remotion-composer (zoom-in,
+# pan-left, pan-right, ken-burns, zoom-out, parallax). Unknown phrases fall
+# through to round-robin — the parser is best-effort, not a planner.
+_EFFECTS_KEYWORD_TO_ANIMATION = (
+    (("zoom-in", "zoom in", "zoom_in", "推近", "放大", "拉近"), "zoom-in"),
+    (("zoom-out", "zoom out", "zoom_out", "拉远", "缩小", "远离"), "zoom-out"),
+    (("pan-left", "pan left", "pan_left", "左摇", "向左", "往左"), "pan-left"),
+    (("pan-right", "pan right", "pan_right", "右摇", "向右", "往右"), "pan-right"),
+    (("parallax", "视差", "视差滚动"), "parallax"),
+    (("ken-burns", "kenburns", "ken burns", "电影感", "漂移", "缓慢", "缓推"), "ken-burns"),
+)
+
+
+def _parse_effects_segments(effects: Optional[str]) -> list[str]:
+    """Split free-text effects into ordered segments, one per cut intent.
+
+    - Strips empty lines.
+    - Splits on blank lines (paragraph) first, then on newline if no paragraphs.
+    - Returns [] when effects is None / empty.
+    """
+    if not effects:
+        return []
+    text = effects.strip()
+    if "\n\n" in text:
+        segments = text.split("\n\n")
+    else:
+        segments = text.split("\n")
+    return [s.strip() for s in segments if s.strip()]
+
+
+def _segment_animation(segment: str) -> str:
+    """Pick the animation token that best matches a single effects segment.
+
+    Best-effort keyword scan; first match wins. Falls back to 'zoom-in' when
+    no keyword is recognised (so we always return a token Explainer.tsx knows).
+    """
+    lowered = segment.lower()
+    for keywords, token in _EFFECTS_KEYWORD_TO_ANIMATION:
+        for kw in keywords:
+            if kw in lowered:
+                return token
+    return "zoom-in"
+
+
+def _effects_animation_for_cut(
+    effects: Optional[str], index: int, total: int
+) -> tuple[str, str]:
+    """Map an effects description to (animation, segment_for_this_cut).
+
+    Contract:
+      - When effects is None/empty: returns ("zoom-in", "") — i.e. the parser
+        stays out of the way and the round-robin baseline takes over.
+      - When effects has N segments matching total cuts: 1-to-1 assignment.
+      - When fewer segments than cuts: cycles the parsed animations so the
+        intent still propagates; the unused tail gets the last segment as a
+        default but still benefits from keyword scoring.
+      - When more segments than cuts: keeps the first ``total`` (drop tail).
+    The returned ``segment_for_this_cut`` is the raw text the caller can stash
+    in ``cut.transform.effects`` for richer template implementations; "" if
+    effects was empty.
+    """
+    segments = _parse_effects_segments(effects)
+    if not segments:
+        return "zoom-in", ""
+    if total <= 0:
+        return "zoom-in", segments[0]
+    pick_index = min(index, len(segments) - 1) if index >= len(segments) else index
+    segment = segments[pick_index]
+    return _segment_animation(segment), segment
+
+
+def _cues_to_srt(cues: list[dict[str, Any]]) -> str:
+    """Serialize subtitle cues to SRT text.
+
+    Accepted cue shape: ``{index, start, end, text}`` with numeric seconds for
+    start/end. The serializer is best-effort: missing fields are coerced to 0
+    / "" rather than raising, since by the time we burn the renderer has
+    already succeeded and a malformed cue shouldn't kill the share-link path.
+    """
+    def _stamp(seconds: float) -> str:
+        ms_total = max(0, int(round(float(seconds) * 1000)))
+        h, rem = divmod(ms_total, 3_600_000)
+        m, rem = divmod(rem, 60_000)
+        s, ms = divmod(rem, 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    blocks: list[str] = []
+    for i, raw in enumerate(cues or []):
+        try:
+            start = float(raw.get("start", 0))
+            end = float(raw.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        text = str(raw.get("text", "")).strip()
+        idx = raw.get("index", i + 1)
+        blocks.append(f"{idx}\n{_stamp(start)} --> {_stamp(end)}\n{text}\n")
+    if not blocks:
+        return ""
+    return "\n".join(blocks).rstrip() + "\n"
+
+
 def _ensure_governance_fields(
     edit_decisions: dict[str, Any],
     *,
@@ -1559,11 +1661,26 @@ async def create_remotion_video_share(
             for index, asset in enumerate(safe_assets):
                 start_seconds = index * duration
                 end_seconds = (index + 1) * duration
-                animation = motion[index % len(motion)]
+                # Parse natural-language effects when present: each cut gets a
+                # keyword-scored animation token plus the segment text stashed
+                # in transform.effects / shot_language.effects for richer
+                # downstream templates. When effects is empty, the helper
+                # returns ("zoom-in", "") and the round-robin below takes over.
+                effects_animation, effects_segment = _effects_animation_for_cut(
+                    effects, index, len(safe_assets)
+                )
+                animation = effects_animation if effects else motion[index % len(motion)]
+                cut_transform: dict[str, Any] = {"animation": animation}
+                shot_language: dict[str, Any] = {
+                    "camera_movement": animation, "shot_size": "full-frame",
+                }
+                if effects_segment:
+                    cut_transform["effects"] = effects_segment
+                    shot_language["effects"] = effects_segment
                 cuts.append({
                     "id": f"cut-{index:04d}", "source": asset["id"], "in_seconds": start_seconds,
                     "out_seconds": end_seconds, "layer": "primary", "transition_in": "fade" if index else "cut",
-                    "transition_duration": 0.25 if index else 0, "transform": {"animation": animation},
+                    "transition_duration": 0.25 if index else 0, "transform": cut_transform,
                 })
                 scene_plan.append({
                     "type": "image",
@@ -1571,7 +1688,7 @@ async def create_remotion_video_share(
                     "shot_intent": "Present the uploaded photo with restrained camera motion",
                     "narrative_role": "customer_photo",
                     "hero_moment": index == 0,
-                    "shot_language": {"camera_movement": animation, "shot_size": "full-frame"},
+                    "shot_language": shot_language,
                 })
             edit_decisions = {
                 "version": "1.0", "cuts": cuts, "render_runtime": "remotion",
@@ -1641,6 +1758,9 @@ async def create_remotion_video_share(
         asset_manifest=asset_manifest, scene_plan=scene_plan, profile=profile,
         output=str(output), title=title, asset_count=len(safe_assets),
         queue_owner_id=owner_id,
+        # Subtitle cues for post-render burn. Persisted so a job that survives
+        # a restart still gets its subtitles burned.
+        subtitles=subtitles,
     )
     # Persist the dispatch kwargs so a job still waiting for a render slot at
     # restart time can be re-dispatched (see recover_orphans + _drain_queued_jobs).
@@ -1672,9 +1792,14 @@ async def create_remotion_video_share(
 def _run_render_job(
     *, sid, request_id, project, batch_id, job_id, safe_assets,
     edit_decisions, asset_manifest, scene_plan, profile, output, title, asset_count,
-    queue_owner_id=None, _queue_ready_event=None,
+    queue_owner_id=None, subtitles=None, _queue_ready_event=None,
 ) -> None:
-    """Background worker: render → upload to Weiyun → generate share link.
+    """Background worker: render → (optionally burn subtitles) → upload to Weiyun → share link.
+
+    When ``subtitles`` is a non-empty cue list, the rendered MP4 is post-processed
+    through ``video_compose(operation='burn_subtitles')`` with a temp SRT file
+    written from the cues, and the burned output replaces the original for upload.
+    The unburned render is kept on disk for debugging only when the burn fails.
 
     Runs in a daemon thread with its own asyncio event loop. Updates the MCP
     session state (status / video_path / share_url) so ``get_render_status`` can
@@ -1746,6 +1871,46 @@ def _run_render_job(
             _publish_progress({"phase": "render", "status": "failed", "error": str(exc)})
             _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, asset_count=asset_count, render_job_id=job_id, status="failed", stage="render", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
             return
+
+        # Optional: burn subtitles onto the rendered MP4 before upload.
+        # video_compose(operation='burn_subtitles') wraps FFmpeg's subtitles=
+        # filter. On success video_path is replaced with the burned file; on
+        # failure we keep the original render (subtitle burn is best-effort).
+        if subtitles:
+            burn_tool = registry.get("video_compose")
+            if burn_tool is None:
+                _log.warning("burn_subtitles skipped: video_compose not registered (job %s)", job_id)
+            else:
+                srt_path = Path(output).with_suffix(".srt")
+                try:
+                    srt_path.write_text(_cues_to_srt(subtitles), encoding="utf-8")
+                except OSError as exc:
+                    _log.warning("burn_subtitles: failed to write %s: %s", srt_path, exc)
+                else:
+                    burned_path = str(Path(output).with_name(
+                        f"{Path(output).stem}-subtitled{Path(output).suffix}"
+                    ))
+                    _publish_progress({"phase": "subtitle_burn", "status": "running", "message": "Burning subtitles into rendered video"})
+                    try:
+                        burn_result = await _run_tool_sync(burn_tool, {
+                            "operation": "burn_subtitles",
+                            "input_path": video_path,
+                            "subtitle_path": str(srt_path),
+                            "output_path": burned_path,
+                            "codec": "libx264",
+                            "crf": 23,
+                        })
+                        if burn_result.success and Path(burned_path).is_file():
+                            video_path = burned_path
+                            update_session(sid, status="subtitled", video_path=video_path)
+                            _publish_progress({"phase": "subtitle_burn", "status": "done", "message": "Subtitles burned"})
+                            _event("subtitle_burn_completed", request_id=request_id, session_hash=digest, project_id=project, batch_id=batch_id, render_job_id=job_id, status="subtitled", cue_count=len(subtitles))
+                        else:
+                            _log.warning("burn_subtitles failed for job %s: %s", job_id, burn_result.error)
+                            _publish_progress({"phase": "subtitle_burn", "status": "failed", "error": burn_result.error})
+                    except Exception as exc:  # noqa: BLE001 - burn failure must not block upload
+                        _log.warning("burn_subtitles raised for job %s: %s", job_id, exc)
+                        _publish_progress({"phase": "subtitle_burn", "status": "failed", "error": str(exc)})
 
         upload_tool = registry.get("weiyun_upload")
         if upload_tool is None:
