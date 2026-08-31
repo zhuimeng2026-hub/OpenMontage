@@ -10,6 +10,12 @@ build/
 *.onnx
 *.onnx.json
 
+# Large media files (rendered outputs, downloaded source videos — regenerable)
+*.mp4
+*.wav
+*.mp3
+*.m4a
+
 # Test/IDE
 .pytest_cache/
 .mypy_cache/
