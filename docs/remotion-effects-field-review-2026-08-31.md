@@ -210,8 +210,8 @@ async def create_remotion_video_share(
 ) -> dict[str, Any]:
 ```
 
-- `effects` —— 自由文本，自然语言的效果/运镜/转场描述。透传到 `edit_decisions.metadata.effects`，由后续 Remotion 模板或自定义合成消费。
-- `subtitles` —— cue 列表（`{index, start, end, text}`）。透传到 `edit_decisions.metadata.subtitles`。
+- `effects` —— 自由文本，自然语言的效果/运镜/转场描述。**在模板分支解析成逐镜头 animation 写入 `cuts[i].transform.animation` 和 `scene_plan[i].shot_language.camera_movement`**（commit 2a12448，keyword 评分映射到 zoom-in/zoom-out/pan-left/pan-right/ken-burns/parallax）；同时把每段原文写入 `transform.effects` / `shot_language.effects` 给后续模板消费。空 effects 仍走原 round-robin 基线，不影响历史调用方。
+- `subtitles` —— cue 列表（`{index, start, end, text}`）。**提交 2a12448 把它真正烧进了成片**：渲染完成后调 `video_compose(operation='burn_subtitles')` 把 SRT 字幕写到 MP4 上，burn 失败的成片仍可分享（best-effort，不阻塞 share-link）。SRT 时间戳用规范格式 `HH:MM:SS,mmm`（逗号毫秒，与 clawx-studio verify-subtitle.md 的回归一致）。
 
 两个分支（自定义 `code` 合成 + 模板分支）都接住，详见 `mcp_server.py:1535-1541` 与 `mcp_server.py:1560-1564`。`_ensure_governance_fields` 不覆盖 `metadata` 中已存在的字段（`mcp_server.py:1392`），所以透传安全。
 
