@@ -71,15 +71,34 @@ python -m backlot open <project-id>
 
 For a production run, also learn `python -m backlot open <project-id>` — it starts a local board that watches `projects/<id>/` and surfaces stages, scene-by-scene filmstrip, decision log, and cost in real time. Backlot is **read-only observation**; it never blocks the pipeline.
 
+### Test layout
+
+`tests/` is organized by purpose, not by file:
+
+- `tests/contracts/` — pipeline manifests + artifact schema checks (always green in CI).
+- `tests/integration/` — voicebox / `:8900` live-MCP roundtrip; **skipped gracefully** if those are down (so `make test` stays green). Override `VOICEBOX_TEST_TTS_TIMEOUT_S` for cold voicebox installs.
+- `tests/backlot/` — board state derivation (file → JSON contract).
+- `tests/qa/` — runtime output validation scripts (look at `QA_PLAN.md` before adding).
+- `tests/regression/` — historical bug regressions; add a test here when you fix a reproducible bug.
+- top-level `test_*.py` — governance / governance-adjacent tests (session assets, share links, MCP HTTP keep-alive, etc.).
+
+Target a single file: `python -m pytest tests/<area>/test_foo.py -v`. No global `pytest` runs — they pull in integration tests that need live services.
+
 ## Runtime Entry Points
 
-| Surface | Command | Port | Purpose |
+| Surface | Command | Port (default) | Purpose |
 |---|---|---|---|
-| **MCP server** | `python mcp_server.py` (or `./start_mcp_server.sh`) | `:8900` | The agent-facing tool surface. Bearer-token auth via `MCP_API_TOKEN`. See [`MCP_SERVER.md`](MCP_SERVER.md). |
+| **MCP server** | `python mcp_server.py` (or `./start_mcp_server.sh`) | `:8900` | The agent-facing tool surface. Bearer-token auth via `MCP_API_TOKEN`. Port overridable via `MCP_PORT`. See [`MCP_SERVER.md`](MCP_SERVER.md). |
 | **Tweak sidecar** | `make tweak-server` | `:8901` | End-user render-tweak UI that talks to MCP. See [`docs/tweak-server.md`](docs/tweak-server.md). |
-| **Backlot board** | `python -m backlot open <project-id>` | `:8902` (auto) | Live, read-only storyboard derived from disk. |
+| **Backlot board** | `python -m backlot open <project-id>` | `:8900` (auto-derived) | Live, read-only storyboard derived from disk. |
 
 Start the MCP server before any production run that goes through it; tweak-server and Backlot are optional but recommended.
+
+### Single-port production topology (post 2026-08-31)
+
+In the deployed platform the public-facing port is **`:8900`** — but it now fronts the **vclaw** Control Plane, not the OpenMontage MCP. The Python MCP runs on `:8902` behind vclaw (which proxies `/mcp` and `/api/mcp/proxy`). The tweak-sidecar still binds `:8901`. When running `mcp_server.py` standalone (no vclaw front), set `MCP_PORT=:8900` to match the default and use Bearer `MCP_API_TOKEN`.
+
+See [`docs/single-port-arch.md`](docs/single-port-arch.md) for the architecture rationale, SSE streaming fix, and auth split (raw Bearer vs JWT-with-`mcp:use`).
 
 ## Layering — Picking the Right Entry for an External Caller
 
@@ -179,5 +198,20 @@ Full roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelin
 - `backlot/README.md` — how the live storyboard derives state from disk
 
 The default reference-remix pipeline is `video-template-remix` (`pipeline_defs/video-template-remix.yaml`).
+
+## Session-local Claude resources (`.claude/`)
+
+The repo has its own Claude-side state under `.claude/`:
+
+- `commands/` — custom slash commands available to Claude Code in this repo.
+- `skills/` — session-scoped Layer 2 skills layered on top of the repo's `skills/`.
+- `worktrees/` — auto-managed isolated worktrees.
+- `scheduled_tasks.lock` — locks held by autonomous cron/loop tasks.
+
+Do not edit `.claude/` directly from Python — Claude Code owns that subtree.
+
+## Decision log — pair-keyed re-log rule (binding)
+
+When a previously-logged production choice changes mid-run (user swaps voice, you switch provider / model / runtime / music, a fallback overrides the prior pick), the **old entry stays put** and a **new entry is appended** with the **same `(category, subject)` pair**. The board keys decisions on the pair and renders the latest entry for that pair as current (tagged "revised"). Rewording the `subject` reads as a *different* decision and the stale one keeps showing. Keeping distinct decisions in one category (e.g. TTS vs image `provider_selection`) is why the **pair, not the category alone, is the key.** This applies at every stage, not just `idea`. See `AGENT_GUIDE.md` § "Decision Communication Contract" for the full protocol.
 
 `AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
