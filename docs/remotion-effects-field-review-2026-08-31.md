@@ -133,7 +133,7 @@ edit_decisions = {
 
 ---
 
-## 6. ⚠️ 版本分叉：本仓库与 /opt 部署版入参不一致
+## 6. ⚠️ 版本分叉：本仓库与 /opt 部署版入参不一致（**复核修正**：分叉方向反了）
 
 | 入参 | 本仓库（B 盘，`mcp_server.py:1433`） | /opt 部署版（据 VClaw 侧转述） |
 |---|---|---|
@@ -142,17 +142,23 @@ edit_decisions = {
 | `duration_per_image` | ✅ | ✅ |
 | `aspect_ratio` | ✅ | ✅ |
 | `title` | ✅ | ✅ |
-| `subtitles` | ❌ **没有** | ✅ **有** |
+| `subtitles` | ❌ **没有**（基线版） | ✅ **有**（VClaw 侧转述） |
 | `code` | ✅ | — |
 | `queue_owner_id` | ✅ | — |
 | `delivery_promise_override` | ✅ | — |
 
-**影响**：客户端 `montage.ts` 现在会带 `subtitles` 调用（字幕开关功能依赖它）。
-这个字段**只对本仓库以外的那份（/opt）有效**。请确认：
+**原假设**：本仓库与 /opt 部署是两份独立的 mcp_server.py，部署版多了 `subtitles`。
 
-- 线上跑的到底是哪一份？（客户端连的是 `192.168.20.173:8900`）
-- 若以 /opt 为准，本仓库的 `mcp_server.py` 是否已经落后/超前？要不要同步？
-- 加效果字段时，两边都要加，避免再出现这种分叉。
+**复核修正（2026-08-31）**：在 192.168.20.173 实地验证发现——
+
+- 192.168.20.173 上的 live MCP（`/opt/OpenMontage_Voicebox/mcp_server.py`，PID 2592627，运行 21h+）
+  `tools/list` 返回的 schema **不含** `subtitles`。**它就是本仓库这份**。
+- `/opt/OpenMontage/mcp_server.py` 是另一份独立部署（不同 git 历史，`main` 分支，不是这个 `release/mvp`），
+  也不含 `subtitles`。
+- 客户端带的 `subtitles` 调用，**与任何现存部署都对不上**——更可能是客户端团队本地有一个更早/更新的副本，
+  或他们的转述基于尚未落地的设计。
+
+**结论**：本仓库的「没有 `subtitles`」不是分叉——是基线本来就缺。已在 §9 补回。
 
 补充线索：`docs/mcp-remote-tool-list.json` 里的 108 个远程工具**不含** `create_remotion_video_share`
 （只有 `remotion_caption_burn`）。据此推测该工具由 BFF 合成/白名单暴露，而非内部 registry 直出
@@ -231,8 +237,24 @@ UI 不用动：textarea 早已存在（`App.vue:1520`），原本就在 `videoEf
 
 ### 9.4 部署对齐（待）
 
-- 本仓库的修改在 `release/mvp-v0.1-phase-0-5` 分支，未推到线上 MCP（`192.168.20.173:8900`）。
-- VClaw Studio 端的修改在 `clawx-studio/` 工作树，未做构建发布。
-- 双方各自部署到位后：
-  - Studio 端在「视频效果」页填文本 → 出现在成片里（前提：Remotion 模板/合成主动读 `metadata.effects`，目前模板分支还在硬编码 `motion = [zoom-in, pan-left, ken-burns, pan-right]`，下游消费需要单独实现）。
-  - Studio 端字幕开关开启时 → `subtitles` 入 `metadata.subtitles`（同样依赖下游消费方实现烧录，目前仓库已有独立工具 `burn_subtitles` 但与本流程未串联，是另一个待办）。
+复核确认：192.168.20.173:8900 上的 live MCP **就是本仓库这份源码**（systemd
+服务定义 `WorkingDirectory=/opt/OpenMontage_Voicebox`，PID 2592627 的
+`/proc/<pid>/cwd` 也指向这里），它启动于我的编辑前，**目前仍在跑旧 schema**：
+- tools/list 返回的 create_remotion_video_share properties 只有原 8 个字段，
+  **没有 effects / subtitles**。
+- 用 `effects="..."` 调 tools/call 不报错（FastMCP 默认 extra="ignore"），但
+  服务端默默丢弃——必须重启进程才能让新 schema 生效。
+
+部署步骤（待确认）：
+1. kill PID 2592627（systemd 服务 `openmontage-mcp` 当前 `inactive (dead)`，
+   所以重启只能手动起；用 `start_mcp_server.sh` 后台 nohup 跑最贴近现场习惯）。
+2. 验证：再次 tools/list，schema 应包含 `effects` / `subtitles`。
+3. vclaw 端：clawx-studio 已经把代码改了，**但没做构建发布**——客户端是 Tauri SPA，
+   重新 `npm run build` 出来的 dist/ 要替换到客户端机器（不在本仓库范围）。
+4. 端到端打通后才算闭环：
+   - Studio 端在「视频效果」页填文本 → 出现在成片里（前提：Remotion 模板/合成主动读
+     `metadata.effects`，目前模板分支还在硬编码
+     `motion = [zoom-in, pan-left, ken-burns, pan-right]`，
+     下游消费需要单独实现）。
+   - Studio 端字幕开关开启时 → `subtitles` 入 `metadata.subtitles`（同样依赖下游消费方
+     实现烧录，目前仓库已有独立工具 `burn_subtitles` 但与本流程未串联，是另一个待办）。
