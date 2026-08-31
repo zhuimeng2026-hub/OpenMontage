@@ -73,7 +73,8 @@ def test_parse_segments_empty_input_returns_empty_list():
 
 
 def test_segment_animation_zh_keywords():
-    assert effects_parser.segment_animation("开篇旋转切入") == "zoom-in"  # 放大 maps to zoom-in
+    # "开篇旋转切入" contains "旋转" → maps to rotate (new token, see §3.1).
+    assert effects_parser.segment_animation("开篇旋转切入") == "rotate"
     assert effects_parser.segment_animation("右摇镜头") == "pan-right"
     assert effects_parser.segment_animation("电影感漂移") == "ken-burns"
     assert effects_parser.segment_animation("缓慢推出") == "ken-burns"
@@ -169,6 +170,189 @@ def test_apply_effects_to_edit_decisions_no_effects_is_noop():
 def test_apply_effects_to_edit_decisions_no_cuts_is_noop():
     applied = effects_parser.apply_effects_to_edit_decisions({}, None, "zoom-in")
     assert applied is False
+
+
+# ---------------------------------------------------------------------------
+# New tokens (rotate / fade-in / fade-out) + structured animation_params
+#
+# The contract for these new tokens (see
+# docs/remotion-effects-template-implementation-2026-08-31.md §3.1, §4):
+#   - KNOWN_ANIMATION_TOKENS gains "rotate", "fade-in", "fade-out".
+#   - EFFECTS_KEYWORD_TO_ANIMATION gains matching zh+en keyword tuples.
+#   - extract_animation_params(segment) → structured dict of numeric params
+#     (rotate / scale / fade_in / fade_out). Never raises.
+#   - apply_effects_to_edit_decisions mirrors animation_params symmetrically
+#     into both cut.transform.animation_params and
+#     scene_plan[i].shot_language.animation_params.
+# ---------------------------------------------------------------------------
+
+
+# A. Token & keyword coverage ------------------------------------------------
+
+
+def test_known_animation_tokens_includes_rotate_and_fade():
+    """The new tokens must be present so downstream rendering (Explainer.tsx
+    switch) can branch on them. Token count grows from 6 → 9."""
+    expected = {"rotate", "fade-in", "fade-out"}
+    assert expected <= set(effects_parser.KNOWN_ANIMATION_TOKENS)
+    # Confirm the full set has 9 tokens (6 original + 3 new).
+    assert len(effects_parser.KNOWN_ANIMATION_TOKENS) == 9
+
+
+def test_segment_animation_rotate_english_rotation():
+    assert effects_parser.segment_animation("rotation 0->360") == "rotate"
+
+
+def test_segment_animation_rotate_keyword():
+    assert effects_parser.segment_animation("rotate slow") == "rotate"
+
+
+def test_segment_animation_rotate_chinese():
+    assert effects_parser.segment_animation("旋转入场") == "rotate"
+
+
+def test_segment_animation_rotate_360_keyword():
+    assert effects_parser.segment_animation("360 spin") == "rotate"
+
+
+def test_segment_animation_fade_in_hyphen():
+    assert effects_parser.segment_animation("fade-in") == "fade-in"
+
+
+def test_segment_animation_fade_in_chinese():
+    assert effects_parser.segment_animation("淡入 0.5s") == "fade-in"
+
+
+def test_segment_animation_fade_out_english():
+    assert effects_parser.segment_animation("fade out") == "fade-out"
+
+
+def test_segment_animation_fade_out_chinese():
+    assert effects_parser.segment_animation("淡出") == "fade-out"
+
+
+# B. extract_animation_params ------------------------------------------------
+
+
+def test_extract_params_rotate_arrow_unicode():
+    assert effects_parser.extract_animation_params("rotation (0→360)") == {"rotate": [0.0, 360.0]}
+
+
+def test_extract_params_rotate_arrow_with_deg():
+    assert effects_parser.extract_animation_params("rotate 90 -> 270 deg") == {"rotate": [90.0, 270.0]}
+
+
+def test_extract_params_rotate_bare_default_range():
+    assert effects_parser.extract_animation_params("rotate") == {"rotate": [0.0, 360.0]}
+
+
+def test_extract_params_zoom_x_unicode_arrow():
+    assert effects_parser.extract_animation_params("zoom 0.4x→1.6x") == {"scale": [0.4, 1.6]}
+
+
+def test_extract_params_zoom_arrow_with_spaces():
+    assert effects_parser.extract_animation_params("zoom 0.4 -> 1.6") == {"scale": [0.4, 1.6]}
+
+
+def test_extract_params_fade_in_seconds_prefix():
+    assert effects_parser.extract_animation_params("0.5s fade-in") == {"fade_in": 0.5}
+
+
+def test_extract_params_fade_in_seconds_prefix_space():
+    assert effects_parser.extract_animation_params("1.2s fade in") == {"fade_in": 1.2}
+
+
+def test_extract_params_fade_in_bare_default_half_second():
+    assert effects_parser.extract_animation_params("fade-in") == {"fade_in": 0.5}
+
+
+def test_extract_params_fade_out_seconds_prefix():
+    assert effects_parser.extract_animation_params("1s fade-out") == {"fade_out": 1.0}
+
+
+def test_extract_params_combined_rotate_scale_fade():
+    """The composite test text from §5 must yield all three param keys."""
+    text = "Apply a CONTINUOUS full 360-degree rotation (0→360) + zoom 0.4x->1.6x + 0.5s fade-in"
+    out = effects_parser.extract_animation_params(text)
+    assert "rotate" in out
+    assert "scale" in out
+    assert "fade_in" in out
+
+
+def test_extract_params_unparseable_returns_empty_no_raise():
+    """Garbage text must return {} — the Remotion bridge falls back to
+    token-only defaults and the render must not crash."""
+    assert effects_parser.extract_animation_params("garbage with no keywords whatsoever") == {}
+
+
+def test_extract_params_empty_string_returns_empty():
+    assert effects_parser.extract_animation_params("") == {}
+
+
+def test_extract_params_none_returns_empty():
+    assert effects_parser.extract_animation_params(None) == {}
+
+
+# C. apply_effects_to_edit_decisions dual-write of animation_params ---------
+
+
+def test_apply_effects_sets_animation_params_on_transform():
+    """animation_params must be mirrored into cut.transform so the Remotion
+    template (Explainer.tsx::ImageScene) can read numeric params alongside
+    the token."""
+    ed = {
+        "cuts": [
+            {"transform": {"animation": "static"}},
+        ],
+    }
+    scene_plan = [{"shot_language": {"camera_movement": "static"}}]
+    effects_parser.apply_effects_to_edit_decisions(
+        ed, scene_plan, "rotate 0->360"
+    )
+    seg = ed["cuts"][0]["transform"]["effects"]
+    params = ed["cuts"][0]["transform"].get("animation_params")
+    assert params is not None
+    assert params == effects_parser.extract_animation_params(seg)
+
+
+def test_apply_effects_mirrors_animation_params_on_scene_plan():
+    """The same animation_params dict must land on
+    scene_plan[i].shot_language.animation_params so the preview path and the
+    templated branch share one vocabulary."""
+    ed = {"cuts": [{"transform": {"animation": "static"}}]}
+    scene_plan = [{"shot_language": {"camera_movement": "static"}}]
+    effects_parser.apply_effects_to_edit_decisions(
+        ed, scene_plan, "rotate 0->360"
+    )
+    seg = scene_plan[0]["shot_language"]["effects"]
+    params = scene_plan[0]["shot_language"].get("animation_params")
+    assert params is not None
+    assert params == effects_parser.extract_animation_params(seg)
+
+
+def test_apply_effects_none_does_not_set_animation_params():
+    """Empty/None effects path → no animation_params key written. Guards the
+    round-robin baseline from being polluted."""
+    ed = {"cuts": [{"transform": {"animation": "static"}}]}
+    scene_plan = [{"shot_language": {"camera_movement": "static"}}]
+    effects_parser.apply_effects_to_edit_decisions(ed, scene_plan, None)
+    assert "animation_params" not in ed["cuts"][0]["transform"]
+    assert "animation_params" not in scene_plan[0]["shot_language"]
+
+
+def test_apply_effects_garbage_segment_does_not_raise_and_writes_empty_params():
+    """A segment that parses into a token but yields no numeric keywords
+    must still write the segment (effects=…) but skip animation_params (so
+    the template uses the token default amplitude)."""
+    ed = {"cuts": [{"transform": {"animation": "static"}}]}
+    scene_plan = [{"shot_language": {"camera_movement": "static"}}]
+    # "garbage …" → token fallback to zoom-in (no recognised keyword) → no
+    # animation_params because extract_animation_params returns {}.
+    effects_parser.apply_effects_to_edit_decisions(
+        ed, scene_plan, "garbage with no keywords whatsoever"
+    )
+    assert ed["cuts"][0]["transform"]["animation"] == "zoom-in"
+    assert ed["cuts"][0]["transform"].get("animation_params", {}) == {}
 
 
 # ---------------------------------------------------------------------------

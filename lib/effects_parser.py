@@ -16,9 +16,16 @@ to its own baseline (round-robin in mcp_server.py, last-mile defaults in
 video_compose.py).
 
 Tokens must match the switch in
-``remotion-composer/src/Explainer.tsx::EnhancedVideoScene`` — adding a
-new token here is a one-line change in three places (this file, Explainer
+``remotion-composer/src/Explainer.tsx::ImageScene`` (function declared at
+``Explainer.tsx:349``; animation if/else chain at `:377-425`) — adding a
+new token here is a one-line change in three places (this file, ImageScene
 animation switch, and ``KNOWN_ANIMATION_TOKENS`` below for testability).
+
+When ``effects`` parses a numeric range (rotation/zoom amplitude/fade duration),
+``apply_effects_to_edit_decisions`` mirrors it as ``transform.animation_params``
+and ``shot_language.animation_params`` so downstream Remotion templates can drive
+exact values rather than token-only defaults.  See
+``docs/remotion-effects-template-implementation-2026-08-31.md`` §3.1.
 
 Why a shared module?
 --------------------
@@ -31,16 +38,19 @@ different animation than the final.
 """
 from __future__ import annotations
 
+import re
+
 from typing import Optional
 
 
 # Animation tokens emitted by this parser. Each maps 1:1 to a branch in
-# Explainer.tsx::EnhancedVideoScene. Adding a token here requires:
+# Explainer.tsx::ImageScene (the if/else chain at :377-425). Adding a token here requires:
 #   1. Adding the keyword tuples below.
-#   2. Adding the case in Explainer.tsx.
+#   2. Adding the case in ImageScene.
 #   3. Extending tests in tests/test_remotion_effects_and_subtitles.py.
 KNOWN_ANIMATION_TOKENS = frozenset(
-    {"zoom-in", "zoom-out", "pan-left", "pan-right", "ken-burns", "parallax"}
+    {"zoom-in", "zoom-out", "pan-left", "pan-right", "ken-burns", "parallax",
+     "rotate", "fade-in", "fade-out"}
 )
 
 
@@ -55,6 +65,9 @@ EFFECTS_KEYWORD_TO_ANIMATION = (
     (("pan-right", "pan right", "pan_right", "右摇", "向右", "往右"), "pan-right"),
     (("parallax", "视差", "视差滚动"), "parallax"),
     (("ken-burns", "kenburns", "ken burns", "电影感", "漂移", "缓慢", "缓推"), "ken-burns"),
+    (("rotate", "rotation", "旋转", "转场旋转", "360"), "rotate"),
+    (("fade in", "fade-in", "淡入"), "fade-in"),
+    (("fade out", "fade-out", "淡出"), "fade-out"),
 )
 
 
@@ -112,6 +125,80 @@ def effects_animation_for_cut(
     return segment_animation(segment), segment
 
 
+def extract_animation_params(segment: str) -> dict:
+    """Extract structured animation parameters from a free-text effects segment.
+
+    Recognised (case-insensitive) numeric patterns:
+      - ``rotation`` / ``rotate`` + ``from<°>[-→=]<to><°>`` → ``{"rotate": [from, to]}``
+        Bare ``rotation`` / ``rotate`` / ``360`` with no range → ``{"rotate": [0, 360]}``.
+      - ``zoom <from>x? [-→=] <to>x?`` → ``{"scale": [from, to]}`` (floats).
+      - ``fade[- ]?in`` + optional ``<sec>s`` → ``{"fade_in": sec}`` (defaults to 0.5).
+      - ``fade[- ]?out`` + optional ``<sec>s`` → ``{"fade_out": sec}`` (defaults to 0.5).
+
+    Multiple parameters in the same segment are merged into one dict.
+
+    Contract: this function NEVER raises. Any regex failure, empty input, or
+    non-string value returns ``{}`` so callers (Remotion template bridge) can
+    fall back to token-only defaults instead of crashing the render.
+    """
+    if not segment or not isinstance(segment, str):
+        return {}
+    try:
+        text = segment
+        result: dict = {}
+
+        # Rotation: prefer an explicit range; fall back to [0, 360] when the
+        # rotation/rotate keyword is mentioned but no range is given. Both the
+        # "-", "→", "=" single-char separators and the common "->" / "→" arrow
+        # forms are accepted.
+        rot_range = re.search(
+            r"rotat(?:e|ion)\s*(\d+(?:\.\d+)?)\s*[-→=]+>?\s*(\d+(?:\.\d+)?)\s*deg",
+            text,
+            re.IGNORECASE,
+        )
+        if rot_range:
+            result["rotate"] = [float(rot_range.group(1)), float(rot_range.group(2))]
+        elif re.search(r"rotat(?:e|ion)", text, re.IGNORECASE):
+            result["rotate"] = [0.0, 360.0]
+
+        # Zoom amplitude (scale range). Accept "zoom 0.4x->1.6x", "zoom 0.4→1.6",
+        # and the "x" suffix as optional. The separator handles both single-char
+        # forms ("-", "→", "=") and the common "->" arrow form.
+        zoom_range = re.search(
+            r"zoom\s*([\d.]+)x?\s*[-→=]+>?\s*([\d.]+)x?",
+            text,
+            re.IGNORECASE,
+        )
+        if zoom_range:
+            result["scale"] = [float(zoom_range.group(1)), float(zoom_range.group(2))]
+
+        # Fade-in duration (seconds). Accept "fade in", "fade-in", "fadein"
+        # and the optional "<n>s" duration either BEFORE ("0.5s fade-in") or
+        # AFTER ("fade-in 0.5s") the keyword. Default 0.5s if no duration.
+        fade_in_match = re.search(
+            r"(?:(\d+(?:\.\d+)?)\s*s\s+fade[- ]?in|fade[- ]?in(?:\s+(\d+(?:\.\d+)?)\s*s)?)",
+            text,
+            re.IGNORECASE,
+        )
+        if fade_in_match:
+            sec_raw = fade_in_match.group(1) or fade_in_match.group(2)
+            result["fade_in"] = float(sec_raw) if sec_raw is not None else 0.5
+
+        # Fade-out duration (seconds). Same before/after keyword tolerance.
+        fade_out_match = re.search(
+            r"(?:(\d+(?:\.\d+)?)\s*s\s+fade[- ]?out|fade[- ]?out(?:\s+(\d+(?:\.\d+)?)\s*s)?)",
+            text,
+            re.IGNORECASE,
+        )
+        if fade_out_match:
+            sec_raw = fade_out_match.group(1) or fade_out_match.group(2)
+            result["fade_out"] = float(sec_raw) if sec_raw is not None else 0.5
+
+        return result
+    except Exception:
+        return {}
+
+
 def apply_effects_to_edit_decisions(
     edit_decisions: Optional[dict],
     scene_plan: Optional[list],
@@ -140,6 +227,9 @@ def apply_effects_to_edit_decisions(
             transform["animation"] = token
             if segment:
                 transform["effects"] = segment
+                params = extract_animation_params(segment)
+                if params:
+                    transform["animation_params"] = params
     if scene_plan:
         for index, plan in enumerate(scene_plan):
             if index >= total:
@@ -150,4 +240,7 @@ def apply_effects_to_edit_decisions(
                 shot_lang["camera_movement"] = token
                 if segment:
                     shot_lang["effects"] = segment
+                    params = extract_animation_params(segment)
+                    if params:
+                        shot_lang["animation_params"] = params
     return True
