@@ -1439,12 +1439,24 @@ async def create_remotion_video_share(
     code: Optional[str] = None,
     queue_owner_id: Optional[str] = None,
     delivery_promise_override: Optional[dict] = None,
+    effects: Optional[str] = None,
+    subtitles: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Generate and share a Remotion photo video from images in this MCP session.
 
     Images and the session are intentionally implicit: upload them first with
     upload_asset or upload_asset_chunk, then call this tool with no paths.
     Call this when the user says "生成视频", "开始生成", or "就这些，生成吧".
+
+    Optional passthrough fields:
+      - ``effects``: free-text natural-language description of the visual
+        effects / camera moves / transitions the caller wants. Forwarded as
+        ``metadata.effects`` for downstream consumers (Remotion templates,
+        future renderers) to honour. Mirrors VClaw Studio's "视频效果" panel.
+      - ``subtitles``: list of cue dicts (``index``, ``start``, ``end``,
+        ``text``) — forwarded as ``metadata.subtitles``. Closed the schema
+        fork with VClaw Studio (see
+        ``docs/remotion-effects-field-review-2026-08-31.md`` §6).
 
     This tool is *non-blocking*: it validates inputs, claims a render job
     (``render_job_id``), and dispatches the actual render→upload→share pipeline
@@ -1539,6 +1551,10 @@ async def create_remotion_video_share(
                     "compose_target": {"width": width, "height": height, "fit": "cover"},
                 },
             }
+            if effects:
+                edit_decisions["metadata"]["effects"] = effects
+            if subtitles:
+                edit_decisions["metadata"]["subtitles"] = subtitles
         else:
             for index, asset in enumerate(safe_assets):
                 start_seconds = index * duration
@@ -1562,6 +1578,13 @@ async def create_remotion_video_share(
                 "renderer_family": renderer_family, "composition_mode": "templated",
                 "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "targetDurationSeconds": duration * len(safe_assets), "compose_target": {"width": width, "height": height, "fit": "cover"}},
             }
+            # Passthrough fields: only added when caller supplied them, so the
+            # edit_decisions payload stays clean for clients that don't use
+            # these yet (back-compat with frameflow_e2e.py and friends).
+            if effects:
+                edit_decisions["metadata"]["effects"] = effects
+            if subtitles:
+                edit_decisions["metadata"]["subtitles"] = subtitles
         # Governance contract: edit_decisions MUST carry renderer_family and
         # metadata.delivery_promise before dispatching _run_render_job, otherwise
         # video_compose._pre_compose_validation BLOCKS the render.

@@ -344,6 +344,68 @@ def test_create_share_delivery_promise_override_passthrough(workflow_session):
     assert ed["metadata"]["delivery_promise"] == override
 
 
+def test_create_share_passes_effects_to_metadata(workflow_session):
+    """``effects`` is forwarded as ``metadata.effects`` in the templated
+    branch — closes the gap called out in
+    docs/remotion-effects-field-review-2026-08-31.md."""
+    captured, ms = workflow_session
+    effects_text = (
+        "开篇：旋转切入 0.5s（rotate 0→15deg，opacity 0→1，spring）；"
+        "中段：Ken Burns 慢推（scale 1→1.08，3s ease-out）；"
+        "结尾：粒子汇聚淡出（200 粒子，4s）。"
+    )
+    result = asyncio.run(ms.create_remotion_video_share(effects=effects_text))
+    assert result["success"] is True, result
+    ed = captured["edit_decisions"]
+    assert ed["metadata"]["effects"] == effects_text
+
+
+def test_create_share_passes_subtitles_to_metadata(workflow_session):
+    """``subtitles`` is forwarded as ``metadata.subtitles`` — closes the
+    fork with VClaw Studio noted in
+    docs/remotion-effects-field-review-2026-08-31.md §6."""
+    captured, ms = workflow_session
+    cues = [
+        {"index": 1, "start": 0.0, "end": 3.0, "text": "Hello world"},
+        {"index": 2, "start": 3.0, "end": 6.0, "text": "第二行"},
+    ]
+    result = asyncio.run(ms.create_remotion_video_share(subtitles=cues))
+    assert result["success"] is True, result
+    ed = captured["edit_decisions"]
+    assert ed["metadata"]["subtitles"] == cues
+
+
+def test_create_share_omits_effects_subtitles_when_not_supplied(workflow_session):
+    """Back-compat: when neither field is supplied, neither key appears in
+    metadata. Guards frameflow_e2e.py and other thin callers."""
+    captured, ms = workflow_session
+    result = asyncio.run(ms.create_remotion_video_share())
+    assert result["success"] is True, result
+    ed = captured["edit_decisions"]
+    assert "effects" not in ed["metadata"]
+    assert "subtitles" not in ed["metadata"]
+
+
+def test_create_share_custom_code_passes_effects_subtitles(workflow_session, monkeypatch):
+    """The custom (code) branch must also forward effects/subtitles so
+    Remotion template authors can read them from ``edit_decisions.metadata``."""
+    captured, ms = workflow_session
+    monkeypatch.setenv("CUSTOM_COMPOSITION_ENABLED", "true")
+    effects_text = "粒子汇聚淡出 4s"
+    cues = [{"index": 1, "start": 0.0, "end": 2.0, "text": "hi"}]
+    result = asyncio.run(
+        ms.create_remotion_video_share(
+            code="export const Composition = () => null;",
+            effects=effects_text,
+            subtitles=cues,
+        )
+    )
+    assert result["success"] is True, result
+    ed = captured["edit_decisions"]
+    assert ed["metadata"]["effects"] == effects_text
+    assert ed["metadata"]["subtitles"] == cues
+
+
 def test_run_render_job_backfills_legacy_job_kwargs(workflow_session, monkeypatch, tmp_path):
     """_run_render_job is the defense-in-depth site: even if edit_decisions
     lacks both fields (e.g. a job persisted before the fix is restored from
