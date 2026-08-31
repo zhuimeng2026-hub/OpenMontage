@@ -154,6 +154,12 @@ from tools.tool_registry import registry
 from tools.base_tool import ToolStatus
 from lib import checkpoint as ckpt
 from lib import pipeline_loader
+from lib.effects_parser import (
+    apply_effects_to_edit_decisions,
+    effects_animation_for_cut,
+    parse_effects_segments,
+    segment_animation,
+)
 from lib.mcp_session import (
     get_mcp_request_id,
     get_mcp_session_id,
@@ -1358,78 +1364,6 @@ async def get_session_assets() -> dict[str, Any]:
     return {"success": True, "assets": assets}
 
 
-# Keyword → animation token map for the templated branch's effects parser.
-# Tokens must match the Explainer.tsx switch in remotion-composer (zoom-in,
-# pan-left, pan-right, ken-burns, zoom-out, parallax). Unknown phrases fall
-# through to round-robin — the parser is best-effort, not a planner.
-_EFFECTS_KEYWORD_TO_ANIMATION = (
-    (("zoom-in", "zoom in", "zoom_in", "推近", "放大", "拉近"), "zoom-in"),
-    (("zoom-out", "zoom out", "zoom_out", "拉远", "缩小", "远离"), "zoom-out"),
-    (("pan-left", "pan left", "pan_left", "左摇", "向左", "往左"), "pan-left"),
-    (("pan-right", "pan right", "pan_right", "右摇", "向右", "往右"), "pan-right"),
-    (("parallax", "视差", "视差滚动"), "parallax"),
-    (("ken-burns", "kenburns", "ken burns", "电影感", "漂移", "缓慢", "缓推"), "ken-burns"),
-)
-
-
-def _parse_effects_segments(effects: Optional[str]) -> list[str]:
-    """Split free-text effects into ordered segments, one per cut intent.
-
-    - Strips empty lines.
-    - Splits on blank lines (paragraph) first, then on newline if no paragraphs.
-    - Returns [] when effects is None / empty.
-    """
-    if not effects:
-        return []
-    text = effects.strip()
-    if "\n\n" in text:
-        segments = text.split("\n\n")
-    else:
-        segments = text.split("\n")
-    return [s.strip() for s in segments if s.strip()]
-
-
-def _segment_animation(segment: str) -> str:
-    """Pick the animation token that best matches a single effects segment.
-
-    Best-effort keyword scan; first match wins. Falls back to 'zoom-in' when
-    no keyword is recognised (so we always return a token Explainer.tsx knows).
-    """
-    lowered = segment.lower()
-    for keywords, token in _EFFECTS_KEYWORD_TO_ANIMATION:
-        for kw in keywords:
-            if kw in lowered:
-                return token
-    return "zoom-in"
-
-
-def _effects_animation_for_cut(
-    effects: Optional[str], index: int, total: int
-) -> tuple[str, str]:
-    """Map an effects description to (animation, segment_for_this_cut).
-
-    Contract:
-      - When effects is None/empty: returns ("zoom-in", "") — i.e. the parser
-        stays out of the way and the round-robin baseline takes over.
-      - When effects has N segments matching total cuts: 1-to-1 assignment.
-      - When fewer segments than cuts: cycles the parsed animations so the
-        intent still propagates; the unused tail gets the last segment as a
-        default but still benefits from keyword scoring.
-      - When more segments than cuts: keeps the first ``total`` (drop tail).
-    The returned ``segment_for_this_cut`` is the raw text the caller can stash
-    in ``cut.transform.effects`` for richer template implementations; "" if
-    effects was empty.
-    """
-    segments = _parse_effects_segments(effects)
-    if not segments:
-        return "zoom-in", ""
-    if total <= 0:
-        return "zoom-in", segments[0]
-    pick_index = min(index, len(segments) - 1) if index >= len(segments) else index
-    segment = segments[pick_index]
-    return _segment_animation(segment), segment
-
-
 def _cues_to_srt(cues: list[dict[str, Any]]) -> str:
     """Serialize subtitle cues to SRT text.
 
@@ -1666,7 +1600,7 @@ async def create_remotion_video_share(
                 # in transform.effects / shot_language.effects for richer
                 # downstream templates. When effects is empty, the helper
                 # returns ("zoom-in", "") and the round-robin below takes over.
-                effects_animation, effects_segment = _effects_animation_for_cut(
+                effects_animation, effects_segment = effects_animation_for_cut(
                     effects, index, len(safe_assets)
                 )
                 animation = effects_animation if effects else motion[index % len(motion)]

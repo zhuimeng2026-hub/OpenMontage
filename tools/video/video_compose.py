@@ -1203,6 +1203,21 @@ class VideoCompose(BaseTool):
         # Build asset lookup: id -> asset info
         asset_lookup = {a["id"]: a for a in asset_manifest.get("assets", [])}
 
+        # Honour ``edit_decisions.metadata.effects`` so the vclaw preview
+        # pipeline (animatic / sample / render) renders the same animation
+        # vocabulary as the final cut from ``create_remotion_video_share``.
+        # The shared helper rewrites cuts/scene_plan in place; when the
+        # caller (smoke test, clawx-studio) already set per-cut animation
+        # tokens, those are replaced by the parser — by design, since the
+        # free-text effects is the user-facing source of truth on the
+        # clawx-studio path.
+        from lib.effects_parser import apply_effects_to_edit_decisions
+        apply_effects_to_edit_decisions(
+            edit_decisions,
+            inputs.get("scene_plan"),
+            (edit_decisions.get("metadata") or {}).get("effects"),
+        )
+
         cuts = edit_decisions.get("cuts", [])
         if not cuts:
             return ToolResult(success=False, error="No cuts in edit_decisions")

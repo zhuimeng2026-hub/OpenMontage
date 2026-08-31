@@ -39,90 +39,136 @@ from pathlib import Path
 import pytest
 
 import mcp_server
+from lib import effects_parser
 
 
 # ---------------------------------------------------------------------------
-# _parse_effects_segments / _segment_animation / _effects_animation_for_cut
+# parse_effects_segments / segment_animation / effects_animation_for_cut
+# (live in lib.effects_parser so the preview path through
+# tools.video.video_compose can share the same vocabulary as the templated
+# branch in mcp_server.create_remotion_video_share).
 # ---------------------------------------------------------------------------
 
 
 def test_parse_segments_splits_on_blank_lines():
     text = "开篇：旋转切入\n\n中段：Ken Burns 慢推\n\n结尾：粒子汇聚淡出"
-    out = mcp_server._parse_effects_segments(text)
+    out = effects_parser.parse_effects_segments(text)
     assert out == ["开篇：旋转切入", "中段：Ken Burns 慢推", "结尾：粒子汇聚淡出"]
 
 
 def test_parse_segments_splits_on_single_newline_when_no_paragraph_break():
     text = "zoom-in\npan-left\nken-burns"
-    out = mcp_server._parse_effects_segments(text)
+    out = effects_parser.parse_effects_segments(text)
     assert out == ["zoom-in", "pan-left", "ken-burns"]
 
 
 def test_parse_segments_strips_empty_and_whitespace():
     text = "\n\nzoom-in\n   \npan-right\n\n"
-    assert mcp_server._parse_effects_segments(text) == ["zoom-in", "pan-right"]
+    assert effects_parser.parse_effects_segments(text) == ["zoom-in", "pan-right"]
 
 
 def test_parse_segments_empty_input_returns_empty_list():
-    assert mcp_server._parse_effects_segments("") == []
-    assert mcp_server._parse_effects_segments(None) == []
+    assert effects_parser.parse_effects_segments("") == []
+    assert effects_parser.parse_effects_segments(None) == []
 
 
 def test_segment_animation_zh_keywords():
-    assert mcp_server._segment_animation("开篇旋转切入") == "zoom-in"  # 放大 maps to zoom-in
-    assert mcp_server._segment_animation("右摇镜头") == "pan-right"
-    assert mcp_server._segment_animation("电影感漂移") == "ken-burns"
-    assert mcp_server._segment_animation("缓慢推出") == "ken-burns"
-    assert mcp_server._segment_animation("远离全景") == "zoom-out"
+    assert effects_parser.segment_animation("开篇旋转切入") == "zoom-in"  # 放大 maps to zoom-in
+    assert effects_parser.segment_animation("右摇镜头") == "pan-right"
+    assert effects_parser.segment_animation("电影感漂移") == "ken-burns"
+    assert effects_parser.segment_animation("缓慢推出") == "ken-burns"
+    assert effects_parser.segment_animation("远离全景") == "zoom-out"
 
 
 def test_segment_animation_en_keywords():
-    assert mcp_server._segment_animation("zoom-in slowly") == "zoom-in"
-    assert mcp_server._segment_animation("Ken Burns push") == "ken-burns"
-    assert mcp_server._segment_animation("pan left drift") == "pan-left"
-    assert mcp_server._segment_animation("parallax bg") == "parallax"
+    assert effects_parser.segment_animation("zoom-in slowly") == "zoom-in"
+    assert effects_parser.segment_animation("Ken Burns push") == "ken-burns"
+    assert effects_parser.segment_animation("pan left drift") == "pan-left"
+    assert effects_parser.segment_animation("parallax bg") == "parallax"
 
 
 def test_segment_animation_unknown_defaults_to_zoom_in():
-    assert mcp_server._segment_animation("some novel effect") == "zoom-in"
+    assert effects_parser.segment_animation("some novel effect") == "zoom-in"
 
 
 def test_effects_animation_for_cut_no_effects_returns_baseline():
     # When effects is empty, helper returns ("zoom-in", "") so the caller
     # falls back to round-robin. We assert the tuple shape, not the per-cut
     # animation — that's the renderer's job.
-    assert mcp_server._effects_animation_for_cut(None, 0, 4) == ("zoom-in", "")
-    assert mcp_server._effects_animation_for_cut("", 3, 5) == ("zoom-in", "")
+    assert effects_parser.effects_animation_for_cut(None, 0, 4) == ("zoom-in", "")
+    assert effects_parser.effects_animation_for_cut("", 3, 5) == ("zoom-in", "")
 
 
 def test_effects_animation_for_cut_one_to_one_when_segments_match():
     effects = "zoom-in\npan-left\nken-burns\npan-right"
     # 4 segments, 4 cuts → 1-to-1
-    assert mcp_server._effects_animation_for_cut(effects, 0, 4) == ("zoom-in", "zoom-in")
-    assert mcp_server._effects_animation_for_cut(effects, 1, 4) == ("pan-left", "pan-left")
-    assert mcp_server._effects_animation_for_cut(effects, 2, 4) == ("ken-burns", "ken-burns")
-    assert mcp_server._effects_animation_for_cut(effects, 3, 4) == ("pan-right", "pan-right")
+    assert effects_parser.effects_animation_for_cut(effects, 0, 4) == ("zoom-in", "zoom-in")
+    assert effects_parser.effects_animation_for_cut(effects, 1, 4) == ("pan-left", "pan-left")
+    assert effects_parser.effects_animation_for_cut(effects, 2, 4) == ("ken-burns", "ken-burns")
+    assert effects_parser.effects_animation_for_cut(effects, 3, 4) == ("pan-right", "pan-right")
 
 
 def test_effects_animation_for_cut_extra_segments_dropped():
     effects = "zoom-in\npan-left\nken-burns\npan-right\nzoom-out\nparallax"
     # 6 segments, 4 cuts → tail dropped
-    assert mcp_server._effects_animation_for_cut(effects, 3, 4)[0] == "pan-right"
+    assert effects_parser.effects_animation_for_cut(effects, 3, 4)[0] == "pan-right"
 
 
 def test_effects_animation_for_cut_fewer_segments_cycle_last():
     effects = "ken-burns 慢推\nzoom-in 推近"
     # 2 segments, 5 cuts → cycles back to last segment for the tail
-    token3, seg3 = mcp_server._effects_animation_for_cut(effects, 3, 5)
+    token3, seg3 = effects_parser.effects_animation_for_cut(effects, 3, 5)
     assert token3 == "zoom-in"
     assert seg3 == "zoom-in 推近"
 
 
 def test_effects_animation_for_cut_mixed_keywords_picks_first_match():
-    # "Ken Burns zoom-in" — keyword order in _EFFECTS_KEYWORD_TO_ANIMATION:
+    # "Ken Burns zoom-in" — keyword order in EFFECTS_KEYWORD_TO_ANIMATION:
     # zoom-in first, so it wins. Document the precedence.
-    token = mcp_server._effects_animation_for_cut("Ken Burns zoom-in\n", 0, 1)[0]
+    token = effects_parser.effects_animation_for_cut("Ken Burns zoom-in\n", 0, 1)[0]
     assert token == "zoom-in"
+
+
+def test_apply_effects_to_edit_decisions_rewrites_cuts():
+    """The mutator should rewrite per-cut animation in-place, both on cuts
+    and on scene_plan. This is the function video_compose calls when it sees
+    metadata.effects — the preview path must end up with the same vocabulary
+    as the templated branch."""
+    ed = {
+        "cuts": [
+            {"transform": {"animation": "static"}},
+            {"transform": {"animation": "static"}},
+        ],
+    }
+    scene_plan = [
+        {"shot_language": {"camera_movement": "static"}},
+        {"shot_language": {"camera_movement": "static"}},
+    ]
+    applied = effects_parser.apply_effects_to_edit_decisions(
+        ed, scene_plan, "zoom-in\nken-burns"
+    )
+    assert applied is True
+    assert ed["cuts"][0]["transform"]["animation"] == "zoom-in"
+    assert ed["cuts"][1]["transform"]["animation"] == "ken-burns"
+    assert scene_plan[0]["shot_language"]["camera_movement"] == "zoom-in"
+    assert scene_plan[1]["shot_language"]["camera_movement"] == "ken-burns"
+    # Raw segment text also stashed.
+    assert ed["cuts"][0]["transform"]["effects"] == "zoom-in"
+
+
+def test_apply_effects_to_edit_decisions_no_effects_is_noop():
+    ed = {"cuts": [{"transform": {"animation": "static"}}]}
+    scene_plan = [{"shot_language": {"camera_movement": "static"}}]
+    applied = effects_parser.apply_effects_to_edit_decisions(ed, scene_plan, None)
+    assert applied is False
+    assert ed["cuts"][0]["transform"]["animation"] == "static"
+    applied2 = effects_parser.apply_effects_to_edit_decisions(ed, scene_plan, "")
+    assert applied2 is False
+
+
+def test_apply_effects_to_edit_decisions_no_cuts_is_noop():
+    applied = effects_parser.apply_effects_to_edit_decisions({}, None, "zoom-in")
+    assert applied is False
 
 
 # ---------------------------------------------------------------------------
