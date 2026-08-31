@@ -10,7 +10,7 @@ Before responding to ANY user message:
 2. [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) — architecture, key files, conventions. Single source of truth.
 3. `skills/pipelines/<pipeline>/<stage>-director.md` for whatever stage you are about to execute.
 
-`AGENTS.md`, `CURSOR.md`, `COPILOT.md`, `CODEX.md`, `.cursor/rules/openmontage.mdc`, and `.github/copilot-instructions.md` are all thin pointers to the two files above. Do not duplicate content between them.
+`AGENTS.md`, `CURSOR.md`, `COPILOT.md`, `CODEX.md`, `.cursor/rules/openmontage.mdc` (Cursor: `alwaysApply: true`, `globs: ["**/*"]`), and `.github/copilot-instructions.md` are all thin pointers to the two files above. Do not duplicate content between them.
 
 ## Identity
 
@@ -120,14 +120,6 @@ For the full integration recipe (config, auth tokens, verb contracts, render + p
 
 The OpenClaw-runtime side lives in `/opt/vclaw/openclaw/solutions/product-video-production/` (`mcp/control-plane-gateway.mjs` is the stdio MCP bridge that calls back into vclaw).
 
-## Three-Layer Knowledge Model
-
-See `PROJECT_CONTEXT.md` § "Knowledge Architecture" for the canonical description.
-
-- **Layer 1 — `tools/` + `tools/tool_registry.py`** — what exists (capabilities, status, cost). Every tool subclasses `tools/base_tool.py` `BaseTool` and is auto-discovered. Never import tools ad hoc; always go through the registry.
-- **Layer 2 — `skills/`** — how OpenMontage wants those tools used (project conventions, quality bars, pipeline director skills, meta skills for review/checkpoints/onboarding).
-- **Layer 3 — `.agents/skills/`** — vendor / technology knowledge (Remotion, GSAP, FLUX, ElevenLabs, Kling, HyperFrames, …). Each tool's `agent_skills` field points to the right Layer 3 file. **Read Layer 3 before any generation call.**
-
 ## Core Invariants — Violating Any of These Is a Defect
 
 1. **All production goes through a pipeline.** No ad-hoc Python scripts that call tools directly. Match the request to a `pipeline_defs/*.yaml` manifest; read its stages; read the stage director skill before executing each stage.
@@ -139,52 +131,59 @@ See `PROJECT_CONTEXT.md` § "Knowledge Architecture" for the canonical descripti
 
 `AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
 
-## Project Layout (one-liner per area)
+## Pipelines — Pointer
 
-See `PROJECT_CONTEXT.md` § "Key Files" for the authoritative mapping. At a glance:
+The full roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelines" and `PROJECT_CONTEXT.md` § "Available Pipelines". 13 pipelines; `video-template-remix` is the default.
 
-- `tools/` — Python `BaseTool` subclasses (auto-discovered via `tools/tool_registry.py`)
-- `pipeline_defs/` — declarative YAML manifests, one per pipeline
-- `skills/pipelines/<pipeline>/<stage>-director.md` — the **HOW** for each stage
-- `skills/meta/` — cross-cutting meta skills (reviewer, checkpoint-protocol, onboarding, …)
-- `skills/core/` — Layer-2 hub skills (e.g. hyperframes.md)
-- `.agents/skills/` — Layer 3 vendor knowledge (Remotion, ElevenLabs, FLUX, …)
-- `schemas/` — JSON schemas (artifacts, pipelines, styles, tools, checkpoints)
-- `styles/*.yaml` — visual playbooks
-- `lib/` — persistence helpers (checkpoint.py, pipeline_loader.py, media_profiles.py, config_model.py)
-- `remotion-composer/` — React/Remotion scene stack
-- `projects/` — gitignored; one directory per production run
-- `sources/` — gitignored binaries (reference inputs)
-- `mcp_server.py` — FastMCP server (start with `./start_mcp_server.sh`)
-- `ink-theater/` — hand-drawn doodle engine + Ink Puppet mocap
-- `backlot/` — local live storyboard server (`python -m backlot open <project-id>`)
+## Three-Layer Knowledge Model — Pointer
 
-## Project Workspace
+See `PROJECT_CONTEXT.md` § "Knowledge Architecture" for the canonical description. Quick version: Layer 1 = `tools/` (what exists), Layer 2 = `skills/` (how OpenMontage uses it), Layer 3 = `.agents/skills/` (vendor/tech knowledge). Each tool's `agent_skills` field bridges 1 → 3.
 
-Every production run creates `projects/<project-id>/` (gitignored) with `artifacts/`, `assets/{images,video,audio,music}/`, and `renders/final.mp4`. Initialize with `python -c "from lib.checkpoint import init_project; init_project('<id>', title='<Title>', pipeline_type='<pipeline>')"`, then open the board with `python -m backlot open <project-id>`. Tools writing to the repo root, cwd, or `/tmp` are invisible to Backlot — that violates the workspace contract.
+## Project Layout — Pointer
 
-**Exception — `projects/_scratch/`**: when a tool output genuinely has no project (smoke-testing a TTS provider, an ad-hoc ffmpeg probe, a one-off render), land it in `projects/_scratch/<category>/` instead. This keeps the workspace contract enforceable (nothing escapes `projects/`) while giving agents an honest place to put throwaway output. See `projects/_scratch/README.md` for the category list. Backlot does **not** watch this directory — by design.
+See `PROJECT_CONTEXT.md` § "Key Files" for the authoritative one-liner-per-area map. At a glance: `tools/` (BaseTool subclasses, auto-discovered), `pipeline_defs/` (YAML manifests), `skills/pipelines/<pipeline>/` (stage director skills), `skills/meta/` (cross-cutting meta skills), `.agents/skills/` (Layer 3), `schemas/` (JSON schemas), `styles/*.yaml` (visual playbooks), `lib/` (persistence helpers), `remotion-composer/` (React/Remotion scene stack), `projects/` (gitignored, one dir per production run), `sources/` (gitignored binaries), `mcp_server.py` (FastMCP server), `backlot/` (live storyboard server).
 
-## Pipelines — At a Glance
+## Custom Script Contract (Remotion `create_remotion_video_share`)
 
-Full roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelines" and `PROJECT_CONTEXT.md` § "Available Pipelines".
+"Script mode" lets users submit custom Remotion TSX source (e.g. generated by DeepSeek), compiled and rendered at runtime by `remotion-composer/src/CustomComposition.tsx`. When generating or authoring a script, follow this props contract exactly — these are the only inputs the component injects into your code:
 
-| Pipeline | Best For |
-|---|---|
-| `video-template-remix` **(default)** | Preserve a reference video's structure while replacing approved asset slots (beta) |
-| `animated-explainer` | Topic → fully generated explainer (production) |
-| `talking-head` | Footage-led speaker videos (beta) |
-| `screen-demo` | Screen recordings + walkthroughs (production) |
-| `clip-factory` | Many clips from one long source (beta) |
-| `podcast-repurpose` | Podcast highlights and derivatives (beta) |
-| `cinematic` | Trailer / teaser / mood-led edits (production) |
-| `animation` | Motion-graphics + animation-first (production) |
-| `character-animation` | Local rigged cartoon characters + reusable acting (beta) |
-| `hybrid` | Source footage + support visuals (production) |
-| `avatar-spokesperson` | Presenter-led avatar / lip-sync (production) |
-| `localization-dub` | Subtitle / dub / translated variants (beta) |
-| `documentary-montage` | Real-footage edit from free/open archives (no paid video APIs) |
-| `framework-smoke` | Test: minimal 2-stage smoke test (test) |
+| prop | type | meaning | notes |
+|---|---|---|---|
+| `images` | `string[]` | uploaded image relative paths | must be referenced with `staticFile(src)`; staged under `public/_staged/<id>/` |
+| `durationPerImage` | `number` | seconds per image | default `3`; set by the `duration` arg of `create_remotion_video_share` |
+| `fps` | `number` | composition frame rate | fixed at `30` |
+| `width` / `height` | `number` | canvas dimensions | e.g. `1080 × 1920` for 9:16, decided by `aspect_ratio` |
+
+**Rules:**
+
+- Export a renderable component: `export const MyComposition = (props) => {...}` or `export default`.
+- The component MUST return a React element using Remotion APIs (`AbsoluteFill`, `useCurrentFrame`, `Sequence`, ...).
+- Image paths are relative to `public/` and MUST be wrapped with `staticFile(src)` — no absolute paths or `file://`.
+- Total duration (frames) = `images.length × durationPerImage × fps`, computed by `Root.tsx`'s `calculateCustomMetadata`; user code cannot change total length.
+- The default template is `DEFAULT_COMP` in the BFF `web/index.html`; script generators (e.g. DeepSeek) should align to it.
+
+Minimal example:
+
+```tsx
+import {AbsoluteFill, useCurrentFrame, Sequence, staticFile} from "remotion";
+
+export const MyComposition = ({images, durationPerImage = 3, fps = 30}) => {
+  const frame = useCurrentFrame();
+  const fpi = Math.round(durationPerImage * fps);
+  const idx = Math.min(Math.floor(frame / fpi), Math.max(images.length, 1) - 1);
+  return (
+    <AbsoluteFill>
+      {images.map((src, i) => (
+        <Sequence key={i} from={i * fpi} durationInFrames={fpi}>
+          <AbsoluteFill>
+            <img src={staticFile(src)} style={{width: "100%", height: "100%", objectFit: "cover"}} />
+          </AbsoluteFill>
+        </Sequence>
+      ))}
+    </AbsoluteFill>
+  );
+};
+```
 
 ## Deep-Dive Docs (When You Need More)
 
@@ -197,8 +196,6 @@ Full roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelin
 - `skills/INDEX.md` — full Layer-2 skill index (which skill for which job)
 - `backlot/README.md` — how the live storyboard derives state from disk
 
-The default reference-remix pipeline is `video-template-remix` (`pipeline_defs/video-template-remix.yaml`).
-
 ## Session-local Claude resources (`.claude/`)
 
 The repo has its own Claude-side state under `.claude/`:
@@ -209,9 +206,3 @@ The repo has its own Claude-side state under `.claude/`:
 - `scheduled_tasks.lock` — locks held by autonomous cron/loop tasks.
 
 Do not edit `.claude/` directly from Python — Claude Code owns that subtree.
-
-## Decision log — pair-keyed re-log rule (binding)
-
-When a previously-logged production choice changes mid-run (user swaps voice, you switch provider / model / runtime / music, a fallback overrides the prior pick), the **old entry stays put** and a **new entry is appended** with the **same `(category, subject)` pair**. The board keys decisions on the pair and renders the latest entry for that pair as current (tagged "revised"). Rewording the `subject` reads as a *different* decision and the stale one keeps showing. Keeping distinct decisions in one category (e.g. TTS vs image `provider_selection`) is why the **pair, not the category alone, is the key.** This applies at every stage, not just `idea`. See `AGENT_GUIDE.md` § "Decision Communication Contract" for the full protocol.
-
-`AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
