@@ -21,6 +21,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+#: Tools that belong to the decompose phase of the mcp-decompose-and-recompose
+#: skill. Their events.jsonl entries carry phase="decompose" so the dedicated
+#: decompose log monitor can attribute them correctly.
+_DECOMPOSE_TOOLS = frozenset({"scene_detect", "transcriber", "video_analyzer"})
+
 
 def _load_dotenv() -> None:
     """Load .env into os.environ once at import time.
@@ -255,6 +260,7 @@ def _instrument_execute(fn: Callable) -> Callable:
             "tool": tool_name,
             "scene_id": scene_id,
             "depth": depth if depth else None,
+            "phase": "decompose" if tool_name in _DECOMPOSE_TOOLS else None,
         }
         if project_dir is not None:
             emit_event(project_dir, {

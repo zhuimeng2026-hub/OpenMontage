@@ -246,6 +246,44 @@ if not _business_log.handlers:
     _business_log.addHandler(_business_handler)
 
 
+# ---------------------------------------------------------------------------
+# Dedicated decompose-path logger (logs/decompose.log) — channel-separated
+# from session_video.log (full business events) and mcp_health.log (server
+# liveness). Consumed by tools/decompose_health_monitor.py Probe B.
+# ---------------------------------------------------------------------------
+_decompose_log = logging.getLogger("decompose")
+_decompose_log.setLevel(logging.INFO)
+_decompose_log.propagate = False
+if not _decompose_log.handlers:
+    _decompose_candidates = [
+        _LOG_DIR / "decompose.log",
+        _LOG_DIR / f"decompose_{int(time.time())}.log",
+    ]
+    _decompose_handler: Optional[logging.Handler] = None
+    for _dlp in _decompose_candidates:
+        try:
+            _decompose_handler = RotatingFileHandler(
+                _dlp, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
+            )
+            break
+        except (PermissionError, OSError):
+            continue
+    if _decompose_handler is None:
+        _decompose_handler = logging.NullHandler()
+    _decompose_handler.setFormatter(logging.Formatter("%(message)s"))
+    _decompose_log.addHandler(_decompose_handler)
+
+
+def _decompose_event(event: str, **fields: Any) -> None:
+    try:
+        parts = [f"event={event}"]
+        parts += [f"{k}={v}" for k, v in fields.items() if v is not None]
+        parts.insert(1, f"ts={time.time()}")
+        _decompose_log.info(" ".join(parts))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _event(event: str, *, include_traceback: bool = False, **fields: Any) -> None:
     record = {"event": event, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **fields}
     if include_traceback:
