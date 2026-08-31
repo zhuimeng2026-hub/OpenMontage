@@ -150,6 +150,10 @@ MP_verify_*.txt
 .remote-*.db
 .remote-*.db-shm
 .remote-*.db-wal
+# Local runtime databases (frameflow) — regenerable, never commit
+data/*.db
+data/*.db-shm
+data/*.db-wal
 .gocache-browser/
 .gocache-log/
 .gocache-test/
