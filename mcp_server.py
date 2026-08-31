@@ -2530,16 +2530,29 @@ async def weiyun_upload(
 
 @mcp.tool()
 async def weiyun_gen_share_link(
-    file_list: list[str] = [],
-    dir_list: list[str] = [],
+    file_list: list[str] | None = None,
+    dir_list: list[str] | None = None,
     share_name: str = "",
     passwd: str = "",
 ) -> dict[str, Any]:
     """Generate a shareable link for files in Tencent Weiyun (腾讯微云).
 
-    Accepts a list of file paths or directories and returns a short URL
-    that can be shared. Configure WEIYUN_MCP_TOKEN in .env before calling.
+    At least one of ``file_list`` or ``dir_list`` is required — pass a
+    non-empty list of Weiyun ``file_id`` strings or directory keys to share.
+    Returns a short URL that can be shared. Configure ``WEIYUN_MCP_TOKEN``
+    in ``.env`` before calling.
     """
+    # Use None defaults (not []) — mutable defaults are shared across calls
+    # and silently mask missing arguments. Validate at the wrapper layer so
+    # the contract violation is reported back to the caller (agent / client)
+    # instead of bubbling up from the inner tool's check.
+    file_list = list(file_list or [])
+    dir_list = list(dir_list or [])
+    if not file_list and not dir_list:
+        return {
+            "success": False,
+            "error": "file_list or dir_list is required to generate a share link",
+        }
     tool = registry.get("weiyun_share_link")
     if tool is None:
         return {"success": False, "error": "weiyun_share_link tool is not registered"}
