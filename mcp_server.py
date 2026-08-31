@@ -1432,6 +1432,30 @@ def _cues_to_srt(cues: list[dict[str, Any]]) -> str:
     return "\n".join(blocks).rstrip() + "\n"
 
 
+def _chunk_metadata(
+    assets_offset: int,
+    chunk_count: int,
+    chunk_limit: int,
+    total_in_session: int,
+) -> dict[str, Any]:
+    """Build the chunk descriptor attached to ``edit_decisions.metadata.chunk``.
+
+    Lets downstream consumers (Remotion templates, future stitchers,
+    Backlot board) reconstruct the pagination shape without having to
+    re-derive it from the asset list.
+    """
+    chunk_end = assets_offset + chunk_count
+    chunk_index = assets_offset // chunk_limit if chunk_limit > 0 else 0
+    return {
+        "offset": assets_offset,
+        "limit": chunk_limit,
+        "count": chunk_count,
+        "total_in_session": total_in_session,
+        "chunk_index": chunk_index,
+        "is_last": chunk_end >= total_in_session,
+    }
+
+
 def _ensure_governance_fields(
     edit_decisions: dict[str, Any],
     *,
@@ -1515,6 +1539,8 @@ async def create_remotion_video_share(
     delivery_promise_override: Optional[dict] = None,
     effects: Optional[str] = None,
     subtitles: Optional[list[dict[str, Any]]] = None,
+    assets_offset: int = 0,
+    assets_limit: int = 0,
 ) -> dict[str, Any]:
     """Generate and share a Remotion photo video from images in this MCP session.
 
@@ -1531,6 +1557,36 @@ async def create_remotion_video_share(
         ``text``) — forwarded as ``metadata.subtitles``. Closed the schema
         fork with VClaw Studio (see
         ``docs/remotion-effects-field-review-2026-08-31.md`` §6).
+
+    Multi-chunk pagination (``assets_offset`` / ``assets_limit``):
+      The single-call cap is ``min(OPENMONTAGE_MAX_SESSION_IMAGES,
+      floor(600/duration_per_image))``. When a session holds more images than
+      that — a normal occurrence once production pipelines upload hundreds of
+      frames in one MCP session — call this tool multiple times, paginating
+      through the session's asset list:
+
+          # chunk 1: images [0..20)
+          create_remotion_video_share(assets_offset=0, assets_limit=20)
+          # poll get_render_status → published, then:
+          # chunk 2: images [20..40)
+          create_remotion_video_share(assets_offset=20, assets_limit=20)
+
+      - ``assets_offset`` (default ``0``) is the start index into the
+        session's asset list.
+      - ``assets_limit`` (default ``0`` = use ``OPENMONTAGE_MAX_SESSION_IMAGES``)
+        is the maximum number of images rendered in this chunk. Cannot exceed
+        the env cap.
+      - The per-chunk render still honours the 600-second total-duration
+        ceiling (``duration × chunk_count ≤ 600``).
+      - Each call returns its own ``render_job_id`` and video; the caller is
+        responsible for stitching the chunks downstream (e.g. via
+        ``video_compose`` overlay).
+      - The chunk metadata (``offset``, ``limit``, ``count``,
+        ``total_in_session``, ``is_last``) is attached to
+        ``edit_decisions.metadata.chunk`` for downstream consumers.
+      - ``allow_continue`` semantics: rendering a non-first chunk after a
+        previous chunk already published is permitted. Concurrent chunks on
+        the same session are still rejected.
 
     This tool is *non-blocking*: it validates inputs, claims a render job
     (``render_job_id``), and dispatches the actual render→upload→share pipeline
@@ -1562,8 +1618,18 @@ async def create_remotion_video_share(
     started = time.monotonic()
     sid = get_mcp_session_id()
     request_id = get_mcp_request_id() or uuid.uuid4().hex
+    total_in_session = 0  # populated after we know the asset list size
     try:
-        digest, state = begin_render(sid, project_id)
+        assets_offset = max(0, int(assets_offset))
+        assets_limit = max(0, int(assets_limit))
+    except (TypeError, ValueError) as exc:
+        return {"success": False, "status": "failed", "stage": "validation",
+                "message": f"assets_offset / assets_limit must be integers: {exc}",
+                "error": str(exc)}
+    try:
+        # assets_offset > 0 means "rendering a continuation chunk"; allow
+        # resuming a session whose previous chunk already published.
+        digest, state = begin_render(sid, project_id, allow_continue=assets_offset > 0)
     except Exception as exc:
         _event("workflow_failed", include_traceback=True, request_id=request_id, session_hash=session_hash(sid), status="failed", stage="session", duration_ms=round((time.monotonic() - started) * 1000), error=str(exc))
         return {"success": False, "status": "failed", "stage": "session", "message": str(exc), "error": str(exc)}
@@ -1572,22 +1638,40 @@ async def create_remotion_video_share(
     batch_id = state["batch_id"]
     job_id = state["render_job_id"]
     assets = state.get("assets", [])
+    total_in_session = len(assets)
     try:
         duration = float(duration_per_image)
         if duration < 1 or duration > 30:
             raise ValueError("duration_per_image must be between 1 and 30 seconds")
         max_images = max(1, int(os.environ.get("OPENMONTAGE_MAX_SESSION_IMAGES", "20")))
-        if len(assets) > max_images:
-            raise ValueError(f"This workflow accepts at most {max_images} images per batch")
-        if duration * len(assets) > 600:
-            raise ValueError("The requested photo video exceeds the 600 second limit")
+        effective_limit = assets_limit if assets_limit > 0 else max_images
+        if effective_limit > max_images:
+            raise ValueError(
+                f"assets_limit cannot exceed OPENMONTAGE_MAX_SESSION_IMAGES ({max_images})"
+            )
+        if assets_offset >= total_in_session:
+            raise ValueError(
+                f"assets_offset ({assets_offset}) is beyond the session batch "
+                f"({total_in_session} images)"
+            )
+        chunk_end = min(assets_offset + effective_limit, total_in_session)
+        chunk_assets = assets[assets_offset:chunk_end]
+        if not chunk_assets:
+            raise ValueError(
+                f"No images in the requested range [{assets_offset}:{chunk_end}]"
+            )
+        if duration * len(chunk_assets) > 600:
+            raise ValueError(
+                f"The requested photo video chunk ({len(chunk_assets)} images × "
+                f"{duration}s = {duration * len(chunk_assets)}s) exceeds the 600 second limit"
+            )
         dimensions = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
         if aspect_ratio not in dimensions:
             raise ValueError("aspect_ratio must be one of 9:16, 16:9, or 1:1")
         width, height = dimensions[aspect_ratio]
         root = _PROJECT_ROOT / "projects" / project
         safe_assets = []
-        for asset in assets:
+        for asset in chunk_assets:
             path = _resolve_session_asset_path(asset)
             try:
                 path.relative_to(root.resolve())
@@ -1623,6 +1707,9 @@ async def create_remotion_video_share(
                     "script_id": "custom",
                     "targetDurationSeconds": duration * max(len(images), 1),
                     "compose_target": {"width": width, "height": height, "fit": "cover"},
+                    "chunk": _chunk_metadata(
+                        assets_offset, len(safe_assets), effective_limit, total_in_session
+                    ),
                 },
             }
             if effects:
@@ -1665,7 +1752,7 @@ async def create_remotion_video_share(
             edit_decisions = {
                 "version": "1.0", "cuts": cuts, "render_runtime": "remotion",
                 "renderer_family": renderer_family, "composition_mode": "templated",
-                "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "targetDurationSeconds": duration * len(safe_assets), "compose_target": {"width": width, "height": height, "fit": "cover"}},
+                "metadata": {"title": title or f"{project} photo video", "script_id": script_id, "targetDurationSeconds": duration * len(safe_assets), "compose_target": {"width": width, "height": height, "fit": "cover"}, "chunk": _chunk_metadata(assets_offset, len(safe_assets), effective_limit, total_in_session)},
             }
             # Passthrough fields: only added when caller supplied them, so the
             # edit_decisions payload stays clean for clients that don't use
@@ -1753,11 +1840,17 @@ async def create_remotion_video_share(
     # sequential submissions FIFO without waiting for an actual render slot.
     queue_ready.wait(timeout=5)
     _event("render_queued", request_id=request_id, session_hash=session_hash(sid), project_id=project, batch_id=batch_id, asset_count=len(safe_assets), render_job_id=job_id, status="queued", duration_ms=round((time.monotonic() - started) * 1000))
+    chunk_info = _chunk_metadata(assets_offset, len(safe_assets), effective_limit, total_in_session)
+    _event("render_chunk_queued", request_id=request_id, session_hash=session_hash(sid), project_id=project, batch_id=batch_id, render_job_id=job_id, **chunk_info)
     return {
         "success": True, "status": "queued",
         "render_job_id": job_id, "batch_id": batch_id, "project_id": project,
         "asset_count": len(safe_assets), "duration_seconds": duration * len(safe_assets),
-        "message": "视频渲染已在后台启动，请使用 get_render_status(render_job_id) 轮询进度与最终结果。",
+        "chunk": chunk_info,
+        "message": "视频渲染已在后台启动，请使用 get_render_status(render_job_id) 轮询进度与最终结果。"
+        if assets_offset == 0
+        else f"分批渲染第 {chunk_info['chunk_index'] + 1} 段（{len(safe_assets)} 张图）已启动，"
+             f"轮询完成后调用本工具传 assets_offset={chunk_info['offset'] + len(safe_assets)} 渲染下一批。",
     }
 
 

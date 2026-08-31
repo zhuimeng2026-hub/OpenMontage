@@ -399,8 +399,20 @@ def replace_asset_by_sha(
         return None
 
 
-def begin_render(session_id: str | None, project_id: str | None = None) -> tuple[str, dict[str, Any]]:
-    """Atomically claim the current batch for one render job."""
+def begin_render(
+    session_id: str | None,
+    project_id: str | None = None,
+    *,
+    allow_continue: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    """Atomically claim the current batch for one render job.
+
+    ``allow_continue=True`` relaxes the ``status=="published"`` rejection so
+    multi-chunk pagination (see ``create_remotion_video_share``'s
+    ``assets_offset`` / ``assets_limit``) can start a fresh render after the
+    previous chunk already published. The ``status=="rendering"`` guard is
+    *not* relaxed — concurrent chunks on the same session are still refused.
+    """
     digest = require_session(session_id)
     with _lock_for(digest):
         state = _read(digest)
@@ -408,7 +420,7 @@ def begin_render(session_id: str | None, project_id: str | None = None) -> tuple
             raise ValueError("No uploaded image batch found for this MCP session")
         if state.get("status") == "rendering":
             raise ValueError("A video is already being generated for this MCP session")
-        if state.get("status") == "published":
+        if state.get("status") == "published" and not allow_continue:
             raise ValueError("The current image batch is already published; upload a new image first")
         if project_id and state.get("project_id") != project_id:
             raise ValueError("project_id does not match the current MCP session batch")
