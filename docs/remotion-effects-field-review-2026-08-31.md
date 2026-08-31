@@ -258,3 +258,23 @@ UI 不用动：textarea 早已存在（`App.vue:1520`），原本就在 `videoEf
      下游消费需要单独实现）。
    - Studio 端字幕开关开启时 → `subtitles` 入 `metadata.subtitles`（同样依赖下游消费方
      实现烧录，目前仓库已有独立工具 `burn_subtitles` 但与本流程未串联，是另一个待办）。
+
+---
+
+## 10. 端到端闭环（commit 2a12448 + 0dc12e2 + 168b2b9）
+
+commit 2a12448 在模板分支实现 keyword 评分；commit 0dc12e2 把同一 helper
+抽到 `lib/effects_parser.py` 并在 `tools.video.video_compose._render` 调用；
+commit 168b2b9 把 `vclaw preview.go` 接住 `effects`/`subtitles` 两个 body
+字段。闭环后：
+
+- clawx-studio「视频效果」文本 + 字幕 cue → MCP `create_remotion_video_share` →
+  `_run_render_job` → burn_subtitles → 上传 → 分享链接（**最终成片**）。
+- clawx-studio「视频效果」文本 + 字幕 cue → vclaw `POST /api/video-projects/:id/animatic|sample|render` →
+  透传到 `edit_decisions.metadata` → video_compose `_render` → lib.effects_parser 重写
+  `cuts[i].transform.animation` → Remotion Explainer.tsx 渲染（**三级预览**，
+  预览版不烧字幕——烧字幕只发生在最终成片路径）。
+
+下游消费（Remotion 模板）依然只认 `zoom-in / pan-left / pan-right / ken-burns / ken-burns-slow-zoom / parallax` 几个 token；
+「旋转切入」「粒子汇聚淡出」等新需求要先扩 token 才能驱动——目前 keyword 表里
+「旋转」「粒子」会被兜底成 `zoom-in`，留给后续模板迭代。
