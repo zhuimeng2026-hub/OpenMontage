@@ -29,7 +29,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from tools.base_tool import (
     BaseTool,
@@ -589,6 +589,11 @@ class VideoCompose(BaseTool):
         crf = inputs.get("crf", 23)
         preset = inputs.get("preset", "medium")
         profile_name = inputs.get("profile")
+        # Forwarded to the final re-encode step only — the per-segment trims
+        # and concat-copy calls are intentionally NOT streamed because each
+        # one is short and uniform, so the streaming overhead would dominate
+        # the actual encode time.
+        progress_callback = inputs.get("_progress_callback")
 
         # Resolve target resolution + fit mode. Priority: explicit `profile`
         # arg > edit_decisions.compose_target (any of the 4 cascade locations
@@ -834,20 +839,21 @@ class VideoCompose(BaseTool):
                 cmd.extend(["-c:a", "copy"])
 
             cmd.append(str(output_path))
-            self.run_command(cmd)
+            progress_log = self._run_ffmpeg_with_progress(cmd, progress_callback)
 
-            return ToolResult(
-                success=True,
-                data={
-                    "operation": "compose",
-                    "cut_count": len(cuts),
-                    "has_subtitles": subtitle_path is not None,
-                    "has_mixed_audio": audio_path is not None,
-                    "profile": profile_name,
-                    "output": str(output_path),
-                },
-                artifacts=[str(output_path)],
-            )
+            artifacts: list[str] = [str(output_path)]
+            data: dict[str, Any] = {
+                "operation": "compose",
+                "cut_count": len(cuts),
+                "has_subtitles": subtitle_path is not None,
+                "has_mixed_audio": audio_path is not None,
+                "profile": profile_name,
+                "output": str(output_path),
+            }
+            if progress_log is not None:
+                artifacts.append(str(progress_log))
+                data["progress_log"] = str(progress_log)
+            return ToolResult(success=True, data=data, artifacts=artifacts)
         finally:
             # Cleanup temp files
             for f in temp_segments:
@@ -2262,6 +2268,185 @@ class VideoCompose(BaseTool):
         except Exception:  # noqa: BLE001
             pass
 
+    # ------------------------------------------------------------------ #
+    #  FFmpeg `-progress` cycle parser
+    # ------------------------------------------------------------------ #
+    #
+    # ffmpeg emits progress in two interleaved streams when ``stderr=STDOUT``
+    # is in effect (which is how ``run_command``'s streaming mode works):
+    #
+    #   1. Verbose stderr — ONE line per update, terminated by ``\r`` (and
+    #      occasionally ``\n``). Each line carries MULTIPLE ``key=value``
+    #      pairs separated by spaces, e.g.
+    #      ``frame=    1 fps=0.0 q=0.0 size=       0kB time=00:00:00.00
+    #      bitrate=N/A speed=N/A``.
+    #   2. ``-progress pipe:1`` stdout — STRICT key=value pairs, ONE per
+    #      line, terminated by ``\n``, terminated-cycle-by
+    #      ``progress=continue`` / ``progress=end``.
+    #
+    # Real captured output (see burn_subtitles tests) shows verbose and
+    # -progress lines interleaved at line granularity. They share the keys
+    # ``frame`` / ``fps`` / ``size`` / ``speed``, so we cannot distinguish
+    # by key name. The cleanest signal we have is structural: verbose lines
+    # carry many ``=`` signs (one per field); -progress lines carry exactly
+    # one. ``out_time=00:00:00.000000`` is the only -progress value with a
+    # colon, and even that has exactly one ``=``.
+    _FFMPEG_PROGRESS_KEYS = frozenset({
+        "frame", "fps", "stream_0_0_q", "bitrate", "total_size",
+        "out_time_us", "out_time_ms", "out_time",
+        "dup_frames", "drop_frames", "speed", "progress",
+    })
+
+    @staticmethod
+    def _parse_ffmpeg_progress(
+        line: str, state: dict[str, str]
+    ) -> Optional[dict[str, str]]:
+        """Accumulate one ffmpeg ``-progress`` line; emit cycle dict on cycle end.
+
+        Mutates ``state`` in place. Returns the accumulated cycle dict (a
+        shallow copy) at the ``progress=continue`` / ``progress=end`` line,
+        or ``None`` otherwise. Lines outside the ``-progress`` vocabulary
+        — verbose stderr multi-pair lines, ffmpeg banner lines, libx264
+        diagnostics — are dropped.
+        """
+        line = line.strip()
+        if not line:
+            return None
+
+        # Verbose emits one line with many `=` (one per field); -progress
+        # emits one line with exactly one `=`. The discriminator is on the
+        # raw line, before partition(), so it works for `out_time=` values
+        # that contain `:` but never more than one `=`.
+        if line.count("=") != 1:
+            return None
+
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+
+        if key not in VideoCompose._FFMPEG_PROGRESS_KEYS:
+            return None
+
+        # Verbose emits `bitrate=N/A` / `speed=N/A` before the encoder has
+        # data. -progress never uses the literal `N/A` sentinel — it emits
+        # `0` or `0.0` until the metric is real. Skipping these keeps
+        # state clean for the actual encoder output that follows.
+        if val == "N/A":
+            return None
+
+        state[key] = val
+        if key == "progress":
+            cycle = dict(state)
+            state.clear()
+            return cycle
+        return None
+
+    @staticmethod
+    def _emit_ffmpeg_progress(
+        line: str,
+        state: dict[str, str],
+        progress_callback: Callable[[dict], None],
+        progress_log: Path,
+    ) -> None:
+        """Persist raw ffmpeg line + fire callback at each ``-progress`` cycle.
+
+        Side effects (file write, callback invocation) are individually
+        wrapped in try/except — a misbehaving observer must NEVER kill the
+        render, and a transient I/O error on the log file must NEVER drop a
+        progress cycle.
+        """
+        # Append raw line for post-mortem. Cheap; runs only when the caller
+        # wired the hook (which implies they're willing to pay the I/O cost).
+        try:
+            with open(progress_log, "a", encoding="utf-8") as fh:
+                fh.write(line.rstrip("\r\n") + "\n")
+        except OSError:
+            pass
+
+        cycle = VideoCompose._parse_ffmpeg_progress(line, state)
+        if cycle is None:
+            return
+
+        out_time_us = int(cycle.get("out_time_us", 0) or 0)
+        is_end = cycle.get("progress") == "end"
+        payload = {
+            "phase": "render",
+            "status": "complete" if is_end else "rendering",
+            "frame": int(cycle.get("frame", 0) or 0),
+            "fps": float(cycle.get("fps", 0) or 0),
+            "out_time_us": out_time_us,
+            "out_time_seconds": out_time_us / 1_000_000.0,
+            "speed": cycle.get("speed", ""),
+            "total_size": int(cycle.get("total_size", 0) or 0),
+            "progress_log": str(progress_log),
+            "message": (
+                f"frame={cycle.get('frame', '?')} fps={cycle.get('fps', '?')} "
+                f"out_time={cycle.get('out_time', '?')} "
+                f"speed={cycle.get('speed', '?')}"
+            ),
+        }
+        try:
+            progress_callback(payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _run_ffmpeg_with_progress(
+        self,
+        cmd: list[str],
+        progress_callback: Callable[[dict], None] | None,
+    ) -> Path | None:
+        """Run an ffmpeg subprocess with optional `-progress pipe:1` streaming.
+
+        Centralises the progress-hook wiring used by ``_burn_subtitles``,
+        ``_compose`` (final re-encode step), and ``_encode``. When
+        ``progress_callback`` is None the legacy capture_output fast path
+        is used unchanged — callers that don't need per-frame progress pay
+        no extra cost. When a callback is wired we:
+
+          1. Insert ``-progress pipe:1`` right after ``ffmpeg -y`` (or
+             ``ffmpeg``) so ffmpeg emits structured key=value cycles.
+          2. Drop any stale ``<output>.progress.log`` from a prior failed
+             run, so post-mortem is clean.
+          3. Stream every stdout line through ``_emit_ffmpeg_progress``,
+             which parses the cycle and fires the callback at
+             ``progress=continue`` / ``progress=end``.
+
+        Returns the per-call progress log path when a callback was wired
+        (and the log was written), ``None`` otherwise. Callers use the
+        returned path to decide whether to surface it in
+        ``ToolResult.artifacts``.
+        """
+        if progress_callback is None:
+            # Legacy fast path — no -progress flag, no log file.
+            self.run_command(cmd)
+            return None
+
+        progress_log = Path(cmd[-1]).with_suffix(
+            Path(cmd[-1]).suffix + ".progress.log"
+        )
+
+        # Strip any caller-supplied -progress to avoid double-add, then
+        # re-insert at the canonical position (right after "ffmpeg" + "-y",
+        # or right after "ffmpeg" if no "-y").
+        cleaned = [c for c in cmd if c not in {"-progress", "pipe:1"}]
+        insert_at = 2 if len(cleaned) >= 2 and cleaned[1] == "-y" else 1
+        final_cmd = cleaned[:insert_at] + ["-progress", "pipe:1"] + cleaned[insert_at:]
+
+        if progress_log.exists():
+            try:
+                progress_log.unlink()
+            except OSError:
+                pass
+
+        state: dict[str, str] = {}
+
+        def _on_line(line: str) -> None:
+            VideoCompose._emit_ffmpeg_progress(
+                line, state, progress_callback, progress_log
+            )
+
+        self.run_command(final_cmd, on_output=_on_line)
+        return progress_log
+
     def _stage_remotion_asset(self, source: str, idx: int, staged_dir: Path) -> str:
         """把一个本地素材拷进 per-job staging 目录，返回 public 相对路径。
 
@@ -2920,7 +3105,20 @@ class VideoCompose(BaseTool):
             return 0.0
 
     def _burn_subtitles(self, inputs: dict[str, Any]) -> ToolResult:
-        """Burn subtitle file into video."""
+        """Burn subtitle file into video.
+
+        Streams ffmpeg progress through the optional ``_progress_callback``
+        input (same convention as the Remotion render path). Each
+        ffmpeg ``-progress`` cycle (``progress=continue`` / ``progress=end``)
+        fires one callback with ``out_time_us``, ``frame``, ``fps``,
+        ``speed``, ``total_size`` plus a derived ``out_time_seconds``.
+        Without ``_progress_callback`` the legacy capture_output fast path
+        is used unchanged — callers that don't care about per-frame
+        progress pay no extra cost.
+
+        See ``_run_ffmpeg_with_progress`` for the cmd-mutation + log-file
+        + state-dict wiring that powers the hook.
+        """
         input_path = Path(inputs["input_path"])
         subtitle_path = Path(inputs["subtitle_path"])
         output_path = Path(inputs.get("output_path", str(input_path.with_stem(f"{input_path.stem}_subtitled"))))
@@ -2945,16 +3143,20 @@ class VideoCompose(BaseTool):
             str(output_path),
         ]
 
-        self.run_command(cmd)
-
-        return ToolResult(
-            success=True,
-            data={
-                "operation": "burn_subtitles",
-                "output": str(output_path),
-            },
-            artifacts=[str(output_path)],
+        progress_log = self._run_ffmpeg_with_progress(
+            cmd, inputs.get("_progress_callback")
         )
+
+        artifacts: list[str] = [str(output_path)]
+        data: dict[str, Any] = {
+            "operation": "burn_subtitles",
+            "output": str(output_path),
+        }
+        if progress_log is not None:
+            artifacts.append(str(progress_log))
+            data["progress_log"] = str(progress_log)
+
+        return ToolResult(success=True, data=data, artifacts=artifacts)
 
     def _overlay(self, inputs: dict[str, Any]) -> ToolResult:
         """Composite overlay images/videos on top of base video."""
@@ -3062,19 +3264,22 @@ class VideoCompose(BaseTool):
                 pass  # proceed without profile
 
         cmd.append(str(output_path))
-        self.run_command(cmd)
-
-        return ToolResult(
-            success=True,
-            data={
-                "operation": "encode",
-                "codec": codec,
-                "crf": crf,
-                "profile": profile_name,
-                "output": str(output_path),
-            },
-            artifacts=[str(output_path)],
+        progress_log = self._run_ffmpeg_with_progress(
+            cmd, inputs.get("_progress_callback")
         )
+
+        artifacts: list[str] = [str(output_path)]
+        data: dict[str, Any] = {
+            "operation": "encode",
+            "codec": codec,
+            "crf": crf,
+            "profile": profile_name,
+            "output": str(output_path),
+        }
+        if progress_log is not None:
+            artifacts.append(str(progress_log))
+            data["progress_log"] = str(progress_log)
+        return ToolResult(success=True, data=data, artifacts=artifacts)
 
     @staticmethod
     def _resolve_subtitle_style(
