@@ -1,262 +1,204 @@
-# User Isolation via MCP Session — OM-side review revision
+# User Isolation via MCP Session — v2 Revision
 
 > Date: 2026-09-02
-> Status: Plan v2, **under review; do not implement the old Phase 3/4 design**
-> Depends on: vclaw authenticated MCP bootstrap and immutable session ownership
+> Status: Plan v2. Phase A/B1–B3 (vclaw stage 1/2/3) **implemented and tested**. Phase C/D pending.
 > Goal: Isolate uploads, session state, projects, jobs, renders, and reads by authenticated principal from the first write.
 
 ---
 
-## Executive verdict
+## v1 → v2 corrections
 
-The original direction is sound:
+The v1 direction was right (vclaw emits trusted principal headers → OM consumes them → tools write under per-principal namespace). v2 fixes three real defects that v1 had:
 
-- WeChat Open Platform authenticates the person.
-- vclaw maps the WeChat identity to its internal `users.id` and issues a vclaw JWT.
-- vclaw is the identity authority; OM does not call WeChat or vclaw to resolve a user.
-- OM uses an authenticated principal to select a physical storage namespace.
-
-The v1 implementation plan is not safe to start. Its Phase 3 `ContextVar` design does not cross FastMCP's stateful transport boundary, and its Phase 4 file list is far smaller than the real storage surface. The plan also assumed that a bound MCP session proves the current caller's identity; it does not when requests enter through an unauthenticated raw proxy.
-
-The vclaw Phase 1 header-forwarding change may remain as preparatory work. It proves only that a header can reach OM; it does not establish user isolation.
+1. **FastMCP ContextVar does not cross ASGI task boundary.** `BearerTokenAuthMiddleware` sets `current_user_id` in the per-request ASGI task, but stateful Streamable HTTP runs tools in a per-session background task. A ContextVar set in middleware is invisible to the tool. Fix: use `Mcp-Session-Id` as the lookup key against a durable session→principal registry.
+2. **Path whitelist permits `.` / `..`.** v1's `[a-zA-Z0-9\-_.]{1,128}` accepts `.` and `..`. In practice `users.id = newID()` never produces them so the collision risk is zero, but it's a theoretical hole. Fix: derive `namespace_key = HMAC(secret, principal_id)`. The output has no `.`, no separator, no leading char class issue.
+3. **Phase 4 file list was incomplete.** v1 estimated "~150 lines" based on the few write paths I had spotted. Reality is a cross-cutting workspace migration that touches every reader/writer/job/render code path that names `projects/`. Fix: a single `PrincipalResolver` + namespace-aware `ProjectWorkspace` used everywhere.
 
 ---
 
-## Authentication contract
+## What's already shipped (compatible with v2)
 
-### User principal
+| Stage | Commit | What it does |
+|---|---|---|
+| A1 (vclaw stage 1) | `f3b775d` | `MCPProxyHandler` forwards `X-VClaw-User-Id`; `MCPRawProxyHandler` looks up session → user binding in `mcp_sessions` table and forwards the header |
+| A2 (vclaw stage 2) | `d7b70bb` | `MCPRawProxyHandler` rejects unbound sessions with 401 SESSION_NOT_BOUND; DB errors → 500 SESSION_LOOKUP_FAILED; missing session id → allowed (handshake) |
+| B1 (OM stage 3) | `242940e` | `BearerTokenAuthMiddleware` reads `x-vclaw-user-id` header → `_user_id_ctx` ContextVar (only after MCP_API_TOKEN passes); 20 ASGI unit tests |
 
-The supported user flow is:
-
-1. User completes WeChat Open Platform QR authentication.
-2. vclaw validates the OAuth transaction and maps `openid/unionid` to internal `users.id`.
-3. Claw Studio exchanges the approved device login for a short-lived vclaw JWT and an opaque refresh token.
-4. The JWT contains verified `uid`, `tid`, `did`, and scopes including `mcp:use`.
-5. Every desktop MCP request enters vclaw's JWT-protected `/api/mcp/proxy`.
-6. vclaw validates the JWT and session owner, strips client-supplied internal identity headers, then emits trusted OM headers.
-
-WeChat access tokens, openids, and unionids must never be OM storage identities. OM receives only the vclaw internal principal.
-
-### Service principal
-
-Service calls are a separate identity class:
-
-- They authenticate to vclaw with an explicit service credential.
-- vclaw emits `principal_kind=service` plus a stable service id.
-- OM writes service data under `projects/services/<service_namespace_key>/...`.
-- An unauthenticated raw caller must never receive vclaw's shared upstream `MCP_API_TOKEN` as an automatic fallback.
-
-### Suggested internal headers
-
-- `X-VClaw-Principal-Kind: user | service`
-- `X-VClaw-User-Id: <users.id>` for users
-- `X-VClaw-Tenant-Id: <tenants.id>` when tenant policy is required
-- `X-VClaw-Service-Id: <stable service id>` for services
-
-OM may trust these headers only when the request is authenticated as coming from vclaw. A valid shared token alone does not prove that an arbitrary user id is legitimate if other clients know that token or can reach OM directly.
-
-OM currently binds FastMCP to all interfaces (`host="::"`). Production must bind the internal MCP listener to loopback/private infrastructure, enforce a firewall or mTLS-equivalent boundary, and expose only vclaw's authenticated entry point to desktop users.
+These already match v2's intent. Phase C must extend them with the durable registry path; nothing is invalidated.
 
 ---
 
-## MCP session bootstrap
+## Phase plan
 
-The old “raw first, bind later with a warm-up call” sequence is rejected.
+| Phase | Scope | Repo | Done? |
+|---|---|---|---|
+| **A** | vclaw JWT scopes + tenant-preserving refresh + initialize binds session | vclaw | yes |
+| **B** | OM trusted-proxy boundary + durable `session_id → principal` registry | OM | partial (ContextVar only) |
+| **C** | Central `PrincipalResolver` + `namespace_key = HMAC(...)` + full audit of every read/write/path | OM | pending |
+| **D** | Legacy migration + strict enforcement + remove unsafe compatibility paths | OM | pending |
 
-Required sequence:
-
-1. Claw Studio sends `initialize` through `/api/mcp/proxy` with a valid vclaw JWT. No `Mcp-Session-Id` exists yet.
-2. OM returns a new `Mcp-Session-Id`.
-3. vclaw atomically binds that response session id to the JWT `uid` before returning it to the client.
-4. Every later request validates JWT and verifies that the supplied session belongs to the same `uid`.
-5. vclaw sends the trusted principal headers on every forwarded request.
-6. OM immutably binds the session to that principal. A conflicting rebind is a security error.
-
-An MCP session id is an affinity/correlation identifier, not a replacement for user authentication.
+Phase B in v2 is a superset of OM stage 3: keep the ContextVar as a fast-path cache, add the durable registry as the authoritative source.
 
 ---
 
-## Critical FastMCP propagation constraint
+## Phase B — durable session→principal registry
 
-Do not implement user identity as only a `ContextVar` set by `BearerTokenAuthMiddleware`.
+**Why**: A `ContextVar` set in middleware does not reach the FastMCP tool execution context. We need a registry that the tool can consult via the session id it already has.
 
-The current source already documents the failure mode: stateful Streamable HTTP executes tools inside a per-session background task, not the per-request ASGI task. A ContextVar created in middleware does not naturally reach the tool. The existing MCP session id works because `mcp_server.py` patches `StreamableHTTPServerTransport.connect()` and sets the session ContextVar inside the background task.
+**Module**: `lib/principal_registry.py` (new). API:
 
-An ASGI test that observes `current_user_id()` inside the downstream ASGI app is insufficient. It can pass while real MCP tools still see no user.
+```python
+@dataclass(frozen=True)
+class Principal:
+    kind: Literal["user", "service"]
+    principal_id: str         # users.id or service_id
+    tenant_id: str | None
+    namespace_key: str        # HMAC(secret, principal_id)
 
-### Revised principal propagation
-
-Use the reliable session id as the lookup key:
-
-1. The authenticated OM request layer validates and sanitizes vclaw's principal headers.
-2. When the request carries `Mcp-Session-Id`, bind `session_id → principal` in an immutable principal registry.
-3. At tool execution, call the already-working `get_mcp_session_id()` and resolve the principal from that registry.
-4. Reject missing principals for user-required tools and reject all owner conflicts.
-5. Copy immutable `principal_kind` and `namespace_key` into every durable background job record.
-
-A process-local dict is insufficient for multi-worker deployments and restart recovery. Use SQLite, locked durable state, or another process-shared store. Bindings must have lifecycle/expiry cleanup and must never log raw session ids.
-
----
-
-## Input and path safety
-
-The v1 validation `[a-zA-Z0-9\-_.]{1,128}` is not safe for a path segment because `.` and `..` pass it.
-
-Preferred approach:
-
-```text
-user_namespace_key = stable encoded HMAC(storage_namespace_secret, users.id)
-service_namespace_key = stable encoded HMAC(storage_namespace_secret, service_id)
+def bind(session_id: str, principal: Principal) -> None
+def lookup(session_id: str) -> Principal | None
+def require(session_id: str) -> Principal  # raises when missing
 ```
 
-Recommended layout:
+**Storage**: SQLite table (mirrors `mcp_sessions` pattern in vclaw). Multi-worker safe via the existing fcntl-fallback pattern in `lib/workbuddy_session.py` (Windows fallback: retry on `os.replace` PermissionError, document the gap).
 
-```text
+**Lifecycle**:
+- OM middleware calls `bind(session_id, principal)` after MCP_API_TOKEN check + sanitised header read.
+- Tool execution calls `require(get_mcp_session_id())` and gets the principal back.
+- Session timeout (already enforced by vclaw stage 2) → binding expires.
+
+**Header contract** (already in place from vclaw stage 1/2 + OM stage 3):
+
+| Header | Set when | Value |
+|---|---|---|
+| `X-VClaw-User-Id` | user principal | `<users.id>` |
+| (future) `X-VClaw-Principal-Kind` | both | `user \| service` |
+| (future) `X-VClaw-Service-Id` | service principal | `<stable service id>` |
+
+For now we only have user header in production; service principal is a v2.1 addition.
+
+---
+
+## Phase C — `PrincipalResolver` + namespace_key + full audit
+
+**Abstractions** (the v2 contract for every read/write):
+
+```python
+@dataclass(frozen=True)
+class Principal:
+    kind: Literal["user", "service"]
+    principal_id: str
+    tenant_id: str | None
+    namespace_key: str
+
+@dataclass
+class ProjectWorkspace:
+    principal: Principal
+    project_id: str
+    root: Path
+    assets: Path
+    artifacts: Path
+    renders: Path
+    checkpoints: Path
+    session_state: Path
+    upload_state: Path
+```
+
+**Layout**:
+
+```
 projects/
-  users/<user_namespace_key>/<project_id>/...
-  services/<service_namespace_key>/<project_id>/...
-  _system/identity_sessions/...
+    users/<user_namespace_key>/<project_id>/assets/
+    users/<user_namespace_key>/<project_id>/artifacts/
+    users/<user_namespace_key>/<project_id>/renders/
+    users/<user_namespace_key>/<project_id>/checkpoints/
+    services/<service_namespace_key>/<project_id>/...
+    _system/identity_sessions/<session_id>.json
 ```
 
-If raw ids are ever used as path segments:
+**Audit checklist** (every file that names `projects/` MUST be migrated):
 
-- require an alphanumeric first character;
-- allow only the minimum character set, preferably `[A-Za-z0-9_-]`;
-- reject `.`, `..`, reserved system directory names, separators, whitespace, and overlong values;
-- resolve the final path and prove it remains below the selected namespace root.
+- `lib/workbuddy_session.py` — `_state_path`, session lock, global job index, render status lookup, orphan recovery
+- `tools/asset_upload_chunk.py` — `projects/.uploads` state, `.part` files, upload-id/session ownership, final asset paths
+- `tools/asset_upload.py` + every reader
+- `mcp_server.py` — upload tools, `read_session_asset`, `create_remotion_video_share`, status / SSE / share paths, render dispatch, durable background records
+- Render queues, job registries, startup re-dispatch, retry, cancellation
+- Pipeline workspace init, checkpoints, artifacts, renders, publish logs
+- Backlot project discovery / open / history
+- Web/BFF project, thumbnail, download APIs
+- Cleanup, expiry, migration, backup, rollback logic
+- Every tool that joins `projects/` or accepts an output path
 
-MCP arguments such as `caller_id` or `user_id` must never override the authenticated principal. For compatibility they may only be accepted when equal to the verified principal; otherwise reject the call.
+**`read_session_asset` must independently verify the requested resolved path stays inside the current principal's namespace**. BFF whitelisting is not a security boundary.
 
 ---
 
-## Storage resolver requirement
+## Phase D — Legacy migration + strict enforcement
 
-Do not scatter `projects / user_id / ...` string changes across tools. Introduce one resolver used by all readers and writers, for example:
+**Why mandatory**: the path change is not additive. Existing Backlot / checkpoint / reader / job-recovery won't discover nested workspaces without resolver support.
 
-```text
-Principal(kind, user_id, tenant_id, service_id, namespace_key)
-ProjectWorkspace(principal, project_id)
-  .root
-  .assets
-  .artifacts
-  .renders
-  .checkpoints
-  .session_state
-  .upload_state
-```
+Requirements:
 
-Authorization uses original `uid/tid`; `namespace_key` is only a filesystem key.
-
-If tenant collaboration is required, select and document the policy before implementation. A possible structure is `projects/tenants/<tenant_key>/users/<user_key>/<project_id>`, but user-private and tenant-shared assets must remain explicit rather than inferred from path shape.
-
----
-
-## Mandatory full audit
-
-The v1 file list was illustrative, not implementation-complete. At minimum audit and migrate:
-
-- `lib/workbuddy_session.py`
-  - session state paths;
-  - cross-process locks;
-  - global job index;
-  - render status lookup and orphan recovery.
-- `tools/asset_upload_chunk.py`
-  - global `projects/.uploads` state and `.part` files;
-  - upload-id/session ownership;
-  - final asset paths.
-- `tools/asset_upload.py` and every asset reader.
-- `mcp_server.py`
-  - upload tools;
-  - `read_session_asset`;
-  - `create_remotion_video_share`;
-  - status/SSE/share paths;
-  - render dispatch and durable background records.
-- Render queues, job registries, startup re-dispatch, retry and cancellation.
-- Pipeline workspace initialization, checkpoints, artifacts, renders, publish logs.
-- Backlot project discovery/open/history behavior.
-- Web/BFF project, thumbnail, and download APIs.
-- Cleanup, expiry, migration, backup, and rollback logic.
-- Every tool that directly joins `projects/` or accepts an output path.
-
-`read_session_asset` must independently verify that the requested resolved path is inside the current principal's namespace. BFF-side whitelisting alone is not a security boundary.
-
-The repository currently has many Python files referencing `projects/`; Phase 4 is a cross-cutting workspace migration, not an approximately 150-line tool patch.
+1. Feature flag `USER_NAMESPACE_V2`. Default off; new sessions write v2 only.
+2. Namespace version is fixed at session/job creation; restart recovery is deterministic.
+3. Legacy sessions during the bounded migration window may use an owner-verified legacy resolver. Raw unauthenticated calls must NOT be able to read legacy data.
+4. Durable jobs store namespace version + key so restart recovery works.
+5. Backup `projects/.mcp_sessions/` before cleanup; do not `rm` outright.
+7. A rollback build must understand existing v2 paths. Otherwise rollback needs data migration and is not one-commit revert.
 
 ---
 
 ## Compatibility policy
 
-The old documents contradicted each other about service-token behavior. This revision defines it explicitly:
-
 | Principal | User header | Required namespace | User-only tools |
-|---|---:|---|---|
-| Authenticated user | yes | `projects/users/<key>/...` | allowed |
-| Authenticated service | no user id; stable service id required | `projects/services/<key>/...` | denied unless explicitly supported |
-| Missing/unknown principal | no | none | denied before filesystem access |
+|---|---|---|---|
+| Authenticated user | yes | `projects/users/<HMAC(uid)>/...` | allowed |
+| Authenticated service | no user id; service id required | `projects/services/<HMAC(sid)>/...` | denied unless explicitly supported |
+| Missing / unknown principal | no | (none) | denied before filesystem access |
 
-No implicit fallback to `projects/<project_id>` is allowed once strict isolation is enabled.
-
----
-
-## Migration and rollback
-
-The path change is not automatically additive. Existing Backlot, checkpoint, reader, and job-recovery code will not discover nested workspaces without resolver support.
-
-Required migration controls:
-
-- Feature flag such as `USER_NAMESPACE_V2`.
-- Namespace version fixed when a session/job is created.
-- New sessions write only v2 paths.
-- Legacy sessions may use an owner-verified legacy resolver during a bounded migration window.
-- Prefer legacy-read/new-write behavior; never write the same job to both layouts.
-- Durable jobs store namespace version and key so restart recovery is deterministic.
-- Inventory and back up legacy session metadata before cleanup; do not simply delete `projects/.mcp_sessions`.
-- A rollback build must understand existing v2 paths. Otherwise rollback requires a data migration and is not a one-commit revert.
+**No implicit fallback to `projects/<project_id>/` is allowed** once strict isolation is enabled (Phase D).
 
 ---
 
-## Revised delivery phases
+## Test requirements (v2)
 
-| Phase | Scope | Independent release? | Exit criteria |
-|---|---|---:|---|
-| A | vclaw/Studio JWT scopes, tenant-preserving refresh, authenticated endpoint, initialize-response session bind | No; client + control plane coordinated | Full QR login can initialize MCP; every later call validates JWT and owner |
-| B | OM trusted-proxy boundary and durable immutable session→principal registry | No; integrate with A | Real MCP tool resolves principal across transport, worker, and restart boundaries |
-| C | Central storage resolver, user/service namespaces, complete read/write/job/Backlot audit behind flag | No; integrate with B | Two users with same project id cannot cross read/write/status paths |
-| D | Legacy migration, strict enforcement, removal of unsafe compatibility paths | Yes, after A–C | Production canary, audit review, and rollback drill pass |
+### Auth + bootstrap
+- Real WeChat QR callback → approved device login → JWT exchange
+- JWT contains correct `uid/tid/did/mcp:use`
+- Refresh preserves `uid/tid/scopes`
+- Authenticated `initialize` without session succeeds; response session atomically bound
+- User A presenting user B's session is rejected
+- Missing / expired / forged / wrong-audience JWT rejected
+- Raw MCP without service credential rejected and never contacts OM
 
-Do not describe Phase 1 header injection as functional isolation. Do not start the old middleware-only Phase 3.
-
----
-
-## Required tests
-
-### Authentication and bootstrap
-
-- Real WeChat QR callback → approved device login → JWT exchange.
-- JWT contains correct `uid/tid/did/mcp:use`.
-- Refresh preserves `uid/tid/scopes`.
-- Authenticated `initialize` without a session succeeds and response session is bound atomically.
-- User A presenting user B's session is rejected before OM forwarding.
-- Missing, expired, forged, wrong-audience JWT is rejected.
-- Raw MCP without a service credential is rejected and does not contact OM.
-
-### OM transport and storage
-
-- Full Streamable HTTP lifecycle: initialize → session-bearing request → real tool execution.
-- Tool background task resolves the principal; an ASGI-only assertion does not count.
-- Two users upload the same filename under the same project id; every physical path is disjoint.
-- Conflicting session rebind is rejected and security-logged.
-- Forged identity header and direct OM access are rejected.
-- `.`, `..`, reserved names, separators, and overlong ids are rejected.
-- Upload temp state, session state, locks, job index, render output, status, SSE, read and cleanup remain isolated.
-- Service principal uses only its service namespace.
-- Multi-thread, multi-process, restart, retry, cancellation and job re-dispatch retain the correct principal.
-- Legacy-to-v2 migration and rollback drill pass.
+### OM transport + storage
+- Full Streamable HTTP lifecycle: initialize → session-bearing request → real tool execution
+- **Tool background task resolves the principal** — an ASGI-only assertion does NOT count
+- Two users upload the same filename under the same project id; every physical path is disjoint
+- Conflicting session rebind rejected and security-logged
+- Forged identity header + direct OM access rejected
+- `.` / `..` / reserved names / separators / overlong ids rejected
+- Upload temp state, session state, locks, job index, render output, status, SSE, read, cleanup all isolated
+- Service principal uses only its service namespace
+- Multi-thread / multi-process / restart / retry / cancel / job re-dispatch keep the correct principal
+- Legacy → v2 migration + rollback drill pass
 
 ---
 
-## Final decision
+## Implementation priority
 
-WeChat Open Platform authentication and JWT-based MCP authorization are compatible and already mostly present in vclaw. OM should not validate WeChat or desktop JWTs itself. vclaw must authenticate every user request, bind the OM session to the JWT user during initialization, and emit a trusted internal principal. OM must resolve that principal through a durable session registry at tool execution and route all I/O through one namespace-aware workspace resolver.
+1. Phase A — done ✅
+2. Phase B — main work in OM (durable registry)
+3. Phase C — cross-cutting, biggest
+4. Phase D — deployment
 
-Until those transport and storage changes pass end-to-end tests, a forwarded header or middleware-visible ContextVar is not evidence of user isolation.
+Every phase independently rollbackable.
+
+---
+
+## Cross-references
+
+- vclaw repo: `docs/user-isolation-via-mcp-session.md`
+- vclaw stage 1 commit: `f3b775d`
+- vclaw stage 2 commit: `d7b70bb`
+- OM stage 3 commit: `242940e`
