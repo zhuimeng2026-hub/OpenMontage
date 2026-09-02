@@ -191,6 +191,60 @@ from lib.web_auth_app import build_web_mount
 
 
 # ---------------------------------------------------------------------------
+# VClaw user-id ContextVar (Phase 3 of user isolation via MCP session)
+# ---------------------------------------------------------------------------
+# vclaw is the source of truth for user identity and emits an opaque
+# ``X-VClaw-User-Id`` header on every MCP request it proxies. OM trusts the
+# header after the shared ``MCP_API_TOKEN`` has been validated — see
+# ``BearerTokenAuthMiddleware.__call__`` for the gating. Phase 4 will read
+# ``current_user_id()`` from inside tools to physically isolate per-user
+# assets/sessions/render outputs.
+_user_id_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "vclaw_user_id", default=None
+)
+
+# Allow-list matches vclaw's internal ``users.id`` shape: opaque token,
+# ~32 chars, charset [a-zA-Z0-9._-]. Any character outside the set is
+# silently dropped (with a warning) — never raise on a malformed header,
+# because that would let a hostile header block legitimate traffic.
+_user_id_ok = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+_max_user_id_len = 128
+
+
+def current_user_id() -> Optional[str]:
+    """Return the ``X-VClaw-User-Id`` value bound to the current request, or
+    ``None`` if the request was service-token (no user attribution).
+
+    Available to tool implementations starting in Phase 4. Never raise.
+    """
+    return _user_id_ctx.get()
+
+
+def _sanitize_vclaw_user_id(raw: bytes) -> Optional[str]:
+    """Validate and normalize a raw ``X-VClaw-User-Id`` header value.
+
+    Returns the cleaned string on success, or ``None`` for any of:
+      - non-ASCII bytes (cannot decode as ascii)
+      - empty after strip
+      - longer than ``_max_user_id_len`` characters
+      - any character outside ``_user_id_ok``
+
+    Must never raise — bad header values must not block otherwise valid
+    requests.
+    """
+    try:
+        s = raw.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    if not s or len(s) > _max_user_id_len:
+        return None
+    for ch in s:
+        if ch not in _user_id_ok:
+            return None
+    return s
+
+
+# ---------------------------------------------------------------------------
 # Session-id propagation fix (streamable-http, stateful transport)
 # ---------------------------------------------------------------------------
 # FastMCP's stateful StreamableHTTP runs *every* tool call for a session inside a
@@ -2765,6 +2819,22 @@ class BearerTokenAuthMiddleware:
             return await self._reject(scope, _receive, send)
 
         _log.info("Auth OK: %s:%s", client_host, client_port)
+        # X-VClaw-User-Id — opt-in user attribution emitted by vclaw (Phase 1).
+        # Only set after MCP_API_TOKEN check passed; bad values are dropped
+        # with a warning rather than raised, so a malformed header can never
+        # block an otherwise-valid request.
+        raw_uid = headers.get(b"x-vclaw-user-id", b"")
+        uid_token = None
+        if raw_uid:
+            sanitized = _sanitize_vclaw_user_id(raw_uid)
+            if sanitized:
+                uid_token = _user_id_ctx.set(sanitized)
+                _log.info("vclaw user id attached: %s...", sanitized[:8])
+            else:
+                _log.warning(
+                    "vclaw user id rejected: raw_len=%d preview=%r",
+                    len(raw_uid), raw_uid[:32],
+                )
         session_id = request_session
         session_token = set_mcp_session_id(session_id)
         request_token = set_mcp_request_id(request_id)
@@ -2773,6 +2843,8 @@ class BearerTokenAuthMiddleware:
         finally:
             reset_mcp_request_id(request_token)
             reset_mcp_session_id(session_token)
+            if uid_token is not None:
+                _user_id_ctx.reset(uid_token)
 
     @staticmethod
     async def _reject(scope, receive, send):

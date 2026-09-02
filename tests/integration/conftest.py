@@ -71,6 +71,11 @@ def voicebox_base_url() -> str:
 @pytest.fixture(scope="session")
 def voicebox_available(voicebox_base_url: str) -> str:
     """Skip the test if voicebox isn't running. Returns the base URL on success."""
+    if os.environ.get("MCP_TEST_SKIP_VOICEBOX_FIXTURES") == "1":
+        # Bypass for pure unit tests in this directory that don't touch
+        # voicebox at all. Returning the URL is harmless — downstream
+        # fixtures either don't fire or skip their own work.
+        return voicebox_base_url
     try:
         resp = requests.get(f"{voicebox_base_url}/health", timeout=VOICEBOX_HEALTH_TIMEOUT_S)
     except requests.RequestException as exc:
@@ -189,10 +194,7 @@ def _cleanup_profiles(voicebox_available: str, created_profile_ids: list[str]) -
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session", autouse=True)
-def shared_clone_profile(
-    voicebox_available: str,
-    sample_audio: Path,
-) -> dict[str, Any]:
+def shared_clone_profile(request) -> dict[str, Any]:
     """One cloned voice profile shared across all TTS tests in the session.
 
     Voice cloning is the slow path on voicebox (model loading + sample
@@ -206,7 +208,21 @@ def shared_clone_profile(
     first text_to_speech test in the session burns the entire TTS
     timeout on Qwen's model load (1.7B model on first use). Pre-warming
     keeps the TTS tests bounded even on cold voicebox installs.
+
+    Bypass: tests that don't need voicebox (e.g. pure ASGI middleware
+    tests) can set ``MCP_TEST_SKIP_VOICEBOX_FIXTURES=1`` in their module
+    top-level before this fixture runs, and we'll yield an empty dict
+    instead of probing voicebox. Default behaviour is unchanged.
+
+    Voicebox fixtures are resolved lazily via ``getfixturevalue`` so the
+    env-var short-circuit runs *before* voicebox is probed; declaring them
+    as function parameters would force the probe to happen first.
     """
+    if os.environ.get("MCP_TEST_SKIP_VOICEBOX_FIXTURES") == "1":
+        yield {}
+        return
+    voicebox_available = request.getfixturevalue("voicebox_available")
+    sample_audio = request.getfixturevalue("sample_audio")
     name = f"pytest-shared-{uuid.uuid4().hex[:8]}"
     create_resp = requests.post(
         f"{voicebox_available}/profiles",
