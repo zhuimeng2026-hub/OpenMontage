@@ -28,6 +28,10 @@ from __future__ import annotations
 import os
 import sys
 import types
+import hashlib
+import hmac
+import time
+import uuid
 
 # Set BEFORE pytest's conftest fixtures are evaluated so this module's tests
 # don't pull voicebox into the session. tests/integration/conftest.py has an
@@ -35,6 +39,7 @@ import types
 # /health; this module never uses voicebox (it tests a pure ASGI middleware)
 # so we tell the conftest fixture to short-circuit.
 os.environ.setdefault("MCP_TEST_SKIP_VOICEBOX_FIXTURES", "1")
+os.environ.setdefault("OPENMONTAGE_VCLAW_ASSERTION_SECRET", "integration-assertion-secret")
 
 import pytest
 
@@ -94,6 +99,18 @@ class _SendCollector:
 
 
 def _make_scope(headers: list[tuple[bytes, bytes]], path: str = "/mcp") -> dict:
+    header_map = dict(headers)
+    uid = header_map.get(b"x-vclaw-user-id")
+    if uid and b"x-vclaw-user-assertion" not in header_map:
+        try:
+            user = uid.decode("ascii")
+            stamp = int(time.time())
+            nonce = uuid.uuid4().hex
+            canonical = "\n".join(("v1", user, str(stamp), nonce, "GET", path, "", hashlib.sha256(b"").hexdigest()))
+            sig = hmac.new(os.environ["OPENMONTAGE_VCLAW_ASSERTION_SECRET"].encode(), canonical.encode(), hashlib.sha256).hexdigest()
+            headers = list(headers) + [(b"x-vclaw-user-assertion", f"v1.{stamp}.{nonce}.{sig}".encode())]
+        except (UnicodeDecodeError, KeyError):
+            pass
     return {
         "type": "http",
         "method": "GET",
@@ -141,6 +158,112 @@ async def test_user_id_header_attached_when_token_valid() -> None:
     # Cleanup must restore the default — otherwise a leaked ContextVar would
     # leak the previous request's user id into the next request.
     assert mcp_server.current_user_id() is None
+
+
+@pytest.mark.asyncio
+async def test_shared_bearer_cannot_forge_user_header() -> None:
+    """A direct MCP bearer caller must not claim a vclaw user identity."""
+    mw = mcp_server.BearerTokenAuthMiddleware(app=None, token="secret-token")
+    scope = {
+        **_make_scope([
+            (b"authorization", b"Bearer secret-token"),
+            (b"x-vclaw-user-id", b"alice_42"),
+        ]),
+        "headers": [
+            (k, v) for k, v in _make_scope([
+                (b"authorization", b"Bearer secret-token"),
+                (b"x-vclaw-user-id", b"alice_42"),
+            ])["headers"] if k != b"x-vclaw-user-assertion"
+        ],
+    }
+    inner, send = await _run_middleware(mw, scope)
+    assert not inner.invoked
+    assert send.starts[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_user_assertion_nonce_cannot_be_replayed() -> None:
+    mw = mcp_server.BearerTokenAuthMiddleware(app=None, token="secret-token")
+    scope = _make_scope([
+        (b"authorization", b"Bearer secret-token"),
+        (b"x-vclaw-user-id", b"alice_42"),
+    ])
+    first, first_send = await _run_middleware(mw, scope)
+    second, second_send = await _run_middleware(mw, scope)
+    assert first.invoked and first_send.starts[0]["status"] == 200
+    assert not second.invoked and second_send.starts[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_user_assertion_expired_or_secret_missing_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mw = mcp_server.BearerTokenAuthMiddleware(app=None, token="secret-token")
+    scope = _make_scope([
+        (b"authorization", b"Bearer secret-token"),
+        (b"x-vclaw-user-id", b"alice_42"),
+    ])
+    # Replace the otherwise valid assertion with a stale timestamp while
+    # retaining the signed shape; verifier must reject before app dispatch.
+    headers = [(k, v) for k, v in scope["headers"] if k != b"x-vclaw-user-assertion"]
+    headers.append((b"x-vclaw-user-assertion", b"v1.1.stale_nonce_123456.00" + b"0" * 62))
+    scope["headers"] = headers
+    inner, send = await _run_middleware(mw, scope)
+    assert not inner.invoked and send.starts[0]["status"] == 401
+
+    valid_scope = _make_scope([
+        (b"authorization", b"Bearer secret-token"),
+        (b"x-vclaw-user-id", b"alice_42"),
+    ])
+    monkeypatch.delenv("OPENMONTAGE_VCLAW_ASSERTION_SECRET", raising=False)
+    inner, send = await _run_middleware(mw, valid_scope)
+    assert not inner.invoked and send.starts[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_malformed_session_header_rejected() -> None:
+    mw = mcp_server.BearerTokenAuthMiddleware(app=None, token="secret-token")
+    scope = _make_scope([
+        (b"authorization", b"Bearer secret-token"),
+        (b"mcp-session-id", b"\xff"),
+    ])
+    inner, send = await _run_middleware(mw, scope)
+    assert not inner.invoked
+    assert send.starts[0]["status"] == 400
+
+
+@pytest.mark.asyncio
+async def test_duplicate_identity_header_rejected() -> None:
+    mw = mcp_server.BearerTokenAuthMiddleware(app=None, token="secret-token")
+    scope = _make_scope([
+        (b"authorization", b"Bearer secret-token"),
+        (b"x-vclaw-user-id", b"alice_42"),
+        (b"x-vclaw-user-id", b"alice_42"),
+    ])
+    inner, send = await _run_middleware(mw, scope)
+    assert not inner.invoked
+    assert send.starts[0]["status"] == 400
+
+
+@pytest.mark.asyncio
+async def test_existing_user_session_requires_assertion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lib.principal_registry import Principal
+
+    monkeypatch.setattr(
+        mcp_server._principal_registry,
+        "lookup",
+        lambda _sid: Principal(kind="user", principal_id="alice_42"),
+    )
+    mw = mcp_server.BearerTokenAuthMiddleware(app=None, token="secret-token")
+    scope = _make_scope([
+        (b"authorization", b"Bearer secret-token"),
+        (b"mcp-session-id", b"session-alice"),
+    ])
+    inner, send = await _run_middleware(mw, scope)
+    assert not inner.invoked
+    assert send.starts[0]["status"] == 401
 
 
 @pytest.mark.asyncio
@@ -228,13 +351,11 @@ async def test_user_id_sanitization_rejects_invalid(label: str, bad_value: bytes
     ])
     inner, send = await _run_middleware(mw, scope)
 
-    assert inner.invoked, (
-        f"case {label!r}: bad header must not block an otherwise-valid request"
-    )
-    assert inner.captured_user_id is None, (
-        f"case {label!r}: sanitized value leaked into ContextVar"
-    )
-    assert send.starts[0]["status"] == 200
+    if label == "empty":
+        assert inner.invoked and send.starts[0]["status"] == 200
+    else:
+        assert not inner.invoked, f"case {label!r}: malformed identity must fail closed"
+        assert send.starts[0]["status"] == 401
     assert mcp_server.current_user_id() is None
 
 
@@ -275,10 +396,10 @@ def test_sanitize_returns_none_for_empty_bytes() -> None:
     assert mcp_server._sanitize_vclaw_user_id(b"") is None
 
 
-def test_sanitize_strips_surrounding_whitespace() -> None:
+def test_sanitize_rejects_surrounding_whitespace() -> None:
     # The allow-list rejects internal whitespace, but leading/trailing
     # whitespace must be stripped before checking the charset.
-    assert mcp_server._sanitize_vclaw_user_id(b"  alice_42  ") == "alice_42"
+    assert mcp_server._sanitize_vclaw_user_id(b"  alice_42  ") is None
 
 
 def test_sanitize_does_not_raise_on_garbage() -> None:

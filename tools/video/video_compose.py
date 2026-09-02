@@ -42,6 +42,7 @@ from tools.base_tool import (
     ToolStability,
     ToolTier,
 )
+from lib import paths as lib_paths
 
 
 import os
@@ -60,7 +61,8 @@ def _asset_abs_path(asset: dict, default: str = "") -> str:
     rel = asset.get("relative_path")
     if rel:
         p = Path(rel)
-        return str(p if p.is_absolute() else (_REPO_ROOT / rel))
+        repo_root = Path(lib_paths.PROJECTS_DIR).resolve().parent
+        return str(p if p.is_absolute() else (repo_root / rel))
     ap = asset.get("path")
     if ap:
         return str(ap)

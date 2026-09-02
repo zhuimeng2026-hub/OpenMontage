@@ -50,7 +50,12 @@ def _lock_for(digest: str) -> threading.RLock:
 # would otherwise race on _read / _write / register_image, and the chunked
 # upload dedup path in ``asset_upload_chunk.py`` can also delete files based
 # on stale canonical metadata.
-_LOCK_DIR = STATE_DIR / ".locks"
+_LOCK_DIR = STATE_DIR / ".locks"  # compatibility alias; use _lock_dir() below
+
+
+def _lock_dir() -> Path:
+    """Return the lock directory for the current (possibly patched) state root."""
+    return Path(STATE_DIR) / ".locks"
 
 
 @contextmanager
@@ -60,8 +65,9 @@ def _flock_for(digest: str) -> Iterator[None]:
     Falls back to a no-op on platforms without fcntl.flock (Windows) so the
     import doesn't break dev workflows; the in-process RLock still applies.
     """
-    _LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    lock_path = _LOCK_DIR / f"{digest}.lock"
+    lock_dir = _lock_dir()
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"{digest}.lock"
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
         try:

@@ -5,6 +5,9 @@ dict, so these tests assert on ``ImageContent`` (type/mimeType/base64) rather
 than on ``data["data_base64"]`` — including one end-to-end check through
 FastMCP's own ``_convert_to_content``, which is the code path that decides
 whether a client renders an image or dumps base64 text.
+
+Phase C: the fixture also stubs ``mcp_server.current_principal`` and test
+paths follow the new ``projects/users/<ns>/<project_id>/...`` layout.
 """
 import base64
 
@@ -16,6 +19,8 @@ try:  # mcp >= 1.9 moved the converter into func_metadata; prod venv is 1.29.
 except ImportError:  # mcp 1.8 keeps it in fastmcp.server.
     from mcp.server.fastmcp.server import _convert_to_content  # type: ignore[no-redef]
 
+from lib import paths as lib_paths
+from lib.principal_registry import Principal
 from tools.asset import read_session_asset as rsa
 from tools.asset.read_session_asset_image import ReadSessionAssetImage, _max_image_bytes
 
@@ -27,6 +32,11 @@ PNG_BYTES = bytes.fromhex(
 
     "0d0a2db40000000049454e44ae426082"
 )
+
+
+_PRINCIPAL = Principal(kind="user", principal_id="asset-image-reader-test")
+_NS_KEY = _PRINCIPAL.namespace_key
+_PROJECT_ID = "probe"
 
 
 @pytest.fixture
@@ -43,12 +53,37 @@ def fake_projects_root(monkeypatch, tmp_path):
     which reads ``_REPO_ROOT`` / ``_PROJECTS_ROOT`` from the
     ``read_session_asset`` module globals — patching them there covers the
     new tool too, and guarantees both tools share one containment rule.
+    The Phase C Layer-3 (per-principal) check needs a bound principal; we
+    stub ``mcp_server.current_principal`` here so the namespace_key
+    boundary is exercised against a deterministic user.
+
+    Phase C: also patch ``lib.paths.PROJECTS_DIR`` — Layer 3 reads it
+    via ``ProjectWorkspace.for_current_principal`` and would otherwise
+    see the real production projects tree.
     """
     fake_root = (tmp_path / "repo").resolve()
     (fake_root / "projects").mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(rsa, "_REPO_ROOT", fake_root)
     monkeypatch.setattr(rsa, "_PROJECTS_ROOT", (fake_root / "projects").resolve())
+    monkeypatch.setattr(lib_paths, "PROJECTS_DIR", (fake_root / "projects").resolve())
+    import mcp_server
+    monkeypatch.setattr(mcp_server, "current_principal", lambda: _PRINCIPAL)
     return fake_root
+
+
+def _user_path(rel: str) -> str:
+    """Rewrite ``projects/<id>/...`` into the Phase C per-principal layout.
+
+    Inputs like ``projects/probe/assets/_sessions/abc/photo.png`` already
+    carry the project id (``probe``); we only need to insert the
+    ``users/<namespace_key>/`` segment between ``projects/`` and the
+    project id.
+    """
+    if rel.startswith("projects/"):
+        suffix = rel[len("projects/"):]
+    else:
+        suffix = rel
+    return f"projects/users/{_NS_KEY}/{suffix}"
 
 
 def _write(fake_root, rel, payload):
@@ -59,7 +94,7 @@ def _write(fake_root, rel, payload):
 
 
 def test_returns_image_content_block_for_png(tool, fake_projects_root):
-    rel = "projects/probe/assets/_sessions/abc/photo.png"
+    rel = _user_path("projects/probe/assets/_sessions/abc/photo.png")
     _write(fake_projects_root, rel, PNG_BYTES)
 
     result = tool.execute({"relative_path": rel})
@@ -77,7 +112,7 @@ def test_returns_image_content_block_for_png(tool, fake_projects_root):
 def test_fastmcp_converts_the_result_to_an_image_block(tool, fake_projects_root):
     """The regression this tool exists for: dict -> TextContent, Image ->
     ImageContent. Go through FastMCP's real conversion function."""
-    rel = "projects/probe/assets/_sessions/abc/photo.png"
+    rel = _user_path("projects/probe/assets/_sessions/abc/photo.png")
     _write(fake_projects_root, rel, PNG_BYTES)
 
     result = tool.execute({"relative_path": rel})
@@ -91,7 +126,7 @@ def test_fastmcp_converts_the_result_to_an_image_block(tool, fake_projects_root)
 
 
 def test_jpeg_maps_to_image_jpeg(tool, fake_projects_root):
-    rel = "projects/probe/assets/_sessions/abc/photo.jpg"
+    rel = _user_path("projects/probe/assets/_sessions/abc/photo.jpg")
     _write(fake_projects_root, rel, b"\xff\xd8\xff\xe0jpeg-payload")
 
     result = tool.execute({"relative_path": rel})
@@ -110,9 +145,9 @@ def test_jpeg_maps_to_image_jpeg(tool, fake_projects_root):
 def test_rejects_non_image_assets(tool, fake_projects_root, rel):
     """mp4/srt/mp3 are not in mcp's mime table — they would come back as
     application/octet-stream and render as a broken image."""
-    _write(fake_projects_root, rel, b"definitely-not-an-image")
+    _write(fake_projects_root, _user_path(rel), b"definitely-not-an-image")
 
-    result = tool.execute({"relative_path": rel})
+    result = tool.execute({"relative_path": _user_path(rel)})
     assert not result.success
     error = (result.error or "").lower()
     assert "unsupported" in error
@@ -146,7 +181,7 @@ def test_rejects_path_outside_projects(tool, fake_projects_root):
 
 
 def test_missing_file_returns_clean_error(tool, fake_projects_root):
-    result = tool.execute({"relative_path": "projects/nope/assets/_sessions/zzz/gone.png"})
+    result = tool.execute({"relative_path": _user_path("projects/nope/assets/_sessions/zzz/gone.png")})
     assert not result.success
     assert "not found" in (result.error or "").lower()
 
@@ -163,7 +198,7 @@ def test_rejects_oversized_image(monkeypatch, tool, fake_projects_root):
     limit = _max_image_bytes()
     assert limit < 1024 * 1024
 
-    rel = "projects/probe/assets/_sessions/abc/huge.png"
+    rel = _user_path("projects/probe/assets/_sessions/abc/huge.png")
     _write(fake_projects_root, rel, b"\x00" * (limit + 1))
 
     result = tool.execute({"relative_path": rel})
@@ -173,7 +208,7 @@ def test_rejects_oversized_image(monkeypatch, tool, fake_projects_root):
 
 def test_accepts_image_at_the_size_limit(monkeypatch, tool, fake_projects_root):
     monkeypatch.setenv("OPENMONTAGE_MAX_UPLOAD_MB", "1")
-    rel = "projects/probe/assets/_sessions/abc/exact.png"
+    rel = _user_path("projects/probe/assets/_sessions/abc/exact.png")
     payload = PNG_BYTES + b"\x00" * (_max_image_bytes() - len(PNG_BYTES))
     _write(fake_projects_root, rel, payload)
 
@@ -183,8 +218,8 @@ def test_accepts_image_at_the_size_limit(monkeypatch, tool, fake_projects_root):
 
 
 def test_backslashes_normalized(tool, fake_projects_root):
-    rel = "projects\\probe\\assets\\_sessions\\abc\\photo.png"
-    _write(fake_projects_root, "projects/probe/assets/_sessions/abc/photo.png", PNG_BYTES)
+    rel = _user_path("projects/probe/assets/_sessions/abc/photo.png").replace("/", "\\")
+    _write(fake_projects_root, _user_path("projects/probe/assets/_sessions/abc/photo.png"), PNG_BYTES)
 
     result = tool.execute({"relative_path": rel})
     assert result.success, result.error
@@ -192,7 +227,7 @@ def test_backslashes_normalized(tool, fake_projects_root):
 
 
 def test_does_not_choke_on_directory(tool, fake_projects_root):
-    rel = "projects/probe/assets/_sessions/abc"
+    rel = _user_path("projects/probe/assets/_sessions/abc")[: -len("photo.png")]
     (fake_projects_root / rel).mkdir(parents=True, exist_ok=True)
 
     result = tool.execute({"relative_path": rel})
@@ -201,7 +236,7 @@ def test_does_not_choke_on_directory(tool, fake_projects_root):
 
 
 def test_empty_file_rejected(tool, fake_projects_root):
-    rel = "projects/probe/assets/_sessions/abc/zero.png"
+    rel = _user_path("projects/probe/assets/_sessions/abc/zero.png")
     _write(fake_projects_root, rel, b"")
 
     result = tool.execute({"relative_path": rel})

@@ -13,19 +13,23 @@ import threading
 
 import pytest
 
+from lib import paths as lib_paths
 import lib.workbuddy_session as sessions
+from lib.principal_registry import Principal
 from tools.asset_upload_chunk import UploadAssetChunk
 
 
 def _state_env(monkeypatch, tmp_path):
     monkeypatch.setattr(sessions, "STATE_DIR", tmp_path / "projects" / ".mcp_sessions")
     monkeypatch.setattr(sessions, "ROOT", tmp_path)
-    # Force _root() inside the chunk tool to use the same temp dir.
-    monkeypatch.setattr(
-        UploadAssetChunk,
-        "_root",
-        classmethod(lambda cls: (tmp_path / "projects").resolve()),
-    )
+    projects = (tmp_path / "projects").resolve()
+    projects.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(lib_paths, "PROJECTS_DIR", projects)
+    # Phase C removed the tool-local _root() hook. Exercise the production
+    # ProjectWorkspace path with a fixed authenticated principal instead.
+    import mcp_server
+    principal = Principal(kind="user", principal_id="concurrency-tester")
+    monkeypatch.setattr(mcp_server, "current_principal", lambda: principal)
 
 
 def test_register_image_under_flock_serializes_concurrent_writes(monkeypatch, tmp_path):
@@ -76,7 +80,7 @@ def test_register_image_creates_lockfile(monkeypatch, tmp_path):
         },
     )
     digest = sessions.session_hash(sid)
-    lock_path = sessions._LOCK_DIR / f"{digest}.lock"
+    lock_path = sessions._lock_dir() / f"{digest}.lock"
     assert lock_path.exists(), f"expected lock file at {lock_path}"
 
 

@@ -39,7 +39,14 @@ from pathlib import Path
 import pytest
 
 import mcp_server
+import lib.paths as _lib_paths
 from lib import effects_parser
+from lib import principal_registry as _principal_registry
+
+# Namespace key the fixture binds session "workflow" under (must match the
+# layout the upload/render path resolves the per-principal workspace from).
+_FIXTURE_PRINCIPAL_ID = "workflow"
+_WORKSPACE_NS = _principal_registry.compute_namespace_key(_FIXTURE_PRINCIPAL_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -417,9 +424,18 @@ def workflow_session(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sessions, "STATE_DIR", tmp_path / "projects" / ".mcp_sessions")
     monkeypatch.setattr(sessions, "ROOT", tmp_path)
+    # Phase C: ProjectWorkspace resolves the per-principal root from
+    # lib.paths.PROJECTS_DIR. Redirect it at the test tmp root and bind a
+    # principal so the namespaced asset authorization succeeds.
+    monkeypatch.setattr(_lib_paths, "PROJECTS_DIR", tmp_path / "projects")
+    _principal_registry.configure(tmp_path / "projects" / ".mcp_sessions" / "principals.db")
+    _principal_registry.bind(
+        _FIXTURE_PRINCIPAL_ID,
+        _principal_registry.Principal(kind="user", principal_id=_FIXTURE_PRINCIPAL_ID, tenant_id=None),
+    )
 
     def _img(name):
-        path = tmp_path / "projects" / "demo" / "assets" / name
+        path = tmp_path / "projects" / "users" / _WORKSPACE_NS / "demo" / "assets" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"fake-image")
         return path
@@ -428,19 +444,19 @@ def workflow_session(monkeypatch, tmp_path):
     sessions.register_image(
         "workflow", "demo",
         {"id": "img-1", "path": str(_img("one.jpg")),
-         "relative_path": "projects/demo/assets/one.jpg",
+         "relative_path": f"projects/users/{_WORKSPACE_NS}/demo/assets/one.jpg",
          "type": "image", "sha256": "x"},
     )
     sessions.register_image(
         "workflow", "demo",
         {"id": "img-2", "path": str(_img("two.jpg")),
-         "relative_path": "projects/demo/assets/two.jpg",
+         "relative_path": f"projects/users/{_WORKSPACE_NS}/demo/assets/two.jpg",
          "type": "image", "sha256": "y"},
     )
     sessions.register_image(
         "workflow", "demo",
         {"id": "img-3", "path": str(_img("three.jpg")),
-         "relative_path": "projects/demo/assets/three.jpg",
+         "relative_path": f"projects/users/{_WORKSPACE_NS}/demo/assets/three.jpg",
          "type": "image", "sha256": "z"},
     )
     captured: dict = {}

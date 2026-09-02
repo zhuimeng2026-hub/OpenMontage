@@ -3,7 +3,10 @@
 Receives claude-video's RunResult over MCP (from the ``recompose`` tool
 described in ``/opt/claude-video/docs/MCP_SERVER_PRD.md`` §2.6) and submits
 it as an OpenMontage project under
-``projects/users/<user_openid>/<project_id>/``.
+``projects/users/<namespace_key>/<project_id>/`` where ``namespace_key``
+is the HMAC namespace of the authenticated principal (Phase C). Pre-Phase-C layout
+``projects/users/<user_openid>/...`` was raw-openid and incompatible
+with ``docs/user-isolation-via-mcp-session.md``.
 
 Spec: ``docs/claude-video-integration.md``
 Whitelist audit: ``docs/claude-video-whitelist-audit.md``
@@ -18,9 +21,9 @@ Cross-repo contract docs (claude-video side, 2026-08-23):
 - ``tests/fixtures/error_envelope_*.json``        — error envelope fixtures
 
 This adapter receives a ``recompose`` call that claude-video's MCP server
-already authorized (cookie + ``video_id`` ↔ ``user_openid`` check happened
-upstream). OpenMontage does NOT re-verify the user — see
-``docs/OAUTH_TRUST_MODEL.md`` for the trust model.
+already authorized (cookie + ``video_id`` check happened upstream). The
+authenticated OpenMontage session remains authoritative: ``user_openid`` is
+accepted only as a compatibility echo and must exactly match that principal.
 
 Error envelope (must stay 1:1 with claude-video's 6-code table,
 ``docs/MCP_SERVER_PRD.md §2.6.3``):
@@ -47,6 +50,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +69,8 @@ from tools.base_tool import (
 )
 from lib.checkpoint import init_project, write_checkpoint
 from lib import paths as _lib_paths
+from lib.principal_sanitize import sanitize_project_id
+from lib.project_workspace import ProjectWorkspace
 
 
 # ---------------------------------------------------------------------------
@@ -103,8 +109,11 @@ ERROR_ASSETS_COPY_FAILED = "assets_copy_failed"
 ERROR_PIPELINE_STAGE_FAILED = "pipeline_stage_failed"
 ERROR_GPU_REQUIRED = "gpu_required"
 
-# Project layout. Mirrors docs/web-multiuser-auth.md.
-USER_ROOT_TEMPLATE = "projects/users/{user_openid}"
+# Project layout. Phase C: the on-disk namespace is the
+# ``Principal.namespace_key`` HMAC of the user_openid — NOT the raw openid.
+# The template is kept here so the tests that mirror the layout can read
+# it; production code uses ``Principal.namespace_key`` directly.
+USER_ROOT_TEMPLATE = "projects/users/{namespace_key}"
 
 # Where the MCP server is reachable on the host; the Backlot board sits on
 # the same port. Used for the `backlot_url` field in ToolResult.data.
@@ -124,14 +133,13 @@ class ClaudeVideoComposeTool(BaseTool):
 
     Trust model
     -----------
-    OpenMontage treats ``inputs["user_openid"]`` as **untrusted** — it
-    lands projects under ``projects/users/<user_openid>/`` based purely
-    on this string. The horizontal-isolation guarantee depends entirely
-    on claude-video's Phase 2.8 BFF: only that component verifies the
-    ``WATCH_SESSION`` cookie and only then passes the corresponding
-    ``user_openid`` through. See
-    ``/opt/claude-video/docs/OAUTH_TRUST_MODEL.md`` §"What OpenMontage
-    verifies" for the contract this adapter assumes.
+    ``inputs["user_openid"]`` is **untrusted** and never selects a namespace.
+    The adapter resolves ``mcp_server.current_principal()`` from the
+    authenticated MCP session, requires a user principal, and then requires
+    an exact equality match for the compatibility ``user_openid`` field. A
+    missing session principal or mismatch fails closed before any filesystem
+    side effect. This is compatible with the trusted BFF contract because the
+    BFF must forward the same identity-bound MCP session.
 
     Pipeline execution model
     ------------------------
@@ -178,11 +186,12 @@ class ClaudeVideoComposeTool(BaseTool):
     not_good_for = [
         "Pipelines that require local GPU (FLUX, Wan, Hunyuan, CogVideo, "
         "talking-head, lip_sync) — guard rejects at the adapter boundary.",
-        "Calls without a valid user_openid — multi-tenant safety depends "
-        "on claude-video's BFF; OpenMontage does not re-verify.",
+        "Calls without a valid authenticated user session or with a mismatched "
+        "user_openid compatibility echo are rejected before filesystem work.",
     ]
     side_effects = [
-        "creates projects/users/<user_openid>/<project_id>/{artifacts,assets,renders}/",
+        "creates projects/users/<namespace_key>/<project_id>/{artifacts,assets,renders}/ "
+        "(namespace_key = authenticated principal namespace; Phase C)",
         "copies source.frames_dir / masks_dir / vtt_path / video_path into "
         "assets/{frames,masks,audio,video}/ subdirs",
         "writes artifacts/source_meta.json with transcript_segments + duration",
@@ -198,7 +207,7 @@ class ClaudeVideoComposeTool(BaseTool):
     retry_policy = RetryPolicy(max_retries=0, backoff_seconds=0.0)
 
     user_visible_verification = [
-        "After ToolResult returns, projects/users/<user_openid>/<project_id>/ "
+        "After ToolResult returns, projects/users/<namespace_key>/<project_id>/ "
         "exists with assets/{frames,masks,audio,video}/ populated and "
         "artifacts/source_meta.json readable.",
         "A stage director (or human) reading skills/pipelines/<pipeline>/"
@@ -220,9 +229,12 @@ class ClaudeVideoComposeTool(BaseTool):
                 "minLength": 1,
                 "description": (
                     "WeChat openid (or future unionid) of the requesting user. "
-                    "Paths land under projects/users/<user_openid>/. OpenMontage "
-                    "DOES NOT verify this string; integrity guarantee depends "
-                    "on claude-video's Phase 2.8 BFF."
+                    "Phase C: paths land under "
+                    "``projects/users/<namespace_key>/`` where ``namespace_key = "
+                    "HMAC(secret, authenticated principal)`` (see "
+                    "``lib/principal_registry.py``). The value is retained only "
+                    "for BFF compatibility and must exactly match the session "
+                    "principal."
                 ),
             },
             "project_id": {
@@ -354,9 +366,9 @@ class ClaudeVideoComposeTool(BaseTool):
             "renders_path": {
                 "type": "string",
                 "description": (
-                    "projects/users/<openid>/<id>/renders/ — the directory "
+                    "projects/users/<namespace_key>/<id>/renders/ — the directory "
                     "where final.mp4 lands once the orchestrator completes "
-                    "all stages."
+                    "all stages. Phase C: namespace_key is from the authenticated principal."
                 ),
             },
             "backlot_url": {
@@ -389,15 +401,15 @@ class ClaudeVideoComposeTool(BaseTool):
 
     artifact_schema: dict[str, Any] = {
         "writes": [
-            "projects/users/<user_openid>/<project_id>/project.json",
-            "projects/users/<user_openid>/<project_id>/artifacts/source_meta.json",
-            "projects/users/<user_openid>/<project_id>/artifacts/source_media_review.json",
-            "projects/users/<user_openid>/<project_id>/checkpoint_idea.json",
-            "projects/users/<user_openid>/<project_id>/assets/frames/*",
-            "projects/users/<user_openid>/<project_id>/assets/masks/*",
-            "projects/users/<user_openid>/<project_id>/assets/video/*",
-            "projects/users/<user_openid>/<project_id>/assets/audio/*",
-            "projects/users/<user_openid>/<project_id>/renders/final.mp4  (by orchestrator, NOT this adapter)",
+            "projects/users/<namespace_key>/<project_id>/project.json",
+            "projects/users/<namespace_key>/<project_id>/artifacts/source_meta.json",
+            "projects/users/<namespace_key>/<project_id>/artifacts/source_media_review.json",
+            "projects/users/<namespace_key>/<project_id>/checkpoint_idea.json",
+            "projects/users/<namespace_key>/<project_id>/assets/frames/*",
+            "projects/users/<namespace_key>/<project_id>/assets/masks/*",
+            "projects/users/<namespace_key>/<project_id>/assets/video/*",
+            "projects/users/<namespace_key>/<project_id>/assets/audio/*",
+            "projects/users/<namespace_key>/<project_id>/renders/final.mp4  (by orchestrator, NOT this adapter)",
         ],
     }
 
@@ -429,14 +441,43 @@ class ClaudeVideoComposeTool(BaseTool):
         if not ok:
             return _err(ERROR_PIPELINE_NOT_IN_WHITELIST, err)
 
-        # 2. user_openid presence — BFF overrides a missing cookie-binding
-        #    with the empty string; we treat both empty and missing the same.
+        # 2. Resolve identity from the authenticated MCP session. The tool
+        # input is only a legacy compatibility echo and must never choose the
+        # directory owner.
         user_openid = inputs.get("user_openid") if isinstance(inputs, dict) else None
         if not isinstance(user_openid, str) or not user_openid.strip():
             return _err(
                 ERROR_USER_NOT_FOUND,
                 "user_openid was required (BFF passed an empty value, or session "
                 "is anonymous in a deploy that disallows it)."
+            )
+        try:
+            authenticated = _resolve_current_principal()
+        except Exception as exc:
+            # PrincipalNotFound is the normal anonymous/missing-session case;
+            # keep the adapter's six-code contract and fail closed for any
+            # resolver failure rather than falling back to user_openid.
+            return _err(
+                ERROR_USER_NOT_FOUND,
+                "authenticated MCP session has no usable principal: "
+                f"{type(exc).__name__}",
+            )
+        if getattr(authenticated, "kind", None) != "user":
+            return _err(
+                ERROR_USER_NOT_FOUND,
+                "claude_video.compose requires an authenticated user principal",
+            )
+        authenticated_id = getattr(authenticated, "principal_id", None)
+        if not isinstance(authenticated_id, str) or user_openid != authenticated_id:
+            return _err(
+                ERROR_USER_NOT_FOUND,
+                "user_openid does not exactly match the authenticated session principal",
+            )
+        namespace_key = getattr(authenticated, "namespace_key", None)
+        if not isinstance(namespace_key, str) or not re.fullmatch(r"[0-9a-f]{32}", namespace_key):
+            return _err(
+                ERROR_USER_NOT_FOUND,
+                "authenticated session principal has an invalid namespace key",
             )
 
         # 3. Field validation
@@ -448,15 +489,24 @@ class ClaudeVideoComposeTool(BaseTool):
         #    a captured value) so test fixtures that monkeypatch
         #    ``lib.paths.PROJECTS_DIR`` to a tmp_path actually reach us.
         source = inputs["source"]
-        project_id = inputs.get("project_id") or source["video_id"]
-        pipeline_dir = _lib_paths.PROJECTS_DIR / "users" / user_openid
-        project_dir = pipeline_dir / project_id
+        source_video_id = sanitize_project_id(source.get("video_id"))
+        if source_video_id is None:
+            return _err(ERROR_ASSETS_COPY_FAILED, "source.video_id must be a safe project id")
+        project_id = sanitize_project_id(inputs.get("project_id") or source_video_id)
+        if project_id is None:
+            return _err(ERROR_ASSETS_COPY_FAILED, "project_id must be a safe project id")
+        # Use only the resolver's namespace key. Never recompute it from the
+        # request body: this also preserves an existing namespace across key
+        # rotation when the registry returns the row's stored key.
+        workspace = ProjectWorkspace.for_principal(authenticated, project_id)
+        project_dir = workspace.root
+        pipeline_dir = project_dir.parent
 
         # 5. init_project (idempotent — re-running merges).
         try:
             init_project(
                 project_id,
-                title=f"claude-video {source['video_id']}",
+                title=f"claude-video {source_video_id}",
                 pipeline_type=pipeline,
                 pipeline_dir=pipeline_dir,
                 style_playbook=inputs.get("style") or "clean-professional",
@@ -474,7 +524,7 @@ class ClaudeVideoComposeTool(BaseTool):
         if not frames_src.exists():
             return _err(
                 ERROR_VIDEO_ID_UNKNOWN,
-                f"video_id {source['video_id']!r} artifacts are gone — "
+                f"video_id {source_video_id!r} artifacts are gone — "
                 f"frames_dir {frames_src} does not exist. claude-video's "
                 f"session_store likely GC'd the work_dir. Re-run /watch."
             )
@@ -530,7 +580,7 @@ class ClaudeVideoComposeTool(BaseTool):
                 human_approval_required=False,  # idea stage director will flip this when ready
                 metadata={
                     "submitted_via": "claude_video.compose",
-                    "video_id": source["video_id"],
+                    "video_id": source_video_id,
                     "received_at": datetime.now(timezone.utc).isoformat(),
                     "warnings": warnings,
                 },
@@ -570,6 +620,16 @@ class ClaudeVideoComposeTool(BaseTool):
 # ---------------------------------------------------------------------------
 # Module helpers — pure functions, no I/O unless noted.
 # ---------------------------------------------------------------------------
+
+
+def _resolve_current_principal() -> Any:
+    """Resolve identity from the authenticated MCP session.
+
+    This narrow seam lets tests model the transport auth context; production
+    always delegates to ``mcp_server.current_principal``.
+    """
+    from mcp_server import current_principal
+    return current_principal()
 
 
 class _CopyResult:
@@ -766,11 +826,15 @@ def _write_source_media_review(
 def project_dir_for(user_openid: str, project_id: str) -> Path:
     """Compute the project directory for a user/project pair.
 
-    Mirrors docs/web-multiuser-auth.md. Pure function — no filesystem I/O.
-    Returns a path RELATIVE to PROJECTS_DIR; callers needing an absolute
-    path should resolve against ``lib.paths.PROJECTS_DIR`` themselves.
+    Phase C: mirrors v2 ``projects/users/<namespace_key>/<project_id>/``
+    layout — ``namespace_key = HMAC(secret, user_openid)``. Pure function
+    with no filesystem I/O. Returns a path RELATIVE to PROJECTS_DIR;
+    callers needing an absolute path should resolve against
+    ``lib.paths.PROJECTS_DIR`` themselves.
     """
-    return Path(USER_ROOT_TEMPLATE.format(user_openid=user_openid)) / project_id
+    from lib.principal_registry import Principal
+    ns_key = Principal(kind="user", principal_id=user_openid).namespace_key
+    return Path(USER_ROOT_TEMPLATE.format(namespace_key=ns_key)) / project_id
 
 
 def check_pipeline_whitelist(pipeline: str) -> tuple[bool, str]:

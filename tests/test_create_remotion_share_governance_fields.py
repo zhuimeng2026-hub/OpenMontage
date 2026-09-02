@@ -28,8 +28,18 @@ from pathlib import Path
 import pytest
 
 from lib.delivery_promise import DeliveryPromise
+import lib.paths as _lib_paths
 import mcp_server
+from lib import principal_registry as _principal_registry
 from tools.base_tool import ToolResult
+
+
+# Namespace key the fixture binds session "workflow" under. The upload/render
+# path now resolves the per-principal workspace from this principal, so the
+# test assets must live under the matching ``projects/users/<ns>/<project>``
+# tree and carry a ``relative_path`` that points there.
+_FIXTURE_PRINCIPAL_ID = "workflow"
+_WORKSPACE_NS = _principal_registry.compute_namespace_key(_FIXTURE_PRINCIPAL_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -43,10 +53,24 @@ def _state_env(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sessions, "STATE_DIR", tmp_path / "projects" / ".mcp_sessions")
     monkeypatch.setattr(sessions, "ROOT", tmp_path)
+    # Phase C: ProjectWorkspace resolves the per-principal root from
+    # lib.paths.PROJECTS_DIR, which still defaults to the real repo tree.
+    # Redirect it at the test tmp root so namespaced assets/render outputs
+    # stay inside tmp_path instead of the live projects/ directory.
+    monkeypatch.setattr(_lib_paths, "PROJECTS_DIR", tmp_path / "projects")
+    # Point the durable principal registry at a throwaway DB so the fixture's
+    # bind() does not touch the real principals.db.
+    _principal_registry.configure(tmp_path / "projects" / ".mcp_sessions" / "principals.db")
+    # Session "workflow" must be owned by a principal for
+    # create_remotion_video_share's per-user workspace resolution to succeed.
+    _principal_registry.bind(
+        _FIXTURE_PRINCIPAL_ID,
+        _principal_registry.Principal(kind="user", principal_id=_FIXTURE_PRINCIPAL_ID, tenant_id=None),
+    )
 
 
 def _image(tmp_path, name="one.jpg"):
-    path = tmp_path / "projects" / "demo" / "assets" / name
+    path = tmp_path / "projects" / "users" / _WORKSPACE_NS / "demo" / "assets" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"fake-image")
     return path
@@ -105,8 +129,11 @@ def workflow_session(monkeypatch, tmp_path):
     # _resolve_session_asset_path reads `relative_path` (posix, repo-root
     # relative), not the OS-specific absolute `path`. We monkeypatch
     # _PROJECT_ROOT to tmp_path, so relative_path is relative to tmp_path.
-    one_rel = "projects/demo/assets/one.jpg"
-    two_rel = "projects/demo/assets/two.jpg"
+    # The path must land under the per-principal workspace (Phase C) or the
+    # render-time authorization check rejects it as "outside the project
+    # workspace".
+    one_rel = f"projects/users/{_WORKSPACE_NS}/demo/assets/one.jpg"
+    two_rel = f"projects/users/{_WORKSPACE_NS}/demo/assets/two.jpg"
     sessions.register_image(
         "workflow", "demo",
         {"id": "img-1", "path": str(_image(tmp_path)), "relative_path": one_rel,

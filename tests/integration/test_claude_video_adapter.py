@@ -37,11 +37,28 @@ from pathlib import Path
 import pytest
 
 from tools.base_tool import BaseTool, ToolResult
+from lib.principal_registry import Principal
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def authenticated_session(monkeypatch):
+    """Model the authenticated MCP session required by the adapter.
+
+    The request body remains a compatibility echo; tests explicitly override
+    this fixture's seam for missing/mismatched-principal cases below.
+    """
+    from tools.external import claude_video
+
+    monkeypatch.setattr(
+        claude_video,
+        "_resolve_current_principal",
+        lambda: Principal(kind="user", principal_id="test_user_openid_xyz"),
+    )
 
 
 @pytest.fixture
@@ -267,6 +284,64 @@ def test_user_not_found_when_user_openid_whitespace(adapter, valid_inputs) -> No
     assert (result.data or {}).get("code") == ERROR_USER_NOT_FOUND
 
 
+def test_user_not_found_when_user_openid_does_not_match_session(
+    adapter, valid_inputs
+) -> None:
+    from tools.external.claude_video import ERROR_USER_NOT_FOUND
+
+    inputs = dict(valid_inputs)
+    inputs["user_openid"] = "another_user"
+    result = adapter.execute(inputs)
+    assert result.success is False
+    assert (result.data or {}).get("code") == ERROR_USER_NOT_FOUND
+
+
+@pytest.mark.parametrize("field", ["project_id", "video_id"])
+def test_path_identifiers_reject_parent_escape(adapter, valid_inputs, field) -> None:
+    """Neither the explicit project id nor source fallback may escape root."""
+    from tools.external.claude_video import ERROR_ASSETS_COPY_FAILED
+
+    inputs = dict(valid_inputs)
+    inputs["source"] = dict(valid_inputs["source"])
+    if field == "project_id":
+        inputs["project_id"] = "../outside"
+    else:
+        inputs["source"]["video_id"] = "../outside"
+    result = adapter.execute(inputs)
+    assert not result.success
+    assert (result.data or {}).get("code") == ERROR_ASSETS_COPY_FAILED
+
+
+def test_user_not_found_when_authenticated_session_is_missing(
+    adapter, valid_inputs, monkeypatch
+) -> None:
+    from tools.external import claude_video
+    from tools.external.claude_video import ERROR_USER_NOT_FOUND
+
+    monkeypatch.setattr(
+        claude_video,
+        "_resolve_current_principal",
+        lambda: (_ for _ in ()).throw(RuntimeError("no session")),
+    )
+    result = adapter.execute(valid_inputs)
+    assert result.success is False
+    assert (result.data or {}).get("code") == ERROR_USER_NOT_FOUND
+
+
+def test_user_not_found_for_service_principal(adapter, valid_inputs, monkeypatch) -> None:
+    from tools.external import claude_video
+    from tools.external.claude_video import ERROR_USER_NOT_FOUND
+
+    monkeypatch.setattr(
+        claude_video,
+        "_resolve_current_principal",
+        lambda: Principal(kind="service", principal_id="svc-renderer"),
+    )
+    result = adapter.execute(valid_inputs)
+    assert result.success is False
+    assert (result.data or {}).get("code") == ERROR_USER_NOT_FOUND
+
+
 def test_assets_copy_failed_on_malformed_source(adapter, valid_inputs) -> None:
     """A source that fails the `_validate_inputs` runtime check returns
     assets_copy_failed — NOT a generic KeyError later under shutil."""
@@ -379,7 +454,9 @@ def test_smoke_submits_project_with_assets_copied(
     assert (result.data or {}).get("status") == "submitted"
     assert (result.data or {}).get("code") == "ok"
 
-    expected_dir = projects_dir / "users" / valid_inputs["user_openid"] / (
+    expected_dir = projects_dir / "users" / Principal(
+        kind="user", principal_id=valid_inputs["user_openid"]
+    ).namespace_key / (
         valid_inputs.get("project_id") or valid_inputs["source"]["video_id"]
     )
     assert expected_dir.is_dir(), f"project dir not created: {expected_dir}"
@@ -450,7 +527,9 @@ def test_smoke_path_honors_explicit_project_id(
     assert result.success is True
     assert result.data["project_id"] == "custom-2026"
     assert (
-        projects_dir / "users" / valid_inputs["user_openid"] / "custom-2026"
+        projects_dir / "users" / Principal(
+            kind="user", principal_id=valid_inputs["user_openid"]
+        ).namespace_key / "custom-2026"
     ).is_dir()
 
 
@@ -541,7 +620,10 @@ def test_compute_disabled_tools_module_helper() -> None:
 
 def test_project_dir_for_module_helper() -> None:
     from tools.external.claude_video import project_dir_for
-    assert project_dir_for("alice", "demo-1") == Path("projects/users/alice/demo-1")
+    expected = Principal(kind="user", principal_id="alice").namespace_key
+    assert project_dir_for("alice", "demo-1") == Path(
+        f"projects/users/{expected}/demo-1"
+    )
 
 
 def test_error_codes_match_mcp_server_prd() -> None:

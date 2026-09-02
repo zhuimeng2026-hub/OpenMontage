@@ -67,6 +67,19 @@ def test_missing_file_raises():
         _resolve_session_asset_path(asset)
 
 
+def test_configured_projects_root_is_used_by_render_asset_resolvers(monkeypatch, tmp_path):
+    from lib import paths as lib_paths
+    import tools.video.video_compose as video_compose
+    from tools.video.hyperframes_compose import HyperFramesCompose
+
+    projects = tmp_path / "projects"
+    monkeypatch.setattr(lib_paths, "PROJECTS_DIR", projects)
+    rel = "projects/users/ns/demo/assets/a.png"
+    expected = tmp_path / rel
+    assert Path(video_compose._asset_abs_path({"relative_path": rel})) == expected
+    assert HyperFramesCompose._asset_abs_path({"relative_path": rel}) == expected
+
+
 def teardown_module(module):
     import shutil
     d = _PROJECT_ROOT / ".test_assets" / "resolve"

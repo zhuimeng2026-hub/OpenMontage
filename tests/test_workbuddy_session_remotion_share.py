@@ -7,17 +7,45 @@ from pathlib import Path
 import pytest
 
 from tools.base_tool import ToolResult
+import lib.paths as _lib_paths
 import lib.workbuddy_session as sessions
+from lib.principal_registry import Principal, compute_namespace_key
 from lib.mcp_session import reset_mcp_session_id, set_mcp_session_id
+
+# Session "workflow" is bound under this namespace key (must match the
+# principal bound in ``_state_env``). The upload/render path resolves the
+# per-principal workspace from this key in Phase C, so test assets must live
+# under the matching ``projects/users/<ns>/<project>`` tree.
+_FIXTURE_PRINCIPAL_ID = "workflow-tester"
+_WORKSPACE_NS = compute_namespace_key(_FIXTURE_PRINCIPAL_ID)
+
+
+def _ns_rel(name="one.jpg"):
+    """relative_path (repo-root-relative) for a namespaced demo asset."""
+    return f"projects/users/{_WORKSPACE_NS}/demo/assets/{name}"
 
 
 def _state_env(monkeypatch, tmp_path):
     monkeypatch.setattr(sessions, "STATE_DIR", tmp_path / "projects" / ".mcp_sessions")
     monkeypatch.setattr(sessions, "ROOT", tmp_path)
+    # Phase C: redirect the per-principal workspace root (ProjectWorkspace
+    # reads lib.paths.PROJECTS_DIR) at the test tmp root so namespaced
+    # assets/render outputs stay inside tmp_path instead of the live repo.
+    monkeypatch.setattr(_lib_paths, "PROJECTS_DIR", tmp_path / "projects")
+    # Phase C: bind a principal for the test session so
+    # ``ProjectWorkspace.for_current_principal`` (called by
+    # ``create_remotion_video_share``) succeeds. ``workflow`` is the
+    # canonical session id used by the tests in this file; one binding
+    # is enough because the suite is single-threaded and each test
+    # rebuilds the registry via ``_reset_for_tests``.
+    import lib.principal_registry as pr
+    pr._reset_for_tests()
+    pr.configure(tmp_path / "projects" / ".mcp_sessions" / "principals.db")
+    pr.bind("workflow", Principal(kind="user", principal_id="workflow-tester"))
 
 
 def _image(tmp_path, name="one.jpg"):
-    path = tmp_path / "projects" / "demo" / "assets" / name
+    path = tmp_path / "projects" / "users" / _WORKSPACE_NS / "demo" / "assets" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"fake-image")
     return path
@@ -80,8 +108,8 @@ def _capture_progress(monkeypatch, mcp_server):
 
 
 def _prepare_workflow(tmp_path):
-    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
-    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "type": "image", "sha256": "y"})
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "relative_path": _ns_rel(), "type": "image", "sha256": "x"})
+    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "relative_path": _ns_rel("two.jpg"), "type": "image", "sha256": "y"})
 
 
 async def _poll_until(mcp_server, job_id, timeout=30.0):
@@ -123,8 +151,8 @@ def test_create_share_dispatches_async_and_polls_to_published(monkeypatch, tmp_p
     background job must reach 'published' with a share URL and no error."""
     _state_env(monkeypatch, tmp_path)
     _image(tmp_path)
-    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
-    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "type": "image", "sha256": "y"})
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "relative_path": _ns_rel(), "type": "image", "sha256": "x"})
+    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "relative_path": _ns_rel("two.jpg"), "type": "image", "sha256": "y"})
     mcp_server = _install_fakes(monkeypatch, tmp_path)
     token = set_mcp_session_id("workflow")
     try:
@@ -150,8 +178,8 @@ def test_create_share_polls_to_failed_weiyun_share_and_keeps_video(monkeypatch, 
     """A share-link failure must surface as a pollable failed state that keeps
     the rendered video path and reports the failure reason."""
     _state_env(monkeypatch, tmp_path)
-    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
-    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "type": "image", "sha256": "y"})
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "relative_path": _ns_rel(), "type": "image", "sha256": "x"})
+    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "relative_path": _ns_rel("two.jpg"), "type": "image", "sha256": "y"})
     mcp_server = _install_fakes(monkeypatch, tmp_path, fail_share=True)
     token = set_mcp_session_id("workflow")
     try:
@@ -189,8 +217,8 @@ def test_weiyun_share_failure_publishes_failed_sse(monkeypatch, tmp_path):
 def test_create_share_polls_to_failed_weiyun_upload(monkeypatch, tmp_path):
     """An upload failure must report stage=weiyun_upload with its reason."""
     _state_env(monkeypatch, tmp_path)
-    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
-    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "type": "image", "sha256": "y"})
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "relative_path": _ns_rel(), "type": "image", "sha256": "x"})
+    sessions.register_image("workflow", "demo", {"id": "img-2", "path": str(_image(tmp_path, "two.jpg")), "relative_path": _ns_rel("two.jpg"), "type": "image", "sha256": "y"})
     mcp_server = _install_fakes(monkeypatch, tmp_path, fail_upload=True)
     token = set_mcp_session_id("workflow")
     try:
@@ -260,7 +288,7 @@ def _prepare_published_job(tmp_path):
     video = tmp_path / "projects" / "demo" / "renders" / "job.mp4"
     video.parent.mkdir(parents=True, exist_ok=True)
     video.write_bytes(b"mp4")
-    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "relative_path": _ns_rel(), "type": "image", "sha256": "x"})
     _, state = sessions.begin_render("workflow")
     sessions.update("workflow", status="failed", failure_stage="weiyun_upload", video_path=str(video), error="old")
     return state["render_job_id"], video
@@ -359,9 +387,9 @@ def test_retry_render_publish_serializes_same_job(monkeypatch, tmp_path):
 def test_retry_render_publish_rejects_missing_video(monkeypatch, tmp_path):
     _state_env(monkeypatch, tmp_path)
     import mcp_server
-    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "type": "image", "sha256": "x"})
+    sessions.register_image("workflow", "demo", {"id": "img-1", "path": str(_image(tmp_path)), "relative_path": _ns_rel(), "type": "image", "sha256": "x"})
     _, state = sessions.begin_render("workflow")
     sessions.update("workflow", status="failed", video_path=str(tmp_path / "missing.mp4"), error="old")
     result = asyncio.run(mcp_server.retry_render_publish(state["render_job_id"]))
     assert result["success"] is False
-    assert result["stage"] == "validation"
+    assert result["stage"] == "video_missing"

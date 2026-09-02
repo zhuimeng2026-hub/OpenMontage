@@ -2,18 +2,65 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
+from lib import paths as lib_paths
 from lib import workbuddy_session
+from lib.principal_registry import Principal
 from tools.asset_upload_chunk import UploadAssetChunk
 
 
+# Phase C: ProjectWorkspace reads ``lib.paths.PROJECTS_DIR`` at call time
+# (rather than caching it at import), so test fixtures monkeypatch the
+# shared module constant. ``_root`` no longer exists on the tool — the
+# workspace factory is the single source of truth for path computation.
+#
+# ``ProjectWorkspace.for_current_principal`` calls
+# ``mcp_server.current_principal()``, which in turn consults a ContextVar
+# then the durable registry. Tests stub ``mcp_server.current_principal``
+# to return a fixed Principal so the chunked-upload tests stay
+# self-contained — no FastMCP server, no ASGI middleware required.
+
+
+def _stub_current_principal(monkeypatch, principal: Principal) -> None:
+    """Patch ``mcp_server.current_principal`` so the tool's workspace
+    factory sees a known principal without touching real session state.
+
+    Equivalent to setting the ``_user_id_ctx`` ContextVar in
+    mcp_server + populating the registry, but at a higher level so the
+    stub doesn't leak between tests.
+    """
+    import mcp_server
+    monkeypatch.setattr(mcp_server, "current_principal", lambda: principal)
+
+
+def _projects_root(monkeypatch, tmp_path: Path) -> Path:
+    """Point ``lib.paths.PROJECTS_DIR`` at ``tmp_path/projects`` so every
+    write from the chunked-upload tool lands under the test's tmp tree.
+    Returns the resolved projects root so callers can build assertions.
+    """
+    projects = (tmp_path / "projects").resolve()
+    projects.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(lib_paths, "PROJECTS_DIR", projects)
+    return projects
+
+
+def _default_principal() -> Principal:
+    """Return the fixed Principal the tests run as.
+
+    Using a real ``Principal`` (not a Mock) keeps ``namespace_key`` and
+    the kind/user distinction exercised by the production code path.
+    """
+    return Principal(kind="user", principal_id="chunk-tester")
+
+
 def test_chunk_upload_round_trip_is_session_scoped(tmp_path: Path, monkeypatch):
-    projects = tmp_path / "projects"
+    projects = _projects_root(monkeypatch, tmp_path)
     sessions = tmp_path / "sessions"
-    monkeypatch.setattr(UploadAssetChunk, "_root", staticmethod(lambda: projects))
+    _stub_current_principal(monkeypatch, _default_principal())
     monkeypatch.setattr(workbuddy_session, "STATE_DIR", sessions)
 
     tool = UploadAssetChunk()
@@ -48,13 +95,60 @@ def test_chunk_upload_round_trip_is_session_scoped(tmp_path: Path, monkeypatch):
     assert completed.success
     asset = completed.data["asset"]
     assert asset["sha256"] == digest
+    # Phase C: asset lands under ``projects/users/<ns>/<project_id>/assets/``.
+    # Resolved via ``projects.parent`` (the tmp_path) so the assertion is
+    # agnostic to the namespace_key the registry picked for the principal.
     assert (projects.parent / asset["relative_path"]).read_bytes() == content
     assert completed.data["batch"]["status"] == "collecting_assets"
 
 
+def test_chunk_complete_migrates_safe_legacy_global_state(tmp_path: Path, monkeypatch):
+    """An in-flight v1 upload migrates only after session ownership checks."""
+    projects = _projects_root(monkeypatch, tmp_path)
+    _stub_current_principal(monkeypatch, _default_principal())
+    session_id = "legacy-session"
+    digest = workbuddy_session.session_hash(session_id)
+    upload_id = "a" * 32
+    legacy = projects / ".uploads"
+    legacy.mkdir(parents=True)
+    content = b"legacy-data"
+    (legacy / f"{upload_id}.part").write_bytes(content)
+    (legacy / f"{upload_id}.json").write_text(json.dumps({
+        "project_id": "chunk-test", "filename": "asset.png",
+        "total_bytes": len(content), "mime_type": "image/png",
+        "sha256": hashlib.sha256(content).hexdigest(), "session_hash": digest,
+    }), encoding="utf-8")
+
+    result = UploadAssetChunk().execute({"operation": "complete", "upload_id": upload_id, "mcp_session_id": session_id})
+
+    assert result.success, result.error
+    assert not (legacy / f"{upload_id}.json").exists()
+    assert not (legacy / f"{upload_id}.part").exists()
+    assert (projects.parent / result.data["asset"]["relative_path"]).read_bytes() == content
+
+
+def test_chunk_legacy_global_state_wrong_session_fails_closed(tmp_path: Path, monkeypatch):
+    projects = _projects_root(monkeypatch, tmp_path)
+    _stub_current_principal(monkeypatch, _default_principal())
+    upload_id = "b" * 32
+    legacy = projects / ".uploads"
+    legacy.mkdir(parents=True)
+    (legacy / f"{upload_id}.part").write_bytes(b"data")
+    (legacy / f"{upload_id}.json").write_text(json.dumps({
+        "project_id": "chunk-test", "filename": "asset.png",
+        "total_bytes": 4, "session_hash": workbuddy_session.session_hash("owner"),
+    }), encoding="utf-8")
+
+    result = UploadAssetChunk().execute({"operation": "complete", "upload_id": upload_id, "mcp_session_id": "attacker"})
+
+    assert not result.success
+    assert "not found or expired" in result.error
+    assert (legacy / f"{upload_id}.json").exists()
+
+
 def test_chunk_upload_rejects_different_session(tmp_path: Path, monkeypatch):
-    projects = tmp_path / "projects"
-    monkeypatch.setattr(UploadAssetChunk, "_root", staticmethod(lambda: projects))
+    _projects_root(monkeypatch, tmp_path)
+    _stub_current_principal(monkeypatch, _default_principal())
 
     tool = UploadAssetChunk()
     started = tool.execute({
@@ -94,9 +188,9 @@ def _complete_image(tool: UploadAssetChunk, common: dict, content: bytes, filena
 
 
 def test_chunk_upload_same_content_same_name_is_idempotent(tmp_path: Path, monkeypatch):
-    projects = tmp_path / "projects"
+    projects = _projects_root(monkeypatch, tmp_path)
     sessions = tmp_path / "sessions"
-    monkeypatch.setattr(UploadAssetChunk, "_root", staticmethod(lambda: projects))
+    _stub_current_principal(monkeypatch, _default_principal())
     monkeypatch.setattr(workbuddy_session, "STATE_DIR", sessions)
     tool = UploadAssetChunk()
     common = {"mcp_session_id": "idempotent-session"}
@@ -108,6 +202,11 @@ def test_chunk_upload_same_content_same_name_is_idempotent(tmp_path: Path, monke
     assert first.success and first.data["deduplicated"] is False
     assert second.success and second.data["deduplicated"] is True
     assert len(second.data["batch"]["assets"]) == 1
+    # Pre-Phase-C layout: ``projects/<id>/assets/_sessions/<digest>/<name>``
+    # no longer exists (Phase C moved files under
+    # ``projects/users/<ns>/<id>/assets/...``); assert the legacy path is
+    # empty so we know the test is exercising the new layout, not a stale
+    # write through some other code path.
     assert not (projects / "chunk-test" / "assets" / "_sessions" / workbuddy_session.session_hash(common["mcp_session_id"]) / "renamed.png").exists()
     canonical_path = projects.parent / second.data["asset"]["relative_path"]
     assert canonical_path.exists()
@@ -115,9 +214,9 @@ def test_chunk_upload_same_content_same_name_is_idempotent(tmp_path: Path, monke
 
 
 def test_chunk_upload_same_name_different_content_still_fails(tmp_path: Path, monkeypatch):
-    projects = tmp_path / "projects"
+    _projects_root(monkeypatch, tmp_path)
     sessions = tmp_path / "sessions"
-    monkeypatch.setattr(UploadAssetChunk, "_root", staticmethod(lambda: projects))
+    _stub_current_principal(monkeypatch, _default_principal())
     monkeypatch.setattr(workbuddy_session, "STATE_DIR", sessions)
     tool = UploadAssetChunk()
     common = {"mcp_session_id": "collision-session"}
@@ -128,9 +227,9 @@ def test_chunk_upload_same_name_different_content_still_fails(tmp_path: Path, mo
 
 
 def test_chunk_upload_same_content_different_name_is_batch_deduplicated(tmp_path: Path, monkeypatch):
-    projects = tmp_path / "projects"
+    _projects_root(monkeypatch, tmp_path)
     sessions = tmp_path / "sessions"
-    monkeypatch.setattr(UploadAssetChunk, "_root", staticmethod(lambda: projects))
+    _stub_current_principal(monkeypatch, _default_principal())
     monkeypatch.setattr(workbuddy_session, "STATE_DIR", sessions)
     tool = UploadAssetChunk()
     common = {"mcp_session_id": "renamed-dedup-session"}
@@ -155,9 +254,9 @@ def test_chunk_upload_same_content_different_name_is_batch_deduplicated(tmp_path
 def test_chunk_upload_sanitizes_filename_and_preserves_extension(
     tmp_path: Path, monkeypatch, original_filename: str, expected_renamed: bool
 ):
-    projects = tmp_path / "projects"
+    projects = _projects_root(monkeypatch, tmp_path)
     sessions = tmp_path / "sessions"
-    monkeypatch.setattr(UploadAssetChunk, "_root", staticmethod(lambda: projects))
+    _stub_current_principal(monkeypatch, _default_principal())
     monkeypatch.setattr(workbuddy_session, "STATE_DIR", sessions)
 
     tool = UploadAssetChunk()
@@ -198,8 +297,18 @@ def test_chunk_upload_sanitizes_filename_and_preserves_extension(
 
 
 def _tool_over(tmp_path: Path, monkeypatch) -> UploadAssetChunk:
-    projects = tmp_path / "projects"
-    monkeypatch.setattr(UploadAssetChunk, "_root", staticmethod(lambda: projects))
+    """Set up ``PROJECTS_DIR`` + a stub principal so any chunk tool call
+    that does not explicitly bind a session gets a known workspace.
+
+    Note: production code calls ``ProjectWorkspace.for_current_principal``
+    which raises ``PrincipalNotFound`` if no binding exists. The chunk
+    tests that *succeed* need a bound principal — ``_stub_current_principal``
+    handles those. Tests that *fail* with a validation error before any
+    workspace lookup (e.g. missing-argument checks) only need this stub
+    if they want to inspect the rejection path.
+    """
+    _projects_root(monkeypatch, tmp_path)
+    _stub_current_principal(monkeypatch, _default_principal())
     return UploadAssetChunk()
 
 

@@ -37,7 +37,7 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
-from lib.paths import REPO_ROOT
+from lib import paths as lib_paths
 
 
 log = logging.getLogger("hyperframes_compose")
@@ -808,7 +808,8 @@ class HyperFramesCompose(BaseTool):
         rel = asset.get("relative_path")
         if rel:
             p = Path(rel)
-            return p if p.is_absolute() else (REPO_ROOT / rel)
+            repo_root = Path(lib_paths.PROJECTS_DIR).resolve().parent
+            return p if p.is_absolute() else (repo_root / rel)
         ap = asset.get("path")
         if ap:
             return Path(ap)

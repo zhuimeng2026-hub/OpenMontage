@@ -168,7 +168,7 @@ def created_profile_ids() -> list[str]:
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_profiles(voicebox_available: str, created_profile_ids: list[str]) -> None:
+def _cleanup_profiles(request, created_profile_ids: list[str]) -> None:
     """DELETE every profile this test appended.
 
     Snapshots the list length on entry so a test that adds N profiles
@@ -177,6 +177,17 @@ def _cleanup_profiles(voicebox_available: str, created_profile_ids: list[str]) -
     """
     snapshot_len = len(created_profile_ids)
     yield
+    # Do not resolve the live voicebox fixture for pure integration tests
+    # (namespace/workspace/registry contracts).  The previous eager
+    # dependency made every such test skip when voicebox was offline.
+    if len(created_profile_ids) <= snapshot_len:
+        return
+    try:
+        voicebox_available = request.getfixturevalue("voicebox_available")
+    except pytest.skip.Exception:
+        # The test already completed; cleanup is best effort and must not
+        # turn a local contract test into a skipped test.
+        return
     while len(created_profile_ids) > snapshot_len:
         pid = created_profile_ids.pop()
         try:
@@ -193,7 +204,7 @@ def _cleanup_profiles(voicebox_available: str, created_profile_ids: list[str]) -
 # Shared cloned profile (session-scoped — cloning is the slow part)
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def shared_clone_profile(request) -> dict[str, Any]:
     """One cloned voice profile shared across all TTS tests in the session.
 

@@ -153,6 +153,7 @@ from pydantic import BaseModel, Field
 from tools.tool_registry import registry
 from tools.base_tool import ToolStatus
 from lib import checkpoint as ckpt
+from lib import paths as lib_paths
 from lib import pipeline_loader
 from lib.effects_parser import (
     apply_effects_to_edit_decisions,
@@ -189,26 +190,149 @@ from lib.render_queue import (
 from lib.user_auth import default_user_store
 from lib.web_auth_app import build_web_mount
 
+# Phase B of user isolation — durable session→principal registry.
+# The registry is the authoritative source across ASGI task boundaries;
+# ContextVar below remains as a fast-path cache (Phase 3 semantics).
+from lib.principal_registry import (  # noqa: E402  (depends on ContextVar)
+    Principal as _Principal,
+    PrincipalNotFound as _PrincipalNotFound,
+    PrincipalOwnerConflict as _PrincipalOwnerConflict,
+    get_mcp_session_id_from_scope as _get_session_id_from_scope,
+    get_mcp_session_header_from_scope as _get_session_header_from_scope,
+)
+import lib.principal_registry as _principal_registry
+
 
 # ---------------------------------------------------------------------------
 # VClaw user-id ContextVar (Phase 3 of user isolation via MCP session)
 # ---------------------------------------------------------------------------
 # vclaw is the source of truth for user identity and emits an opaque
-# ``X-VClaw-User-Id`` header on every MCP request it proxies. OM trusts the
-# header after the shared ``MCP_API_TOKEN`` has been validated — see
-# ``BearerTokenAuthMiddleware.__call__`` for the gating. Phase 4 will read
-# ``current_user_id()`` from inside tools to physically isolate per-user
-# assets/sessions/render outputs.
+# ``X-VClaw-User-Id`` plus a dedicated HMAC assertion on every attributed MCP
+# request it proxies. Possession of the shared ``MCP_API_TOKEN`` alone is not
+# sufficient to claim a user; see ``BearerTokenAuthMiddleware.__call__``.
 _user_id_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "vclaw_user_id", default=None
 )
+_initialize_request_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "mcp_initialize_request", default=False
+)
+
+_ASSERTION_HEADER = b"x-vclaw-user-assertion"
+_ASSERTION_VERSION = "v1"
+_ASSERTION_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+_assertion_replay_lock = threading.Lock()
+_assertion_replay: dict[str, float] = {}
+
+
+def _assertion_secret() -> bytes | None:
+    raw = os.environ.get("OPENMONTAGE_VCLAW_ASSERTION_SECRET", "")
+    return raw.encode("utf-8") if raw else None
+
+
+def _assertion_max_age() -> int:
+    raw = os.environ.get("OPENMONTAGE_VCLAW_ASSERTION_MAX_AGE_SECONDS", "60")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 60
+    return max(1, min(value, 300))
+
+
+def _verify_vclaw_assertion(
+    raw_uid: bytes,
+    raw_assertion: bytes,
+    *,
+    method: str,
+    path: str,
+    session_id: str,
+    body: bytes,
+) -> str | None:
+    """Verify a vclaw HMAC user assertion bound to this exact request.
+
+    The ordinary MCP bearer token is intentionally insufficient for user
+    attribution: direct callers may know it but cannot mint this dedicated
+    assertion.  Timestamp + nonce + method/path/session/body binding provides
+    bounded replay protection and prevents copying an assertion to another
+    tool call.
+    """
+    secret = _assertion_secret()
+    if secret is None or not isinstance(raw_uid, bytes) or not isinstance(raw_assertion, bytes):
+        return None
+    uid = _sanitize_vclaw_user_id(raw_uid)
+    if uid is None or uid.encode("ascii") != raw_uid:
+        return None
+    try:
+        text = raw_assertion.decode("ascii")
+        version, stamp_text, nonce, supplied = text.split(".", 3)
+        stamp = int(stamp_text)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if version != _ASSERTION_VERSION or not _ASSERTION_NONCE_RE.fullmatch(nonce):
+        return None
+    if len(supplied) != 64 or not re.fullmatch(r"[0-9a-f]{64}", supplied):
+        return None
+    if abs(time.time() - stamp) > _assertion_max_age():
+        return None
+    canonical = "\n".join((
+        _ASSERTION_VERSION,
+        uid,
+        str(stamp),
+        nonce,
+        method,
+        path,
+        session_id,
+        hashlib.sha256(body).hexdigest(),
+    )).encode("utf-8")
+    expected = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, supplied):
+        return None
+    now = time.time()
+    with _assertion_replay_lock:
+        cutoff = now - _assertion_max_age()
+        for key, seen in list(_assertion_replay.items()):
+            if seen < cutoff:
+                _assertion_replay.pop(key, None)
+        if nonce in _assertion_replay:
+            return None
+        _assertion_replay[nonce] = now
+    return uid
+
+
+def _is_initialize_body(body: bytes) -> bool:
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("method") == "initialize"
+
+
+def _has_duplicate_security_headers(scope: dict) -> bool:
+    """Reject ambiguous duplicate security headers before dict collapsing."""
+    names = {
+        b"authorization",
+        b"mcp-session-id",
+        b"x-vclaw-user-id",
+        b"x-vclaw-user-assertion",
+    }
+    counts: dict[bytes, int] = {}
+    for raw_key, _ in scope.get("headers") or []:
+        if isinstance(raw_key, bytes):
+            key = raw_key.lower()
+            if key in names:
+                counts[key] = counts.get(key, 0) + 1
+    return any(count > 1 for count in counts.values())
 
 # Allow-list matches vclaw's internal ``users.id`` shape: opaque token,
-# ~32 chars, charset [a-zA-Z0-9._-]. Any character outside the set is
-# silently dropped (with a warning) — never raise on a malformed header,
-# because that would let a hostile header block legitimate traffic.
-_user_id_ok = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
-_max_user_id_len = 128
+# ~32 chars, charset [a-zA-Z0-9._-]. The validation now lives in
+# ``lib.principal_sanitize.sanitize_principal_id`` so the Phase B registry
+# (``lib.principal_registry.bind``) and the Phase 3 middleware share one
+# definition. Any character outside the set is silently dropped (with a
+# warning) — never raise on a malformed header, because that would let a
+# hostile header block legitimate traffic.
+from lib.principal_sanitize import (  # noqa: E402  (after _user_id_ctx for clarity)
+    MAX_PRINCIPAL_ID_LEN as _max_user_id_len,
+    sanitize_principal_id as _sanitize_vclaw_user_id,
+)
 
 
 def current_user_id() -> Optional[str]:
@@ -216,32 +340,63 @@ def current_user_id() -> Optional[str]:
     ``None`` if the request was service-token (no user attribution).
 
     Available to tool implementations starting in Phase 4. Never raise.
+    Note: phase B added ``current_principal()`` (returns a ``Principal``);
+    this function stays for callers that only want the id string. Do NOT
+    change its semantics — tools use it as a fast-path cache while
+    ``current_principal()`` is the recommended entry point.
     """
     return _user_id_ctx.get()
 
 
-def _sanitize_vclaw_user_id(raw: bytes) -> Optional[str]:
-    """Validate and normalize a raw ``X-VClaw-User-Id`` header value.
+def current_principal() -> _Principal:
+    """Return the authenticated principal for the current MCP session.
 
-    Returns the cleaned string on success, or ``None`` for any of:
-      - non-ASCII bytes (cannot decode as ascii)
-      - empty after strip
-      - longer than ``_max_user_id_len`` characters
-      - any character outside ``_user_id_ok``
+    Phase B (durable registry). Lookup order matches the spec:
 
-    Must never raise — bad header values must not block otherwise valid
-    requests.
+    1. An existing ``Mcp-Session-Id`` is resolved from the durable registry,
+       preserving its stored namespace across key rotation. Missing or
+       unverifiable bindings fail closed; the ContextVar cannot retarget a
+       session.
+    2. Only the first ``initialize`` request (without a session id) may use
+       the Phase 3 ContextVar fast-path.
+    3. Raise ``PrincipalNotFound`` when the applicable source misses.
+
+    Tenant id is not exposed by any v1 / Phase B header, so it is always
+    ``None`` until vclaw adds tenant-preserving refresh tokens.
     """
-    try:
-        s = raw.decode("ascii").strip()
-    except UnicodeDecodeError:
-        return None
-    if not s or len(s) > _max_user_id_len:
-        return None
-    for ch in s:
-        if ch not in _user_id_ok:
-            return None
-    return s
+    sid = get_mcp_session_id()
+    if sid:
+        # An existing MCP session has a durable identity binding. Never fall
+        # back to the request ContextVar when the row is missing or fails
+        # namespace verification: that would allow a session id to be paired
+        # with a different user's fast-path header.
+        registered = _principal_registry.lookup(sid)
+        if registered is None:
+            raise _PrincipalNotFound(
+                "mcp session id has no valid durable principal binding"
+            )
+        return registered
+    fast = current_user_id()
+    if fast and _initialize_request_ctx.get():
+        # No session id means this is the initial initialize request. The
+        # middleware has authenticated and sanitized this user id; it is safe
+        # only for this pre-session handshake.
+        return _Principal(kind="user", principal_id=fast, tenant_id=None)
+    if not sid:
+        raise _PrincipalNotFound(
+            "no mcp session id and no Phase 3 fast-path user id"
+        )
+
+
+def get_mcp_session_id_from_scope(scope: dict) -> Optional[str]:
+    """Re-export of ``lib.principal_registry.get_mcp_session_id_from_scope``.
+
+    Phase B moved the header read here so the middleware path and any test
+    helper that constructs an ASGI scope by hand share one definition.
+    Return ``None`` when the header is missing or fails sanitisation; both
+    hostile and pre-handshake values collapse to the same ``None``.
+    """
+    return _get_session_id_from_scope(scope)
 
 
 # ---------------------------------------------------------------------------
@@ -1430,7 +1585,10 @@ def _resolve_session_asset_path(asset: dict) -> Path:
     rel = asset.get("relative_path")
     if not rel:
         raise ValueError("session asset has no relative_path; cannot resolve a filesystem location")
-    candidate = (_PROJECT_ROOT / rel).resolve()
+    # Keep this anchor identical to upload_asset/upload_asset_chunk. The
+    # relative path is relative to PROJECTS_DIR.parent, which may be a
+    # configured custom root outside the source checkout.
+    candidate = (Path(lib_paths.PROJECTS_DIR).resolve().parent / rel).resolve()
     if not candidate.is_file():
         raise ValueError(f"session asset not found at resolved relative path: {rel}")
     return candidate
@@ -1723,14 +1881,46 @@ async def create_remotion_video_share(
         if aspect_ratio not in dimensions:
             raise ValueError("aspect_ratio must be one of 9:16, 16:9, or 1:1")
         width, height = dimensions[aspect_ratio]
-        root = _PROJECT_ROOT / "projects" / project
+        # Phase C: anchor the per-project workspace to the current
+        # principal's namespace. ``upload_asset`` / ``upload_asset_chunk``
+        # land their bytes under ``projects/<users|services>/<namespace_key>/
+        # <project_id>/assets/`` via the same ``ProjectWorkspace`` factory, so
+        # the authorization root here has to be derived the same way. The
+        # pre-Phase-C ``_PROJECT_ROOT / "projects" / project`` root rejected
+        # every namespaced upload as "outside the project workspace" — that
+        # broke upload→render — and simultaneously accepted any *other*
+        # user's asset that happened to sit under the shared legacy tree.
+        from lib.project_workspace import ProjectWorkspace  # lazy: keeps mcp_server import graph light
+        try:
+            workspace = ProjectWorkspace.for_current_principal(project)
+        except _PrincipalNotFound as exc:
+            # Re-raise as ValueError so the enclosing validation handler
+            # reports a stable, non-leaky message: the registry's own text
+            # carries the raw session id, which must not reach a tool result.
+            raise ValueError(
+                "no authenticated principal is bound to this MCP session; "
+                "cannot resolve the per-user project workspace"
+            ) from exc
+        # Session assets always live under ``<workspace>/assets/`` (the upload
+        # tools write to ``assets/_sessions/<session_digest>/``), so authorize
+        # against that subtree rather than the whole workspace — renders and
+        # checkpoints are not uploadable material.
+        # Reads may come from either the canonical v2 project or the
+        # authenticated principal's unmigrated v1 project.  Uploads and
+        # renders always target ``workspace.root`` (v2); this allow-list is
+        # read-only and remains scoped to the same principal.
+        assets_roots = tuple(
+            (candidate_root / "assets").resolve(strict=False)
+            for candidate_root in workspace.read_roots
+        )
         safe_assets = []
         for asset in chunk_assets:
             path = _resolve_session_asset_path(asset)
-            try:
-                path.relative_to(root.resolve())
-            except ValueError as exc:
-                raise ValueError("session asset path is outside the project workspace") from exc
+            if not any(
+                path == assets_root or assets_root in path.parents
+                for assets_root in assets_roots
+            ):
+                raise ValueError("session asset path is outside the project workspace")
             if not path.is_file() or asset.get("type") != "image":
                 raise ValueError(f"session asset is not a readable image: {path.name}")
             # Recompute and persist the OS-correct absolute path so downstream
@@ -1852,7 +2042,11 @@ async def create_remotion_video_share(
                 "targetDurationSeconds": duration * len(safe_assets),
             })
         asset_manifest = {"version": "1.0", "assets": safe_assets, "metadata": {"project_id": project, "batch_id": batch_id}}
-        output = root / "renders" / f"{batch_id}-{job_id}.mp4"
+        # Renders land in the same per-principal namespace as the assets they
+        # were composed from (``ProjectWorkspace.renders``), so one user's
+        # output can never be overwritten by another user rendering the same
+        # project_id.
+        output = workspace.renders / f"{batch_id}-{job_id}.mp4"
         profile = {"9:16": "tiktok", "16:9": "generic_hd", "1:1": "instagram_feed"}[aspect_ratio]
     except Exception as exc:
         update_session(sid, status="failed", failure_stage="validation", video_path=None, error=str(exc))
@@ -2778,13 +2972,13 @@ class BearerTokenAuthMiddleware:
 
         # Log request with method and path
         auth_present = bool(headers.get(b"authorization", b"").startswith(b"Bearer "))
-        request_session = headers.get(b"mcp-session-id", b"").decode("ascii", errors="ignore").strip() or None
+        session_header_present, request_session = _get_session_header_from_scope(scope)
         request_id = headers.get(b"x-request-id", b"").decode("ascii", errors="ignore").strip() or uuid.uuid4().hex
         _log.info("Request: %s %s from %s:%s auth=%s session_hash=%s request_id=%s", method, path, client_host, client_port, "YES" if auth_present else "NO", session_hash(request_session), request_id)
 
         # Read and log request body for POST to /mcp
+        body = b""
         if method == "POST" and path == "/mcp":
-            body = b""
             while True:
                 message = await receive()
                 if message["type"] == "http.disconnect":
@@ -2799,6 +2993,12 @@ class BearerTokenAuthMiddleware:
             scope["_body_consumed"] = True
         else:
             _receive = receive
+
+        if _has_duplicate_security_headers(scope):
+            _log.warning("400 Bad Request: duplicate security header")
+            return await self._reject_bad_request(
+                scope, _receive, send, "Duplicate security header."
+            )
 
         provided = headers.get(b"authorization", b"")
         if not provided.startswith(b"Bearer "):
@@ -2819,28 +3019,68 @@ class BearerTokenAuthMiddleware:
             return await self._reject(scope, _receive, send)
 
         _log.info("Auth OK: %s:%s", client_host, client_port)
-        # X-VClaw-User-Id — opt-in user attribution emitted by vclaw (Phase 1).
-        # Only set after MCP_API_TOKEN check passed; bad values are dropped
-        # with a warning rather than raised, so a malformed header can never
-        # block an otherwise-valid request.
+        if session_header_present and request_session is None:
+            _log.warning("400 Bad Request: malformed Mcp-Session-Id")
+            return await self._reject_bad_request(
+                scope, _receive, send, "Malformed Mcp-Session-Id header."
+            )
+
+        # User attribution is accepted only with a dedicated vclaw HMAC
+        # assertion.  Possession of the ordinary shared MCP bearer token must
+        # never let a direct caller forge X-VClaw-User-Id.
         raw_uid = headers.get(b"x-vclaw-user-id", b"")
+        raw_assertion = headers.get(_ASSERTION_HEADER, b"")
         uid_token = None
-        if raw_uid:
-            sanitized = _sanitize_vclaw_user_id(raw_uid)
-            if sanitized:
-                uid_token = _user_id_ctx.set(sanitized)
-                _log.info("vclaw user id attached: %s...", sanitized[:8])
-            else:
-                _log.warning(
-                    "vclaw user id rejected: raw_len=%d preview=%r",
-                    len(raw_uid), raw_uid[:32],
-                )
+        if request_session and not raw_uid and not raw_assertion:
+            registered = _principal_registry.lookup(request_session)
+            if registered is not None and registered.kind == "user":
+                _log.warning("401 Unauthorized: user session assertion missing")
+                return await self._reject(scope, _receive, send)
+        if raw_uid or raw_assertion:
+            if not raw_uid or not raw_assertion:
+                _log.warning("401 Unauthorized: incomplete vclaw user assertion")
+                return await self._reject(scope, _receive, send)
+            sanitized = _verify_vclaw_assertion(
+                raw_uid, raw_assertion, method=method, path=path,
+                session_id=request_session or "", body=body,
+            )
+            if sanitized is None:
+                _log.warning("401 Unauthorized: invalid vclaw user assertion")
+                return await self._reject(scope, _receive, send)
+            uid_token = _user_id_ctx.set(sanitized)
+            _log.info("vclaw user id attached: %s...", sanitized[:8])
+            # Phase B — durable session→principal registry. We bind only when
+            # a session id and a verified user assertion are both present.
+            if request_session:
+                try:
+                    _principal_registry.bind(
+                        request_session,
+                        _Principal(kind="user", principal_id=sanitized, tenant_id=None),
+                    )
+                except _PrincipalOwnerConflict:
+                    # The session id is already owned by a different
+                    # principal; never allow the assertion to retarget it.
+                    _user_id_ctx.reset(uid_token)
+                    return await self._reject_session_owner_conflict(scope, _receive, send)
+                except (ValueError, _PrincipalNotFound):
+                    _log.warning("principal registry bind skipped session_hash=%s",
+                                 session_hash(request_session))
         session_id = request_session
         session_token = set_mcp_session_id(session_id)
         request_token = set_mcp_request_id(request_id)
+        initialize_token = _initialize_request_ctx.set(
+            bool(
+                not request_session
+                and method == "POST"
+                and path == "/mcp"
+                and isinstance(body, bytes)
+                and _is_initialize_body(body)
+            )
+        )
         try:
             return await self.app(scope, _receive, send)
         finally:
+            _initialize_request_ctx.reset(initialize_token)
             reset_mcp_request_id(request_token)
             reset_mcp_session_id(session_token)
             if uid_token is not None:
@@ -2854,6 +3094,36 @@ class BearerTokenAuthMiddleware:
             {"error": "unauthorized", "message": "Missing or invalid Bearer token."},
             status_code=401,
             headers={"WWW-Authenticate": 'Bearer realm="openmontage-mcp"'},
+        )
+        await response(scope, receive, send)
+
+    @staticmethod
+    async def _reject_bad_request(scope, receive, send, message: str):
+        from starlette.responses import JSONResponse
+
+        response = JSONResponse(
+            {"error": "bad_request", "message": message}, status_code=400
+        )
+        await response(scope, receive, send)
+
+    @staticmethod
+    async def _reject_session_owner_conflict(scope, receive, send):
+        """403 for an ``Mcp-Session-Id`` already owned by another principal.
+
+        403 rather than 401: the Bearer token *was* valid, the caller is
+        simply not the owner of the session it is addressing. The body names
+        no principal so the response cannot be used to probe who owns a
+        given session id.
+        """
+        from starlette.responses import JSONResponse
+
+        response = JSONResponse(
+            {
+                "error": "session_owner_conflict",
+                "message": "This Mcp-Session-Id is bound to a different user. "
+                           "Start a new MCP session.",
+            },
+            status_code=403,
         )
         await response(scope, receive, send)
 
