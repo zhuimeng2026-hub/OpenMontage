@@ -493,6 +493,7 @@ class VideoAnalyzer(BaseTool):
                 "depth": depth,
                 "steps_completed": steps_completed,
                 "steps_failed": steps_failed,
+                "has_transcript": transcript_data is not None,
                 "duration_seconds": round(time.time() - start, 2),
             }
             self._save_brief(brief, output_dir)
