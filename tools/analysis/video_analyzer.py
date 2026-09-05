@@ -607,6 +607,13 @@ class VideoAnalyzer(BaseTool):
                             "description": "",  # Agent fills via vision
                         })
                     steps_completed.append("keyframes")
+                else:
+                    # FrameSampler returns a ToolResult rather than raising,
+                    # so a success=False failure slips past the `except`
+                    # below. Surface it explicitly — the brief's steps_failed
+                    # is the only signal downstream agents have.
+                    err = (fs_result.error or "FrameSampler returned success=False").strip()
+                    steps_failed.append(f"keyframes: {err}")
             except Exception as e:
                 steps_failed.append(f"keyframes: {e}")
         elif video_path and not scenes:
@@ -633,6 +640,12 @@ class VideoAnalyzer(BaseTool):
                             "description": "",
                         })
                     steps_completed.append("keyframes_uniform")
+                else:
+                    # Same defensive else as the scene-guided branch above —
+                    # FrameSampler returns success=False without raising,
+                    # so without this branch the failure is invisible.
+                    err = (fs_result.error or "FrameSampler returned success=False").strip()
+                    steps_failed.append(f"keyframes_uniform: {err}")
             except Exception as e:
                 steps_failed.append(f"keyframes_uniform: {e}")
 
