@@ -3,10 +3,16 @@
 Downloads video, audio, or subtitles from YouTube, Shorts, Instagram Reels,
 TikTok, and 1000+ other sites. Designed for reference video analysis — downloads
 at analysis quality (720p), not production quality.
+
+Per-user isolation: every call MUST supply ``userid`` and an ``output_dir``
+that resolves under ``projects/<userid>/``. Rejects arbitrary filesystem
+writes — see ``_validate_output_dir`` and the workspace contract in
+``docs/todo.md`` ("video_downloader 工作区隔离 + 命名冲突防护").
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -24,6 +30,7 @@ from tools.base_tool import (
     ToolTier,
     ToolRuntime,
 )
+from lib import paths as _paths  # imported for runtime PROJECTS_DIR lookup
 
 
 class VideoDownloader(BaseTool):
@@ -67,10 +74,24 @@ class VideoDownloader(BaseTool):
 
     input_schema = {
         "type": "object",
-        "required": ["url", "output_dir"],
+        "required": ["url", "userid", "output_dir"],
         "properties": {
             "url": {"type": "string", "description": "Video URL to download"},
-            "output_dir": {"type": "string", "description": "Directory for downloaded files"},
+            "userid": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+                "description": "Caller user id (must match the MCP session's "
+                               "X-VClaw-User-Id). Used as the workspace root for "
+                               "the downloaded artifact — enforces per-user "
+                               "isolation. Path-traversal characters are rejected "
+                               "by the regex.",
+            },
+            "output_dir": {
+                "type": "string",
+                "description": "Directory for downloaded files. Must resolve "
+                               "under projects/<userid>/ — anything outside is "
+                               "rejected to enforce the workspace contract.",
+            },
             "format": {
                 "type": "string",
                 "enum": ["video", "audio_only", "subtitles_only", "metadata_only"],
@@ -133,6 +154,54 @@ class VideoDownloader(BaseTool):
         "1080p": 1080,
     }
 
+    # userid charset: alphanumeric + dash/underscore, 1-64 chars. Stricter than
+    # a typical UUID regex on purpose — anything fancier (dots, slashes,
+    # whitespace, NUL, unicode) is rejected to prevent path injection.
+    _USERID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+    @classmethod
+    def _validate_userid(cls, userid: Any) -> str:
+        """Reject path-traversal / NUL / non-ASCII userids."""
+        if not isinstance(userid, str) or not cls._USERID_RE.match(userid):
+            raise ValueError(
+                f"userid must match {cls._USERID_RE.pattern!r} "
+                f"(got {type(userid).__name__}: {userid!r})"
+            )
+        return userid
+
+    @classmethod
+    def _validate_output_dir(cls, output_dir: Path, userid: str) -> Path:
+        """Resolve ``output_dir`` and verify it lives under ``projects/<userid>/``.
+
+        Per-user isolation: a caller can never write into another user's
+        workspace, into ``projects/_scratch/`` (now ``projects/<userid>/_scratch/``),
+        or anywhere outside the projects tree.  Returns the absolute resolved
+        Path on success; raises ``ValueError`` with a caller-actionable message
+        on rejection.
+        """
+        # Path.resolve() also follows symlinks — necessary so a malicious caller
+        # can't bypass the check by symlinking projects/<them>/ → /etc.
+        resolved = output_dir.expanduser().resolve()
+        user_root = (_paths.PROJECTS_DIR / userid).resolve()
+        try:
+            resolved.relative_to(user_root)
+        except ValueError as e:
+            raise ValueError(
+                f"output_dir must resolve under {user_root} "
+                f"(resolved to {resolved}; userid={userid!r})"
+            ) from e
+        return resolved
+
+    @staticmethod
+    def _url_hash(url: str) -> str:
+        """Stable short hash of the URL — used in outtmpl to keep two
+        different URLs in the same output_dir from clobbering each other.
+
+        Same URL → same hash → yt-dlp overwrites the same file (idempotent).
+        Different URLs → different hashes → no collision.
+        """
+        return hashlib.sha1(url.encode("utf-8")).hexdigest()[:8]
+
     def _detect_platform(self, url: str) -> str:
         """Detect platform from URL."""
         url_lower = url.lower()
@@ -180,7 +249,15 @@ class VideoDownloader(BaseTool):
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         url = inputs["url"]
-        output_dir = Path(inputs["output_dir"])
+        # --- Per-user isolation: validate userid + output_dir before any
+        # filesystem side effect. Both errors are loud and non-fatal to the
+        # caller (ToolResult) so the MCP layer can surface them cleanly.
+        try:
+            userid = self._validate_userid(inputs.get("userid"))
+            output_dir = self._validate_output_dir(Path(inputs["output_dir"]), userid)
+        except ValueError as exc:
+            return ToolResult(success=False, error=str(exc))
+
         dl_format = inputs.get("format", "video")
         max_res = inputs.get("max_resolution", "720p")
         max_duration = inputs.get("max_duration_seconds", 600)
@@ -262,7 +339,12 @@ class VideoDownloader(BaseTool):
         import yt_dlp
 
         height = self._RES_MAP.get(max_res, 720)
-        video_out = str(output_dir / "reference_video.%(ext)s")
+        # URL hash → distinct filenames per URL in the same output_dir, so
+        # two concurrent downloads (different URLs, same dir) don't clobber
+        # each other. Same URL twice → same hash → yt-dlp overwrites
+        # idempotently.
+        url_hash = self._url_hash(url)
+        video_out = str(output_dir / f"reference_video_{url_hash}.%(ext)s")
 
         ydl_opts = {
             "format": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
