@@ -580,6 +580,265 @@ def _last_activity(project_dir: Path) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Reference brief (video_analyzer output)
+# ---------------------------------------------------------------------------
+
+def _derive_asset_gaps(brief: dict) -> dict:
+    """asset_gaps sub-object: LLM-filled if present, else deterministic heuristic.
+
+    Two paths:
+    - `brief["_asset_gaps"]` exists → return as-is with status="llm_filled".
+    - Otherwise → deterministic fallback that scans the brief for tells.
+    """
+    existing = brief.get("_asset_gaps")
+    if isinstance(existing, dict):
+        merged = dict(existing)
+        merged["status"] = "llm_filled"
+        return merged
+
+    style = brief.get("style_profile") or {}
+    narration_style = style.get("narration_style") or {}
+    music_style = style.get("music_style", "") or ""
+    content = brief.get("content_analysis") or {}
+    tone = content.get("tone", "") or ""
+    all_scenes = ((brief.get("structure_analysis") or {}).get("scenes")) or []
+
+    motion_clip_count = sum(
+        1 for s in all_scenes if isinstance(s, dict) and s.get("motion_type") == "motion_clip"
+    )
+    animated_still_count = sum(
+        1 for s in all_scenes if isinstance(s, dict) and s.get("motion_type") == "animated_still"
+    )
+    product_shot_count = sum(
+        1 for s in all_scenes if isinstance(s, dict) and s.get("visual_type") == "product_shot"
+    )
+    talking_head_count = sum(
+        1 for s in all_scenes if isinstance(s, dict) and s.get("visual_type") == "talking_head"
+    )
+    text_count = sum(
+        1 for s in all_scenes if isinstance(s, dict) and (s.get("on_screen_text") or "").strip()
+    )
+
+    gaps: list[dict] = []
+    seen_ids: set[str] = set()
+
+    def _add(gap_id: str, category: str, label: str, priority: str,
+             description: str, can_ai: bool, question: str, options: list[str]) -> None:
+        if gap_id in seen_ids:
+            return
+        seen_ids.add(gap_id)
+        gaps.append({
+            "id": gap_id,
+            "category": category,
+            "label": label,
+            "description": description,
+            "can_ai_generate": can_ai,
+            "priority": priority,
+            "question_for_user": question,
+            "options": options,
+        })
+
+    if motion_clip_count > 0:
+        _add(
+            "hero_video", "video_footage", "AI 视频生成 / 实拍", "must_have",
+            f"{motion_clip_count} 个场景是真实物体运动，需要 AI 视频生成或实拍素材",
+            True, "用 AI 视频生成（如 Kling / Runway）还是实拍素材？",
+            ["I'll provide", "AI generate", "Use stock"],
+        )
+
+    if animated_still_count > 3:
+        _add(
+            "still_images", "images", "静图素材 (pan-zoom 场景)", "must_have",
+            f"{animated_still_count} 个场景是图片+平移/缩放，可用产品图或 stock 图",
+            True, "用产品图、AI 生成图，还是 stock 素材？",
+            ["I'll provide", "AI generate", "Use stock"],
+        )
+
+    if narration_style.get("has_narration") is True:
+        _add(
+            "script", "script", "旁白脚本", "must_have",
+            "源视频有旁白，需要你提供文案或授权 TTS 生成",
+            False, "你有现成脚本，还是用 AI 起草？",
+            ["I'll provide", "AI generate", "Use stock"],
+        )
+
+    if music_style:
+        _add(
+            "music", "music", "背景音乐", "nice_to_have",
+            f"源视频使用了 '{music_style}' 风格音乐",
+            True, f"用相同风格（{music_style}）的 AI 生成，还是选 stock？",
+            ["I'll provide", "AI generate", "Use stock", "Skip"],
+        )
+
+    if tone in ("cinematic", "dramatic"):
+        _add(
+            "sound_design", "sfx", "音效设计", "nice_to_have",
+            "cinematic/dramatic 风格需要环境音/冲击音",
+            True, "用 AI 生成音效还是选 stock？",
+            ["I'll provide", "AI generate", "Use stock"],
+        )
+
+    if product_shot_count > 0:
+        _add(
+            "product_assets", "brand", "产品图 / 3D 渲染", "must_have",
+            f"{product_shot_count} 个镜头是产品镜头",
+            True, "用现有产品图还是 3D 渲染？",
+            ["I'll provide", "AI generate", "Use stock"],
+        )
+
+    if talking_head_count > 0:
+        _add(
+            "talent", "character", "出镜演员 / Avatar 形象", "must_have",
+            f"{talking_head_count} 个镜头是真人/数字人出镜",
+            False, "出镜演员还是用 Avatar 数字人？",
+            ["I'll provide", "AI generate", "Use stock", "Use avatar"],
+        )
+
+    if text_count > 0:
+        _add(
+            "text_assets", "text", "标题 / 字幕文字", "nice_to_have",
+            f"{text_count} 个镜头含屏幕文字",
+            True, "用模板生成还是自定文案？",
+            ["I'll provide", "AI generate", "Use stock"],
+        )
+
+    must_have = sum(1 for g in gaps if g["priority"] == "must_have")
+    nice_to_have = sum(1 for g in gaps if g["priority"] == "nice_to_have")
+    summary = (
+        f"Deterministic: {must_have} must-have, {nice_to_have} nice-to-have. "
+        "Run LLM gap-analysis for nuance."
+    )
+    return {
+        "status": "deterministic",
+        "filled_at": None,
+        "summary": summary,
+        "gaps": gaps,
+    }
+
+
+def _load_reference_brief(project_dir: Path) -> Optional[dict]:
+    """Project the latest video_analyzer brief into the Reference panel shape.
+
+    Scans `project_dir/analysis_*/video_analysis_brief.json`, picks the newest
+    by mtime, and projects it to the contract consumed by board.js. Returns
+    None on missing/malformed input or any projection failure — a bad brief
+    must degrade the board, never crash it.
+    """
+    try:
+        candidates = list(project_dir.glob("analysis_*/video_analysis_brief.json"))
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda p: p.stat().st_mtime)
+        brief = _read_json(latest)
+        if not isinstance(brief, dict):
+            return None
+
+        from datetime import datetime, timezone
+        analyzed_at = datetime.fromtimestamp(
+            latest.stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+        brief_relpath = _rel(project_dir, latest)
+
+        source = brief.get("source") or {}
+        platform_meta = source.get("platform_metadata") or {}
+        content = brief.get("content_analysis") or {}
+        structure = brief.get("structure_analysis") or {}
+        pacing = structure.get("pacing_profile") or {}
+        replication = brief.get("replication_guidance") or {}
+
+        summary = (content.get("summary") or "").strip()
+        if len(summary) > 240:
+            summary = summary[:237] + "..."
+
+        all_scenes = structure.get("scenes") or []
+        keyframes = brief.get("keyframes") or []
+
+        keyframes_by_scene: dict[int, dict] = {}
+        for kf in keyframes:
+            if not isinstance(kf, dict):
+                continue
+            scene_idx = kf.get("scene_index")
+            if isinstance(scene_idx, int) and scene_idx not in keyframes_by_scene:
+                keyframes_by_scene[scene_idx] = kf
+
+        # frame_sampler writes paths relative to project_dir (e.g.
+        # "analysis_<ts>/keyframes/frame_0000.jpg"). Fall back to prefixing
+        # with the brief's directory if a bare filename slipped through.
+        brief_dir_name = latest.parent.name
+        scenes_preview: list[dict] = []
+        for scene in all_scenes[:8]:
+            if not isinstance(scene, dict):
+                continue
+            scene_idx = scene.get("scene_index", 0)
+            keyframe = keyframes_by_scene.get(scene_idx, {})
+            kf_path = keyframe.get("path") or ""
+            if kf_path and "keyframes/" not in kf_path:
+                kf_path = f"{brief_dir_name}/keyframes/{Path(kf_path).name}"
+            scenes_preview.append({
+                "index": scene_idx,
+                "start": float(scene.get("start_time", 0) or 0),
+                "end": float(scene.get("end_time", 0) or 0),
+                "motion_type": scene.get("motion_type", "") or "",
+                "description": scene.get("description", "") or "",
+                "keyframe_relpath": kf_path or None,
+            })
+
+        # Motion breakdown across ALL scenes (not just the preview slice).
+        motion_counts = {"motion_clip": 0, "animated_still": 0, "static_image": 0}
+        for scene in all_scenes:
+            if not isinstance(scene, dict):
+                continue
+            mt = scene.get("motion_type", "")
+            if mt in motion_counts:
+                motion_counts[mt] += 1
+        total_motion = sum(motion_counts.values()) or 1
+        motion_breakdown = {
+            "motion_clip": round(motion_counts["motion_clip"] / total_motion, 3),
+            "animated_still": round(motion_counts["animated_still"] / total_motion, 3),
+            "static_image": round(motion_counts["static_image"] / total_motion, 3),
+        }
+
+        classification = {
+            "pacing_style": pacing.get("pacing_style", "variable") or "variable",
+            "avg_scene_seconds": float(pacing.get("avg_scene_duration_seconds", 0) or 0),
+            "cuts_per_minute": float(pacing.get("cuts_per_minute", 0) or 0),
+            "total_scenes": int(structure.get("total_scenes", 0) or 0),
+            "complexity": replication.get("estimated_complexity") or "moderate",
+            "needs_motion": bool(replication.get("motion_required", False)),
+            "suggested_pipeline": (
+                replication.get("suggested_pipeline") or "video-template-remix"
+            ),
+        }
+
+        asset_gaps = _derive_asset_gaps(brief)
+
+        return {
+            "available": True,
+            "analyzed_at": analyzed_at,
+            "brief_relpath": brief_relpath,
+            "source": {
+                "type": source.get("type", "other_url") or "other_url",
+                "title": source.get("title", "") or "",
+                "url": source.get("url"),
+                "duration_seconds": float(source.get("duration_seconds", 0) or 0),
+                "resolution": source.get("resolution", "") or "",
+                "uploader": platform_meta.get("uploader", "") or "",
+                "view_count": int(platform_meta.get("view_count", 0) or 0),
+            },
+            "summary": summary,
+            "topics": list(content.get("topics") or []),
+            "tone": content.get("tone", "") or "",
+            "hook_technique": content.get("hook_technique", "") or "",
+            "classification": classification,
+            "motion_breakdown": motion_breakdown,
+            "scenes_preview": scenes_preview,
+            "asset_gaps": asset_gaps,
+        }
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -607,6 +866,7 @@ def load_board_state(project_dir: Path) -> dict[str, Any]:
     events = read_events(project_dir, limit=250)
     storyboard = _build_storyboard(project_dir, artifacts, events)
     media = _scan_media(project_dir)
+    reference_brief = _load_reference_brief(project_dir)
 
     stages = _build_stage_rail(pipeline_meta, checkpoints, history)
 
@@ -651,6 +911,7 @@ def load_board_state(project_dir: Path) -> dict[str, Any]:
         "cost": cost,
         "last_activity": last_activity,
         "live": bool(last_activity and (now - last_activity) < LIVE_WINDOW_SECONDS),
+        "reference_brief": reference_brief,
     }
     state["poster"] = _find_poster(project_dir, state)
     return state
