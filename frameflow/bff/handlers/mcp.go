@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"frameflow-bff/internal/config"
 	"frameflow-bff/internal/imagebatch"
 	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
@@ -28,20 +29,9 @@ const maxMCPBodyBytes = 2 << 20
 var uploadFilenamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 var uploadExtensionPattern = regexp.MustCompile(`^\.[A-Za-z0-9]{1,10}$`)
 
-var allowedMCPTools = map[string]bool{
-	"upload_asset_chunk":          true,
-	"create_remotion_video_share": true,
-	"get_render_status":           true,
-	// Subtitle workflow: the browser composes the workflow by calling
-	// execute_tool with tool_name=transcriber|translator|subtitle_gen|
-	// remotion_caption_burn|tts_selector. The BFF's only job here is to
-	// forward the request to the upstream MCP — every authorization and
-	// resource check still happens on the upstream side.
-	"execute_tool": true,
-	"get_tool_info": true,
-	"list_tools":   true,
-	"dry_run_tool": true,
-}
+// The browser-facing tool allowlist now lives in config (MCP_ALLOWED_TOOLS,
+// falling back to config.DefaultMCPAllowedTools) so deployments can tighten it
+// without a rebuild. See mcpToolAllowed below.
 
 // MCPProxy receives { "tool": "<name>", "args": { ... } } and forwards it to the
 // OpenMontage MCP server as a tools/call, returning the extract()-ed structured
@@ -66,8 +56,10 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tool is required"})
 		return
 	}
-	if !allowedMCPTools[req.Tool] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tool is not allowed"})
+	// tools/list and initialize are intentionally not accepted here: they are
+	// internal MCP client operations, never browser-facing tool calls.
+	if !h.mcpToolAllowed(req.Tool) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("tool %q is not allowed", req.Tool)})
 		return
 	}
 	sid := h.ensureSession(c)
@@ -144,13 +136,19 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 	// queue is keyed by the stable owner identity (scope), so each user only ever
 	// sees their own jobs — never another caller's (owner isolation is structural,
 	// not a filter) and the same account sees the same queue across machines.
-	if req.Tool == "create_remotion_video_share" {
-		if jobID := digString(res, "render_job_id"); jobID != "" {
-			name, _ := req.Args["title"].(string)
+	// Any render submission — the photo/video share plus the two FrameFlow media
+	// workflows (captions, cloned voice) — enters the caller's own render queue,
+	// so those jobs are visible in "我的渲染任务" like any other.
+	if isRenderSubmissionTool(req.Tool) {
+		if jobID := renderJobID(res); jobID != "" {
+			name := firstString(req.Args, "title", "name")
 			if name == "" {
 				name = "帧流作品"
 			}
-			resLabel, _ := req.Args["aspect_ratio"].(string)
+			resLabel := firstString(req.Args, "aspect_ratio", "resolution")
+			if resLabel == "" {
+				resLabel = firstString(res, "aspect_ratio", "resolution")
+			}
 			if resLabel == "" {
 				resLabel = "9:16"
 			}
@@ -175,7 +173,7 @@ func (h *Handlers) MCPProxy(c *gin.Context) {
 		if op, _ := req.Args["operation"].(string); op == "complete" {
 			h.recordUploadComplete(scope, projectID, res, uploadDiag)
 		}
-	} else if req.Tool == "create_remotion_video_share" {
+	} else if isRenderSubmissionTool(req.Tool) {
 		h.Store.ResetAsset(scope)
 	}
 
@@ -573,4 +571,58 @@ func (h *Handlers) VoiceboxMCPProxy(c *gin.Context) {
 	}
 	log.Printf("[bff-voicebox-mcp] done method=%s client_id=%s upstream_status=%d elapsed_ms=%d",
 		method, clientID, resp.StatusCode, time.Since(start).Milliseconds())
+}
+
+// isRenderSubmissionTool reports whether a successful tool call starts a render
+// job that must land in the caller's render queue. Besides the photo/video
+// share, the two FrameFlow media workflows (captions and cloned voice) submit a
+// render as well, so they need the same queue bookkeeping and asset-counter
+// reset — otherwise a media job would be invisible in "我的渲染任务" and would
+// leave the upload quota stuck at its cap for the next submission.
+func isRenderSubmissionTool(tool string) bool {
+	switch tool {
+	case "create_remotion_video_share", "create_captioned_video_share", "create_cloned_voice_video_share":
+		return true
+	default:
+		return false
+	}
+}
+
+// renderJobID accepts both spellings: the share tools return render_job_id,
+// the media workflows return job_id.
+func renderJobID(res map[string]interface{}) string {
+	if id := digString(res, "render_job_id"); id != "" {
+		return id
+	}
+	return digString(res, "job_id")
+}
+
+// firstString returns the first non-empty string found under any of keys.
+func firstString(values map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// mcpToolAllowed is the server-side allowlist for POST /api/mcp. It is
+// configurable through MCP_ALLOWED_TOOLS (CSV) and falls back to
+// config.DefaultMCPAllowedTools() when unset. The MCP handshake and tools/list
+// are performed internally by the client and never pass through this handler.
+func (h *Handlers) mcpToolAllowed(tool string) bool {
+	allowed := []string(nil)
+	if h != nil && h.Cfg != nil {
+		allowed = h.Cfg.MCPAllowedTools
+	}
+	if len(allowed) == 0 {
+		allowed = config.DefaultMCPAllowedTools()
+	}
+	for _, candidate := range allowed {
+		if candidate == tool {
+			return true
+		}
+	}
+	return false
 }

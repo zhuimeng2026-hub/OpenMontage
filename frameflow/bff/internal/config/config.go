@@ -25,9 +25,13 @@ func Validate(cfg *Config) error {
 // WechatAppSecret, ...) must come from the environment / .env, NEVER from the
 // browser bundle.
 type Config struct {
-	MCPBaseURL        string // Streamable-HTTP MCP endpoint
-	MCPAPIToken       string // Bearer token for the upstream MCP (server-side only)
-	MCPProgressURL    string // base URL for the render-progress SSE endpoint
+	MCPBaseURL     string // Streamable-HTTP MCP endpoint
+	MCPAPIToken    string // Bearer token for the upstream MCP (server-side only)
+	MCPProgressURL string // base URL for the render-progress SSE endpoint
+	// MCPAllowedTools is the server-side allowlist for tools exposed through
+	// POST /api/mcp. The MCP handshake and tools/list are performed internally
+	// by the client and do not pass through that HTTP handler.
+	MCPAllowedTools   []string
 	WechatAppID       string
 	WechatAppSecret   string // server-side only
 	WechatRedirectURI string // optional override; defaults to our own callback
@@ -87,6 +91,27 @@ type Config struct {
 	VoiceboxUpstreamURL string
 }
 
+// DefaultMCPAllowedTools is the server-side allowlist used when MCP_ALLOWED_TOOLS
+// is unset. Beyond the upload/render/status surface and the two FrameFlow media
+// workflows, it includes the generic tool-inspection and execution tools the
+// script-mode editor drives (execute_tool / get_tool_info / list_tools /
+// dry_run_tool). Those forward to the upstream MCP, where every authorization
+// and resource check still happens — the BFF only relays them.
+func DefaultMCPAllowedTools() []string {
+	return []string{
+		"upload_asset",
+		"upload_asset_chunk",
+		"create_remotion_video_share",
+		"get_render_status",
+		"create_captioned_video_share",
+		"create_cloned_voice_video_share",
+		"execute_tool",
+		"get_tool_info",
+		"list_tools",
+		"dry_run_tool",
+	}
+}
+
 func Load() *Config {
 	_ = godotenv.Load()
 	get := func(k, def string) string {
@@ -100,10 +125,15 @@ func Load() *Config {
 	if mcpProgressURL == "" {
 		mcpProgressURL = deriveProgressURL(mcpBaseURL)
 	}
+	allowedTools := parseCSV(os.Getenv("MCP_ALLOWED_TOOLS"))
+	if len(allowedTools) == 0 {
+		allowedTools = DefaultMCPAllowedTools()
+	}
 	return &Config{
 		MCPBaseURL:               mcpBaseURL,
 		MCPAPIToken:              os.Getenv("MCP_API_TOKEN"),
 		MCPProgressURL:           mcpProgressURL,
+		MCPAllowedTools:          allowedTools,
 		WechatAppID:              os.Getenv("WECHAT_APP_ID"),
 		WechatAppSecret:          os.Getenv("WECHAT_APP_SECRET"),
 		WechatRedirectURI:        os.Getenv("WECHAT_REDIRECT_URI"),
@@ -126,6 +156,24 @@ func Load() *Config {
 		ExternalAgentToken:       strings.TrimSpace(os.Getenv("EXTERNAL_AGENT_TOKEN")),
 		VoiceboxUpstreamURL:      strings.TrimRight(get("VOICEBOX_UPSTREAM_URL", "http://lanes.ymxt.top:8900/voicebox/mcp/"), "/") + "/",
 	}
+}
+
+func parseCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func firstNonEmpty(values ...string) string {

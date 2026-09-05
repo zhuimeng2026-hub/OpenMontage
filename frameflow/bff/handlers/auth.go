@@ -33,6 +33,11 @@ type Handlers struct {
 }
 
 func New(cfg *config.Config, store *mcp.SessionStore, lim limits.Resolver, batches *imagebatch.Store, db *sql.DB) *Handlers {
+	// Guard against a nil config so callers (and tests) that construct Handlers
+	// without a Config still get usable defaults instead of a nil deref.
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	userDB = db
 	return &Handlers{
 		Cfg:          cfg,

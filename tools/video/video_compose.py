@@ -2461,7 +2461,17 @@ class VideoCompose(BaseTool):
         """
         if not source or source.startswith(("http://", "https://", "data:")):
             return source
-        resolved = Path(source.replace("file://", ""))
+        if source.startswith("file:"):
+            from urllib.parse import urlparse
+            from urllib.request import url2pathname
+
+            parsed = urlparse(source)
+            uri_path = url2pathname(parsed.path)
+            if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+                uri_path = f"//{parsed.netloc}{uri_path}"
+            resolved = Path(uri_path)
+        else:
+            resolved = Path(source)
         if not resolved.exists():
             # Empty / missing paths used to silently pass through to TS resolveAsset()
             # which then produced file:// URIs that Chrome refused to load. Now we at

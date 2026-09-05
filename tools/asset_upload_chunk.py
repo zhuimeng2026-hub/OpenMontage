@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.asset_upload import UploadAsset, _ALLOWED_EXTENSIONS, _max_upload_bytes
-from lib.workbuddy_session import register_image, replace_asset_by_sha, require_session
+from lib.workbuddy_session import register_asset, register_image, replace_asset_by_sha, require_session
 from lib.project_workspace import ProjectWorkspace, WorkspaceErrorError
 from lib.namespace_version import NamespaceVersion, NamespaceVersionError, current_namespace_version
 from lib.principal_sanitize import sanitize_project_id
@@ -420,6 +420,11 @@ class UploadAssetChunk(BaseTool):
                             deduplicated = True
                     else:
                         target.unlink(missing_ok=True)
+            else:
+                # Video/audio uploads are not part of the photo-render batch,
+                # but they still have to be discoverable by asset id so the
+                # caption / cloned-voice workflows can resolve them later.
+                register_asset(current_session, state["project_id"], asset)
             state_path.unlink(missing_ok=True)
             canonical_target = (repo_root / canonical_asset["relative_path"]).resolve()
             return ToolResult(True, {"asset": canonical_asset, "asset_manifest": {"assets": [canonical_asset]}, "upload_id": upload_id, "deduplicated": deduplicated, **({"batch": batch} if batch else {})}, [str(canonical_target)], duration_seconds=time.monotonic()-started)

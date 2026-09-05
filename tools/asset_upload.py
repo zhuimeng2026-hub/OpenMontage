@@ -224,6 +224,12 @@ class UploadAsset(BaseTool):
             batch = None
             if asset["type"] == "image":
                 batch = register_image(session_id, project_id, asset)
+            else:
+                # Video/audio uploads do not join the photo-render batch but
+                # still have to be discoverable by asset id so the caption
+                # and cloned-voice workflows can resolve them later.
+                from lib.workbuddy_session import register_asset
+                register_asset(session_id, project_id, asset)
             return ToolResult(
                 success=True,
                 data={

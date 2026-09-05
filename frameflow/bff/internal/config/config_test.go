@@ -60,3 +60,36 @@ func TestSafeEndpointOmitsSensitiveURLParts(t *testing.T) {
 		t.Fatalf("SafeEndpoint leaked or changed URL parts: %q", got)
 	}
 }
+
+func TestParseCSVDeduplicatesAndTrims(t *testing.T) {
+	got := parseCSV(" upload_asset,create_captioned_video_share, upload_asset ,, ")
+	if len(got) != 2 || got[0] != "upload_asset" || got[1] != "create_captioned_video_share" {
+		t.Fatalf("unexpected parsed allowlist: %#v", got)
+	}
+}
+
+// The default allowlist is an explicit closed list, never a wildcard: any tool
+// not named here is rejected by the /api/mcp handler. Note that it DOES include
+// execute_tool / get_tool_info / list_tools / dry_run_tool — the script-mode
+// editor composes the subtitle workflow by calling those, and every
+// authorization and resource check still happens on the upstream MCP. Removing
+// them breaks script-mode rendering, so the invariant asserted here is
+// "no wildcard and no arbitrary tool names", not "no generic execution".
+func TestDefaultAllowlistIsExplicitAndClosed(t *testing.T) {
+	allowed := DefaultMCPAllowedTools()
+	if len(allowed) == 0 {
+		t.Fatal("default allowlist must not be empty")
+	}
+	for _, tool := range allowed {
+		if tool == "*" || tool == "" {
+			t.Fatalf("default allowlist must not contain a wildcard or empty entry, got %q", tool)
+		}
+	}
+	for _, unexpected := range []string{"session_start", "delete_everything", "shell_exec"} {
+		for _, tool := range allowed {
+			if tool == unexpected {
+				t.Fatalf("default allowlist unexpectedly exposes %q", unexpected)
+			}
+		}
+	}
+}

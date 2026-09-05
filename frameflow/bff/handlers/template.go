@@ -192,7 +192,7 @@ func (h *TemplateHandler) BatchRender(c *gin.Context) {
 	if totalFiles > lim.MaxFilesPerSubmission {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{
 			"error": fmt.Sprintf(
-				"this submission has %d image files but your %q tier allows at most %d per submission",
+				"this submission has %d media files but your %q tier allows at most %d per submission",
 				totalFiles, tier, lim.MaxFilesPerSubmission),
 			"files": totalFiles,
 		})

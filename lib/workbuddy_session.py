@@ -6,7 +6,6 @@ reach disk or logs; state writes use replace-on-same-filesystem semantics.
 from __future__ import annotations
 
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -17,6 +16,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+try:  # POSIX-only advisory lock; missing on Windows so the import still works.
+    import fcntl
+except ImportError:  # pragma: no cover - exercised on Windows only
+    fcntl = None  # type: ignore[assignment]
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,18 +74,20 @@ def _flock_for(digest: str) -> Iterator[None]:
     lock_path = lock_dir / f"{digest}.lock"
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        except (OSError, AttributeError):
-            # Best-effort: single-process deployments still get in-process
-            # safety from ``_lock_for``. Logged at debug level only.
-            pass
+        if fcntl is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except OSError:
+                # Best-effort: single-process deployments still get in-process
+                # safety from ``_lock_for``. Logged at debug level only.
+                pass
         yield
     finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except (OSError, AttributeError):
-            pass
+        if fcntl is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
         os.close(fd)
 
 
@@ -94,24 +100,25 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _atomic_replace(tmp: Path, path: Path) -> None:
-    """os.replace with retry for Windows "Access Denied" (WinError 5).
+def _atomic_replace(tmp: Path, target: Path) -> None:
+    """Replace a state file, tolerating short Windows scanner/reader locks.
 
     On Windows the destination can be transiently locked by antivirus or a
     concurrent reader, making os.replace fail with PermissionError. A short
     back-off retry is the standard remedy; we never mask a genuinely broken
-    filesystem because the final attempt re-raises the real OSError.
+    filesystem because the final attempt re-raises the real OSError. The
+    back-off starts at 20 ms and grows linearly (≈ up to ~180 ms total) which
+    is short enough not to keep the caller waiting under normal contention
+    but long enough to ride out an AV scan window.
     """
-    delay = 0.02
-    for attempt in range(6):
+    for attempt in range(10):
         try:
-            os.replace(tmp, path)
+            os.replace(tmp, target)
             return
         except PermissionError:
-            if attempt == 5:
+            if attempt == 9:
                 raise
-            time.sleep(delay)
-            delay *= 1.7
+            time.sleep(0.02 * (attempt + 1))
 
 
 def _write(path: Path, state: dict[str, Any]) -> None:
@@ -131,7 +138,17 @@ def _read(digest: str) -> dict[str, Any] | None:
     path = _state_path(digest)
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    # Windows may briefly deny a reader while another thread completes the
+    # atomic replace. Retry the tiny hand-off window instead of surfacing a
+    # transient PermissionError to status polling.
+    for attempt in range(4):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if attempt == 3:
+                raise
+            time.sleep(0.01)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -325,8 +342,13 @@ def get_session_assets(session_id: str | None) -> list[dict[str, Any]]:
     return list(state.get("assets", []))
 
 
-def register_image(session_id: str | None, project_id: str, asset: dict[str, Any]) -> dict[str, Any]:
-    """Add one completed image, deduplicating by sha/path within the open batch.
+def _register_asset(session_id: str | None, project_id: str, asset: dict[str, Any]) -> dict[str, Any]:
+    """Register one completed asset in the session's current asset batch.
+
+    This is deliberately shared by the legacy image-batch API and the generic
+    asset API.  Keeping the state shape and transition rules in one place is
+    important: existing image uploads continue to participate in the same
+    Remotion batch while video/audio uploads become discoverable by asset id.
 
     Holds BOTH an in-process RLock (cheap, nested-safe) AND a POSIX advisory
     flock on ``.locks/<digest>.lock`` so that two MCP worker processes (or
@@ -339,8 +361,11 @@ def register_image(session_id: str | None, project_id: str, asset: dict[str, Any
         state = _read(digest)
         if state and state.get("status") == "rendering":
             raise ValueError("MCP session batch is currently rendering; upload after it completes")
-        if not state or state.get("status") == "published":
+        if not state or state.get("status") == "published" or (
+            state.get("status") == "idle" and not state.get("assets")
+        ):
             now = _now()
+            media_assets = (state or {}).get("media_assets", {})
             state = {
                 "project_id": project_id,
                 "batch_id": uuid.uuid4().hex,
@@ -351,6 +376,7 @@ def register_image(session_id: str | None, project_id: str, asset: dict[str, Any
                 "render_job_id": None,
                 "video_path": None,
                 "share_url": None,
+                "media_assets": media_assets,
             }
         elif state.get("project_id") != project_id:
             raise ValueError("MCP session is already collecting assets for another project")
@@ -367,6 +393,37 @@ def register_image(session_id: str | None, project_id: str, asset: dict[str, Any
             state["assets"].append(asset)
         _write(_state_path(digest), state)
         return state
+
+
+def register_asset(session_id: str | None, project_id: str, asset: dict[str, Any]) -> dict[str, Any]:
+    """Register media without coupling it to the legacy single photo batch.
+
+    Images retain the original batch semantics. Video/audio assets live in a
+    per-project map so one long-lived MCP session can submit multiple media
+    jobs without tripping the photo batch's project/status state machine.
+    """
+    if asset.get("type") == "image":
+        return _register_asset(session_id, project_id, asset)
+    digest = require_session(session_id)
+    with _lock_for(digest):
+        state = _read(digest) or {"status": "idle", "assets": [], "created_at": _now()}
+        media_assets = state.setdefault("media_assets", {})
+        project_assets = media_assets.setdefault(project_id, [])
+        digest_value = asset.get("sha256")
+        path_value = asset.get("path")
+        if not any(
+            (digest_value and item.get("sha256") == digest_value)
+            or (path_value and item.get("path") == path_value)
+            for item in project_assets
+        ):
+            project_assets.append(asset)
+        _write(_state_path(digest), state)
+        return state
+
+
+def register_image(session_id: str | None, project_id: str, asset: dict[str, Any]) -> dict[str, Any]:
+    """Add one completed image, preserving the legacy photo-batch behavior."""
+    return _register_asset(session_id, project_id, asset)
 
 
 def replace_asset_by_sha(
@@ -403,6 +460,64 @@ def replace_asset_by_sha(
                 _write(_state_path(digest), state)
                 return state
         return None
+
+
+def find_asset(
+    session_id: str | None,
+    asset_id: str,
+    project_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Find one registered asset by id within a session.
+
+    ``project_id`` is an optional scope check.  A missing session, unknown id,
+    or project mismatch returns ``None`` so callers can safely treat this as a
+    lookup rather than having to catch state errors.
+    """
+    digest = require_session(session_id)
+    if not isinstance(asset_id, str) or not asset_id:
+        return None
+    with _lock_for(digest):
+        state = _read(digest)
+        if not state:
+            return None
+        candidates: list[dict[str, Any]] = []
+        if project_id is None or state.get("project_id") == project_id:
+            candidates.extend(state.get("assets", []))
+        media_assets = state.get("media_assets", {})
+        if project_id is None:
+            for items in media_assets.values():
+                candidates.extend(items)
+        else:
+            candidates.extend(media_assets.get(project_id, []))
+        for asset in candidates:
+            if asset.get("id") == asset_id or asset.get("asset_id") == asset_id:
+                return asset
+    return None
+
+
+def list_assets(
+    session_id: str | None,
+    project_id: str | None = None,
+    asset_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """List registered assets, optionally scoped by project and media type."""
+    digest = require_session(session_id)
+    with _lock_for(digest):
+        state = _read(digest)
+        if not state:
+            return []
+        assets: list[dict[str, Any]] = []
+        if project_id is None or state.get("project_id") == project_id:
+            assets.extend(state.get("assets", []))
+        media_assets = state.get("media_assets", {})
+        if project_id is None:
+            for items in media_assets.values():
+                assets.extend(items)
+        else:
+            assets.extend(media_assets.get(project_id, []))
+        if asset_type is None:
+            return list(assets)
+        return [asset for asset in assets if asset.get("type") == asset_type]
 
 
 def begin_render(
