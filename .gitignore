@@ -68,6 +68,9 @@ service_account*.json
 # Stray media downloads (test/scratch clips left in repo root)
 pexels_video_*.mp4
 
+# Local Bilibili reference downloads used for MCP decomposition tests
+/docs/BV12oGu6uEX8.*
+
 # Scratch/debug scripts
 scratch/
 
@@ -184,3 +187,6 @@ remotion-composer/build.env.test
 # Runtime logs (regenerable from server runs)
 mcp_server.log
 frameflow/bff/bff.log.new
+
+# Local quarantine for excluded (but kept on disk) artifacts
+/.quarantine/
