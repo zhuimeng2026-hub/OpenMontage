@@ -29,6 +29,18 @@ from tools.base_tool import (
 )
 
 
+def _srt_timecode(tc: str) -> float:
+    """Parse an SRT timecode (``HH:MM:SS,mmm`` or ``HH:MM:SS.mmm``) → seconds.
+
+    Tolerant of the trailing cue settings some emitters append (e.g.
+    ``00:00:03,000 X1``) — caller's split-on-space handles that already,
+    but we still normalize the comma form here.
+    """
+    tc = tc.strip().replace(",", ".")
+    h, m, s = tc.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
 class VideoAnalyzer(BaseTool):
     name = "video_analyzer"
     version = "0.1.0"
@@ -126,6 +138,15 @@ class VideoAnalyzer(BaseTool):
                     "Reject videos longer than this (in seconds). "
                     "Increase to allow long-form videos (>10 min) as reference material. "
                     "Corresponds to video_downloader's max_duration_seconds limit."
+                ),
+            },
+            "transcript_path": {
+                "type": "string",
+                "description": (
+                    "Optional path to a pre-existing transcript JSON/SRT. When "
+                    "provided, skips transcript_fetcher and Whisper entirely. "
+                    "Useful when the caller has already transcribed the audio "
+                    "via `transcriber` and wants to avoid a redundant pass."
                 ),
             },
         },
@@ -346,8 +367,18 @@ class VideoAnalyzer(BaseTool):
         # ─── STEP 2: Get transcript ───
         transcript_data = None
 
+        # First: consult an explicit transcript_path or cached files on disk.
+        # Avoids a redundant Whisper pass when the caller (or a prior agent
+        # pre-flight) has already produced a transcript.
+        transcript_data = self._load_existing_transcript(
+            inputs, output_dir, workspace, source, steps_failed
+        )
+        if transcript_data is not None:
+            brief["narration_transcript"] = transcript_data
+            steps_completed.append("transcript_external")
+
         # Try youtube-transcript-api first (instant, for YouTube)
-        if self._is_youtube(platform):
+        if transcript_data is None and self._is_youtube(platform):
             try:
                 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -695,6 +726,164 @@ class VideoAnalyzer(BaseTool):
         )
 
     # ─── Helpers ───
+
+    def _load_existing_transcript(
+        self,
+        inputs: dict[str, Any],
+        output_dir: Path,
+        workspace,
+        source: str,
+        steps_failed: list[str],
+    ) -> dict[str, Any] | None:
+        """Try to reuse a transcript produced earlier in this run or session.
+
+        Priority order:
+
+        1. Explicit ``transcript_path`` from the caller — wins outright.
+        2. Known filenames in the freshly-created ``output_dir``
+           (e.g. ``<source_stem>_transcript.json`` if the caller ran
+           ``transcriber`` against this same video just before us).
+        3. Known filenames in ``workspace.root`` — covers the case where
+           the agent pre-flighted the transcript at the workspace level.
+
+        Returns a ``narration_transcript``-shaped dict on success, or ``None``
+        if nothing usable was found. Parse failures are appended to
+        ``steps_failed`` so the analysis audit trail surfaces the bad cache,
+        then we fall through to the YouTube / Whisper paths.
+        """
+        candidates: list[Path] = []
+
+        # Priority 1: explicit path wins outright.
+        explicit = inputs.get("transcript_path")
+        if explicit:
+            candidates.append(Path(explicit))
+
+        # Priority 2 + 3: known filenames in output_dir then workspace root.
+        known = [
+            "_audio_transcript.json",
+            "transcript.json",
+            "transcript.srt",
+        ]
+        if source and not self._is_url(source):
+            # Only derive a source stem for local files — Path("https://…")
+            # produces nonsense. Prepend so it wins over the generic names.
+            stem = Path(source).stem
+            if stem:
+                known.insert(0, f"{stem}_transcript.json")
+
+        for d in (Path(output_dir), getattr(workspace, "root", None)):
+            if d is None:
+                continue
+            for name in known:
+                candidates.append(d / name)
+
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                loaded = self._parse_transcript_file(path)
+            except Exception as e:
+                # Surface the bad cache so the agent can see why it was
+                # ignored, but don't blow up the analysis.
+                steps_failed.append(f"transcript_external:{path.name}: {e}")
+                continue
+            if loaded is not None:
+                return loaded
+        return None
+
+    def _parse_transcript_file(self, path: Path) -> dict[str, Any] | None:
+        """Parse a cached transcript file into the brief's expected shape.
+
+        Accepts:
+
+        - JSON files with a top-level ``segments`` list where each entry has
+          ``start``/``end``/``text`` (e.g. output of ``transcriber``,
+          ``azure_stt``, or ``funasr_transcriber``).
+        - SRT files (minimal parser — does not handle every SRT edge case
+          but covers the common ``HH:MM:SS,mmm --> HH:MM:SS,mmm`` form).
+
+        Returns ``None`` when the file is structurally unusable (empty,
+        missing required fields, unparseable SRT). The caller is responsible
+        for logging exceptions.
+        """
+        suffix = path.suffix.lower()
+        text = path.read_text(encoding="utf-8")
+        if suffix == ".srt":
+            segs = self._parse_srt(text)
+        else:
+            cached = json.loads(text)
+            segs = cached.get("segments", [])
+            # Validate that at least the first few entries look like segments.
+            # We don't require every entry to conform — some emitters add
+            # optional fields — but the core (start/end/text) must be present
+            # on at least the first 3, otherwise we treat the file as bad
+            # cache and return None so the fallback path runs.
+            sample = segs[:3]
+            if not sample or not all(
+                {"start", "end", "text"} <= s.keys() for s in sample
+            ):
+                return None
+
+        if not segs:
+            return None
+
+        if suffix != ".srt":
+            cached_full = cached.get("text") or " ".join(
+                s.get("text", "") for s in segs
+            )
+            language = cached.get("language", "auto")
+        else:
+            cached_full = " ".join(s["text"] for s in segs)
+            language = "auto"
+
+        # Normalize segments to {start, end, text}.
+        norm_segs = [
+            {
+                "start": float(s.get("start", 0)),
+                "end": float(s.get("end", 0)),
+                "text": str(s.get("text", "")).strip(),
+            }
+            for s in segs
+        ]
+        word_count = len(cached_full.split()) or sum(
+            len(s["text"].split()) for s in norm_segs
+        )
+        return {
+            "full_text": cached_full,
+            "segments": norm_segs,
+            "language": language,
+            "word_count": word_count,
+        }
+
+    @staticmethod
+    def _parse_srt(text: str) -> list[dict[str, Any]]:
+        """Minimal SRT parser — ``HH:MM:SS,mmm`` timecodes only."""
+        out: list[dict[str, Any]] = []
+        for block in text.replace("\r\n", "\n").split("\n\n"):
+            lines = [ln for ln in block.split("\n") if ln.strip()]
+            if len(lines) < 2:
+                continue
+            # Find the timecode line — supports either "1\n00:00:00,000 -->"
+            # (with sequence number) or "00:00:00,000 --> ..." directly.
+            tc_line = next(
+                (ln for ln in lines if "-->" in ln),
+                None,
+            )
+            if not tc_line:
+                continue
+            try:
+                tc_a, tc_b = tc_line.split("-->", 1)
+                start = _srt_timecode(tc_a.strip())
+                end = _srt_timecode(tc_b.strip().split(" ", 1)[0])
+            except (ValueError, IndexError):
+                continue
+            # Body is everything after the timecode line.
+            tc_idx = lines.index(tc_line)
+            body = " ".join(lines[tc_idx + 1 :]).strip()
+            if not body:
+                continue
+            out.append({"start": start, "end": end, "text": body})
+        return out
 
     def _get_duration(self, video_path: Path) -> float:
         """Get video duration via ffprobe."""
