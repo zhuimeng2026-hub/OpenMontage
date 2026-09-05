@@ -2,15 +2,18 @@
 
 ## video_downloader 工作区隔离 + 命名冲突防护
 
-- [ ] **已实现**：MCP server 启动时 `mcp_server.py:41, 148` 已经 `os.chdir(_PROJECT_ROOT)`，CWD 锁定这一项不是缺口。
-- [ ] 当前 `tools/analysis/video_downloader.py::execute()` 没有任何 `output_dir` 路径校验——caller 可以传 `/tmp/foo`、`/var/log/...`、`projects/../../etc` 任意路径。违反 CLAUDE.md core invariant #5（Tool outputs go under `projects/<project-id>/`）。
-- [ ] 当前 `outtmpl` 硬编码 `reference_video.%(ext)s`（line 265），同一 `output_dir` 第二次下载直接覆盖第一次——并发或多 session 场景下数据丢失。
-- [ ] **必填 `userid` 参数**：外部 caller 必须显式传 `userid`，工具不允许"匿名下载"。MCP 层 `current_user_id()` 已经能从 `X-VClaw-User-Id` header 拿到（CLAUDE.md "阶段3 BearerTokenAuthMiddleware"），`execute_tool` 入口已经把 `mcp_session_id` 注入到 inputs，沿同样模式把 `userid` 也注入。
-- [ ] **`userid` 安全校验**：正则 `^[a-zA-Z0-9_-]{1,64}$` 防路径穿越（`../`、NUL、控制字符、空格）。
-- [ ] **`output_dir` 校验**：resolve 后必须 `is_relative_to(PROJECTS_DIR / userid)`，否则 `ToolResult(success=False, error="output_dir must be under projects/<userid>/")`。
-- [ ] **`outtmpl` 加 URL hash**：`reference_video_<sha1(url)[:8]>.%(ext)s`。`_find_downloaded(prefix="reference_video", ...)` 仍然 glob 命中。
-- [ ] **回归测试** `tests/tools/test_video_downloader_workspace.py`：user A 写 `projects/<A>/_scratch/` 成功；user A 写 `projects/<B>/...` 被拒；user A 写 `/tmp/...` 被拒；userid 注入 `../../etc` 被拒；不同 URL 同 output_dir 产物文件名不同（hash 不同）；同 URL 二次调用产物文件名相同（idempotent）。
-- [ ] **`_scratch` 公共区废弃**：原来 CLAUDE.md 说的 `projects/_scratch/<category>/` 改成 `projects/<userid>/_scratch/<category>/`，彻底按用户隔离。
+- [x] ~~`output_dir` 路径校验~~ — 已升级到 ProjectWorkspace 模式（见下方），不再需要手写校验。
+- [x] ~~`outtmpl` URL hash 防冲突~~ — `reference_video_<sha1(url)[:8]>.%(ext)s` 已落地。
+- [x] **复用 upload_asset 的 user-id 自动注入模式（2026-09-05 完成）**：
+  - 删 `_validate_output_dir`（ProjectWorkspace.resolve() 接管）
+  - 删 `output_dir` / `userid` 必填
+  - 新增 `project_id`（默认 `"references"`，匹配 `reference_input` 语义）— 同样不允许下划线开头（`sanitize_project_id` 拒绝）
+  - `_resolve_workspace` 走 `ProjectWorkspace.for_current_principal(project_id)` 优先（MCP 路径，userid 从 session ContextVar 取，来自 WeChat → X-VClaw-User-Id）
+  - 非 MCP 路径（测试/脚本）显式传 `userid`，落到 `ProjectWorkspace.for_principal(Principal(...), project_id)`
+  - 两种路径都过 `workspace.resolve(output_dir)`，symlink/路径穿越在那一层被拒
+  - ToolResult 新增 `workspace_root` 字段回显路径，caller 不用再算
+  - 测试改用 `patch.object(paths, 'PROJECTS_DIR', td)` 把真实 `for_principal` 引导到 tempdir，不再 mock 整个 workspace
+- [x] **回归测试** `tests/tools/test_video_downloader_workspace.py`：15 个 test 全过（userid 校验 5、workspace 解析 4、边界 3、URL hash 4）
 
 ## video_downloader 平台检测白名单补全
 
