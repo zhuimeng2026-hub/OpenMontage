@@ -292,6 +292,30 @@ class VideoCompose(BaseTool):
                     "transcript_comparison when a file path is unavailable."
                 ),
             },
+            "project_id": {
+                "type": "string",
+                "default": "renders",
+                "pattern": "^[a-zA-Z0-9._-]{1,64}$",
+                "description": (
+                    "Project-scoped subdirectory under the caller's "
+                    "principal namespace. Auto-injected from the MCP "
+                    "session via ProjectWorkspace.for_current_principal() "
+                    "— the same pattern as upload_asset / video_downloader "
+                    "/ video_analyzer. Propagated to child tools "
+                    "(HyperFramesCompose, SubtitleGen, …) so future "
+                    "workspace validation on those targets doesn't break "
+                    "the cascade."
+                ),
+            },
+            "userid": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+                "description": (
+                    "OPTIONAL fallback for non-MCP callers (tests, scripts). "
+                    "When the MCP session's X-VClaw-User-Id is set, the "
+                    "userid is auto-resolved and this input is ignored."
+                ),
+            },
             "subtitle_path": {"type": "string"},
             "subtitle_style": {
                 "type": "object",
@@ -512,9 +536,65 @@ class VideoCompose(BaseTool):
         )
         return info
 
+    # ------------------------------------------------------------------ #
+    # Workspace resolution — mirrors upload_asset / video_downloader /    #
+    # video_analyzer. Auto-injects userid from the MCP session, falls       #
+    # back to explicit userid input for non-MCP callers.                  #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _resolve_workspace(
+        inputs: dict[str, Any],
+    ) -> tuple[Any, Path, str]:
+        """Resolve (workspace, workspace_root, userid) for this call.
+
+        Returns ``(workspace, workspace_root, userid)`` on success or
+        ``(ToolResult, None, None)`` on failure. ``workspace_root`` is
+        an absolute ``Path`` to the resolved workspace.
+        """
+        from lib.principal_registry import Principal, PrincipalNotFound
+        from lib.project_workspace import ProjectWorkspace, WorkspaceErrorError
+
+        project_id = inputs.get("project_id") or "renders"
+        explicit_userid = inputs.get("userid")
+        try:
+            if explicit_userid:
+                principal = Principal(kind="user", principal_id=explicit_userid)
+                workspace = ProjectWorkspace.for_principal(principal, project_id)
+            else:
+                workspace = ProjectWorkspace.for_current_principal(project_id)
+        except PrincipalNotFound as e:
+            return (
+                ToolResult(
+                    success=False,
+                    error=(
+                        f"no authenticated principal bound to this call: {e}. "
+                        "Send X-VClaw-User-Id on the MCP request, or pass "
+                        "userid explicitly when calling from a non-MCP context."
+                    ),
+                ),
+                None,
+                None,
+            )
+        except ValueError as e:
+            return (
+                ToolResult(success=False, error=f"workspace resolution failed: {e}"),
+                None,
+                None,
+            )
+        return workspace, workspace.root, workspace.principal.principal_id
+
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         operation = inputs["operation"]
         start = time.time()
+
+        # Resolve workspace once per call; cascade to child tools.
+        ws_or_err, _root, userid = self._resolve_workspace(inputs)
+        if isinstance(ws_or_err, ToolResult):
+            return ws_or_err  # failure already wrapped
+        # Stash for sub-handlers to read.
+        self._resolved_userid = userid
+        self._resolved_project_id = inputs.get("project_id") or "renders"
 
         try:
             if operation == "compose":
@@ -1454,6 +1534,8 @@ class VideoCompose(BaseTool):
             "output_path": str(output_path),
             "edit_decisions": dict(edit_decisions, cuts=resolved_cuts),
             "asset_manifest": asset_manifest,
+            "userid": getattr(self, "_resolved_userid", None),
+            "project_id": getattr(self, "_resolved_project_id", None),
         }
         if playbook_data:
             hf_inputs["playbook"] = playbook_data
@@ -2111,6 +2193,8 @@ class VideoCompose(BaseTool):
                 "target_segments": target_segments,
                 "format": "remotion_bilingual_captions",
                 "output_path": str(subtitle_path),
+                "userid": getattr(self, "_resolved_userid", None),
+                "project_id": getattr(self, "_resolved_project_id", None),
             })
             if not sg.success:
                 return ToolResult(

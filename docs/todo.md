@@ -20,6 +20,15 @@
   - 5 处 `.execute()` 调子工具的 call site（`VideoDownloader` × 2、`Transcriber`、`FrameSampler` × 2）都显式传 `userid` + `project_id` + 相对路径（`output_dir.relative_to(workspace.root)`）
   - video_analyzer 自身走 `ProjectWorkspace.for_current_principal(project_id)` 优先；非 MCP 路径走 `Principal(...).for_principal(...)` 兜底
   - 修了 `tests/tools/test_scene_detect_long_video.py::test_video_analyzer_retains_and_reports_degraded_scenes` 以适配新的 workspace 契约
+- [x] **C 类顺手做掉（2026-09-05）**：
+  - `video_compose.py`：input_schema 加 `project_id`（默认 `"renders"`）+ `userid`（optional fallback）；加 `_resolve_workspace()` 静态方法；`execute()` 入口 stash `_resolved_userid` / `_resolved_project_id`；render 路径 `hf_inputs` 加 `userid` + `project_id`；remotion_bilingual_overlay 路径 `SubtitleGen().execute({...})` 加同样两键
+  - `auto_reframe.py`：input_schema 加 `project_id`（默认 `"reframes"`）+ `userid`；`execute()` 入口 inline workspace resolution（同 video_analyzer 模式）；`FaceTracker().execute({...})` 加 `userid` + `project_id`
+  - `asset_upload_chunk.py:29` 检查确认只 import 常量 + class，没调 `.execute()`，不需改
+  - `video_compose.py:434` 的 `HyperFramesCompose()._runtime_check()` 不调 `.execute()`，不需改
+  - 测试 `tests/tools/test_video_compose_auto_reframe_workspace.py`（8 个 test）：workspace 解析 3 + execute stash 1 + HF/SG inputs 契约 2 + AutoReframe no-principal 1 + FaceTracker cascade 1
+- [ ] **未触动（设计留口）**：
+  - `video_compose.py:1425-1475` 的 `workspace_path` 当前是相对路径 `output_path.parent.parent / "hyperframes"`。这次没改它，因为 HyperFramesCompose 还没加 workspace 校验；将来若 HF 改用 ProjectWorkspace，这块需要升级为 `ws.root / "hyperframes"` 之类绝对路径
+  - `video_compose.py:2095` 的 SubtitleGen tmpdir 是有意保留的"ephemeral"中间产物；本次只传 userid 让未来 pattern 一致，不动 tmpdir 位置
 
 ## video_downloader 平台检测白名单补全
 
