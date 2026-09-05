@@ -193,9 +193,8 @@ def _check_timeline_structure(timeline: dict[str, Any], *, allow_pending: bool) 
         _require(ti.get("type") in SUPPORTED_TRANSITIONS, "UNSUPPORTED_TRANSITION",
                  f"transition.type must be one of {SUPPORTED_TRANSITIONS}, got {ti.get('type')}",
                  scene_id=sid)
-        # frame count
-        frames = output_frame(end_ms - start_ms, fps) - output_frame(start_ms, fps)
-        # use the simpler: output_frame(duration_ms, fps)
+        # frame count — derived from the global timeline, so only duration
+        # matters for the per-scene minimum (C2 formula).
         frames = output_frame(end_ms - start_ms, fps)
         _require(frames >= MIN_OUTPUT_FRAMES_PER_SCENE, "INVALID_TIMELINE",
                  f"scene must produce at least {MIN_OUTPUT_FRAMES_PER_SCENE} frame, got {frames}",
