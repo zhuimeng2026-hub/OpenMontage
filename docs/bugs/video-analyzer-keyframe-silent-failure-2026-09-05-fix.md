@@ -1,10 +1,11 @@
-# video_analyzer — Keyframe Sub-step Silent Failure
+# video_analyzer — Keyframe Sub-step Silent Failure (FIXED)
 
 - **Date**: 2026-09-05
 - **Reporter**: Claude Code (OpenMontage agent, automated reference-video analysis)
-- **Severity**: 🟠 HIGH — `video_analyzer.deep` mode silently returns an empty `keyframes[]`, blocking all downstream LLM-synthesis over frames. The reference-analysis pipeline (`AGENT_GUIDE.md` §"Reference Video Entry Point") cannot close without keyframes.
-- **Affected**: `tools/analysis/video_analyzer.py`, both branches of `STEP 4: Keyframe extraction` (lines ~555–605). Affects `analysis_depth ∈ {"standard", "deep"}` on any source (URL or local_file).
-- **Status**: Awaiting OM team fix. Document is the evidence + suggested fix; root cause is the missing `else` / `steps_failed` branch when `FrameSampler.execute()` returns `success=False`.
+- **Severity**: 🟠 HIGH (now 🟢 FIXED) — `video_analyzer.deep` mode silently returned an empty `keyframes[]`, blocking all downstream LLM-synthesis over frames. The reference-analysis pipeline (`AGENT_GUIDE.md` §"Reference Video Entry Point") could not close without keyframes.
+- **Affected**: `tools/analysis/video_analyzer.py`, both branches of `STEP 4: Keyframe extraction` (lines ~555–605). Affected `analysis_depth ∈ {"standard", "deep"}` on any source (URL or local_file).
+- **Status**: 🟢 **FIXED** by commit `1e163cf` ("fix(analyzer): surface FrameSampler success=False at STEP 4 (keyframes + keyframes_uniform)"). The fix surfaces the FrameSampler success=False case in both the scene-guided and uniform-sampling branches, appends to `steps_failed` with the underlying error, and keeps the existing degraded-data behavior on the success-but-partial path. This document is retained as historical evidence of the bug + the postmortem context.
+- **Renamed**: filename was `video-analyzer-keyframe-silent-failure-2026-09-05.md`; the `-fix` suffix was added on 2026-09-05 to prevent readers from mistaking an already-resolved HIGH-severity issue for an open one.
 
 ---
 
