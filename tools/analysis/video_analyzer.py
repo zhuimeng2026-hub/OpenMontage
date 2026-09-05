@@ -78,6 +78,20 @@ class VideoAnalyzer(BaseTool):
                 "type": "string",
                 "description": "Video file path or URL (YouTube, Shorts, Instagram, TikTok)",
             },
+            "project_id": {
+                "type": "string",
+                "default": "references",
+                "pattern": "^[a-zA-Z0-9._-]{1,64}$",
+                "description": (
+                    "Project-scoped subdirectory under the caller's "
+                    "principal namespace. Analysis outputs land at "
+                    "projects/users/<userid>/<project_id>/analysis_<ts>/. "
+                    "Auto-injected from the MCP session via "
+                    "ProjectWorkspace.for_current_principal() — the same "
+                    "pattern as upload_asset / video_downloader. Defaults "
+                    "to 'references' for ad-hoc reference analysis."
+                ),
+            },
             "analysis_depth": {
                 "type": "string",
                 "enum": ["transcript_only", "standard", "deep"],
@@ -97,7 +111,13 @@ class VideoAnalyzer(BaseTool):
             },
             "output_dir": {
                 "type": "string",
-                "description": "Directory for analysis outputs (default: auto-generated)",
+                "description": (
+                    "OPTIONAL override for the analysis output directory. "
+                    "Must resolve under projects/users/<userid>/<project_id>/ "
+                    "(forwarded through ProjectWorkspace.resolve() which "
+                    "rejects symlink escapes and path traversal). When "
+                    "omitted, defaults to <workspace_root>/analysis_<ts>/."
+                ),
             },
             "max_duration_seconds": {
                 "type": "integer",
@@ -160,12 +180,59 @@ class VideoAnalyzer(BaseTool):
         depth = inputs.get("analysis_depth", "standard")
         max_keyframes = inputs.get("max_keyframes", 20)
         max_duration = inputs.get("max_duration_seconds", 600)
+        project_id = inputs.get("project_id") or "references"
 
-        # Setup output directory
+        # ─── Workspace resolution (mirrors upload_asset / video_downloader) ──
+        # The MCP session's authenticated principal (WeChat → X-VClaw-User-Id
+        # → _user_id_ctx) is auto-injected via for_current_principal. The
+        # resolved userid is then propagated explicitly to every child tool
+        # so the cascade works even if the ContextVar isn't visible at the
+        # call site. Non-MCP callers (tests, scripts) can supply userid
+        # explicitly — falls through to for_principal(Principal(...), ...).
+        from lib.project_workspace import ProjectWorkspace, WorkspaceErrorError
+        from lib.principal_registry import Principal, PrincipalNotFound
+        try:
+            explicit_userid = inputs.get("userid")
+            if explicit_userid:
+                principal = Principal(kind="user", principal_id=explicit_userid)
+                workspace = ProjectWorkspace.for_principal(principal, project_id)
+            else:
+                workspace = ProjectWorkspace.for_current_principal(project_id)
+            userid = workspace.principal.principal_id
+        except PrincipalNotFound as e:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"no authenticated principal bound to this call: {e}. "
+                    "Send X-VClaw-User-Id on the MCP request, or pass userid "
+                    "explicitly when calling from a non-MCP context."
+                ),
+            )
+        except ValueError as e:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"workspace resolution failed for project_id={project_id!r}: {e}. "
+                    "Pass userid explicitly when calling from a non-MCP context."
+                ),
+            )
+
+        # Setup output directory — workspace-scoped by default. When the
+        # caller supplies output_dir, it must resolve under the workspace
+        # (ProjectWorkspace.resolve() rejects symlink escapes / path traversal).
         if inputs.get("output_dir"):
-            output_dir = Path(inputs["output_dir"])
+            try:
+                output_dir = workspace.resolve(inputs["output_dir"])
+            except (WorkspaceErrorError, ValueError) as e:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"output_dir {inputs['output_dir']!r} escapes workspace "
+                        f"({workspace.root}): {e}"
+                    ),
+                )
         else:
-            output_dir = Path("projects/_analysis") / f"analysis_{int(time.time())}"
+            output_dir = workspace.root / f"analysis_{int(time.time())}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         platform = self._detect_platform(source)
@@ -210,18 +277,28 @@ class VideoAnalyzer(BaseTool):
                 from tools.analysis.video_downloader import VideoDownloader
                 downloader = VideoDownloader()
 
+                # Relative sub-path under the workspace — child tools
+                # forward it through ProjectWorkspace.resolve() which
+                # requires a relative path (absolute inputs are rejected
+                # as "relative path must not be absolute").
+                rel_output = output_dir.relative_to(workspace.root)
+
                 if depth == "transcript_only" and self._is_youtube(platform):
                     # Only get metadata, skip video download
                     dl_result = downloader.execute({
                         "url": source,
-                        "output_dir": str(output_dir),
+                        "userid": userid,
+                        "project_id": project_id,
+                        "output_dir": str(rel_output),
                         "format": "metadata_only",
                         "max_duration_seconds": max_duration,
                     })
                 else:
                     dl_result = downloader.execute({
                         "url": source,
-                        "output_dir": str(output_dir),
+                        "userid": userid,
+                        "project_id": project_id,
+                        "output_dir": str(rel_output),
                         "format": "video",
                         "max_resolution": "720p",
                         "max_duration_seconds": max_duration,
@@ -318,7 +395,9 @@ class VideoAnalyzer(BaseTool):
                 downloader = VideoDownloader()
                 dl_result = downloader.execute({
                     "url": source,
-                    "output_dir": str(output_dir),
+                    "userid": userid,
+                    "project_id": project_id,
+                    "output_dir": str(output_dir.relative_to(workspace.root)),
                     "format": "video",
                     "max_resolution": "720p",
                     "max_duration_seconds": max_duration,
@@ -345,7 +424,9 @@ class VideoAnalyzer(BaseTool):
                 tr_inputs = {
                     "input_path": audio_path,
                     "model_size": "base",
-                    "output_dir": str(output_dir),
+                    "userid": userid,
+                    "project_id": project_id,
+                    "output_dir": str(output_dir.relative_to(workspace.root)),
                 }
                 # Only set language if we know it from transcript attempt
                 detected_lang = brief.get("narration_transcript", {}).get("language")
@@ -473,9 +554,11 @@ class VideoAnalyzer(BaseTool):
                 sampler = FrameSampler()
                 fs_result = sampler.execute({
                     "input_path": video_path,
+                    "userid": userid,
+                    "project_id": project_id,
                     "strategy": "timestamps",
                     "timestamps": timestamps,
-                    "output_dir": str(keyframe_dir),
+                    "output_dir": str(keyframe_dir.relative_to(workspace.root)),
                     "format": "jpg",
                     "quality": 2,
                 })
@@ -501,9 +584,11 @@ class VideoAnalyzer(BaseTool):
                 sampler = FrameSampler()
                 fs_result = sampler.execute({
                     "input_path": video_path,
+                    "userid": userid,
+                    "project_id": project_id,
                     "strategy": "count",
                     "count": min(max_keyframes, 15),
-                    "output_dir": str(keyframe_dir),
+                    "output_dir": str(keyframe_dir.relative_to(workspace.root)),
                     "format": "jpg",
                     "quality": 2,
                 })

@@ -13,7 +13,13 @@
   - 两种路径都过 `workspace.resolve(output_dir)`，symlink/路径穿越在那一层被拒
   - ToolResult 新增 `workspace_root` 字段回显路径，caller 不用再算
   - 测试改用 `patch.object(paths, 'PROJECTS_DIR', td)` 把真实 `for_principal` 引导到 tempdir，不再 mock 整个 workspace
-- [x] **回归测试** `tests/tools/test_video_downloader_workspace.py`：15 个 test 全过（userid 校验 5、workspace 解析 4、边界 3、URL hash 4）
+- [x] **回归测试** `tests/tools/test_video_analyzer_workspace.py` 10 个 test 全过：`tests/tools/test_video_analyzer_workspace.py` covers 默认 project_id=userid 透传、output_dir 默认在 workspace 下、显式 output_dir 越界拒绝、子路径接受、VideoDownloader/Transcriber/FrameSampler 都收到 userid+project_id+相对路径。
+- [x] **video_analyzer 级联修复（2026-09-05）**：
+  - `video_analyzer.py:165-169` 入口的 `output_dir` 默认从 `Path("projects/_analysis") / f"analysis_<ts>"`（不在任何 user namespace）改成 `workspace.root / f"analysis_{int(time.time())}"`
+  - 给 input_schema 加 `project_id`（默认 `"references"`，匹配 video_downloader）
+  - 5 处 `.execute()` 调子工具的 call site（`VideoDownloader` × 2、`Transcriber`、`FrameSampler` × 2）都显式传 `userid` + `project_id` + 相对路径（`output_dir.relative_to(workspace.root)`）
+  - video_analyzer 自身走 `ProjectWorkspace.for_current_principal(project_id)` 优先；非 MCP 路径走 `Principal(...).for_principal(...)` 兜底
+  - 修了 `tests/tools/test_scene_detect_long_video.py::test_video_analyzer_retains_and_reports_degraded_scenes` 以适配新的 workspace 契约
 
 ## video_downloader 平台检测白名单补全
 

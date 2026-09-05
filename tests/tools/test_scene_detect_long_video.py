@@ -142,20 +142,32 @@ class SceneDetectLongVideoTests(unittest.TestCase):
             },
         )
         with tempfile.TemporaryDirectory() as td:
-            input_path = Path(td) / "input.mp4"
-            input_path.write_bytes(b"placeholder")
-            output_dir = Path(td) / "out"
+            from lib import paths
+            # Redirect PROJECTS_DIR to the tempdir so the workspace
+            # resolution stays inside the throwaway tree. Then we need
+            # to make output_dir land under that workspace — easiest is
+            # to mirror the workspace layout into the tempdir.
+            from lib.principal_registry import Principal
+            principal = Principal(kind="user", principal_id="test_alice")
+            workspace_root = Path(td) / "users" / principal.namespace_key / "references"
+            workspace_root.mkdir(parents=True)
+            output_dir = workspace_root / "out"
             output_dir.mkdir()
 
-            with patch.object(VideoAnalyzer, "_get_duration", return_value=2.0):
-                with patch.object(SceneDetect, "execute", return_value=degraded_result):
-                    analyzer = VideoAnalyzer()
-                    result = analyzer.execute({
-                        "source": str(input_path),
-                        "analysis_depth": "standard",
-                        "output_dir": str(output_dir),
-                        "max_keyframes": 5,
-                    })
+            input_path = Path(td) / "input.mp4"
+            input_path.write_bytes(b"placeholder")
+
+            with patch.object(paths, "PROJECTS_DIR", Path(td)), \
+                 patch.object(paths, "REPO_ROOT", Path(td)), \
+                 patch.object(VideoAnalyzer, "_get_duration", return_value=2.0), \
+                 patch.object(SceneDetect, "execute", return_value=degraded_result):
+                analyzer = VideoAnalyzer()
+                result = analyzer.execute({
+                    "source": str(input_path),
+                    "userid": "test_alice",
+                    "analysis_depth": "standard",
+                    "max_keyframes": 5,
+                })
             self.assertTrue(result.success)
             meta = result.data["_analysis_meta"]
             # Degraded path goes through steps_completed as
