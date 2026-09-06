@@ -1,3 +1,4 @@
+import { APPLE_DISPLAY } from "../fonts";
 import {
   AbsoluteFill,
   Img,
@@ -226,7 +227,7 @@ export const ProductReveal: React.FC<ProductRevealProps> = ({
                 style={{
                   display: "inline-block",
                   fontFamily:
-                    "'SF Pro Display', 'Helvetica Neue', 'Inter', system-ui, sans-serif",
+                    APPLE_DISPLAY,
                   fontSize: 52,
                   fontWeight: 600,
                   letterSpacing: "0.02em",
@@ -254,7 +255,7 @@ export const ProductReveal: React.FC<ProductRevealProps> = ({
           <div
             style={{
               fontFamily:
-                "'SF Pro Display', 'Helvetica Neue', 'Inter', system-ui, sans-serif",
+                APPLE_DISPLAY,
               fontSize: 36,
               fontWeight: 300,
               color: "#FFFFFF",
@@ -289,7 +290,7 @@ export const ProductReveal: React.FC<ProductRevealProps> = ({
           style={{
             opacity: taglineOpacity,
             fontFamily:
-              "'SF Pro Display', 'Helvetica Neue', 'Inter', system-ui, sans-serif",
+              APPLE_DISPLAY,
             fontSize: 20,
             fontWeight: 300,
             color: "#777777",
@@ -305,7 +306,7 @@ export const ProductReveal: React.FC<ProductRevealProps> = ({
           style={{
             opacity: closerOpacity,
             fontFamily:
-              "'SF Pro Display', 'Helvetica Neue', 'Inter', system-ui, sans-serif",
+              APPLE_DISPLAY,
             fontSize: 26,
             fontWeight: 500,
             color: "#BBBBBB",

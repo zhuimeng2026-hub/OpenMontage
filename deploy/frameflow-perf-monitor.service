@@ -1,0 +1,22 @@
+[Unit]
+Description=FrameFlow performance monitor
+After=network.target
+
+[Service]
+Type=simple
+User=frameflow-observer
+Group=frameflow-observer
+WorkingDirectory=/opt/OpenMontage_Voicebox
+ExecStart=/usr/bin/python3 /opt/OpenMontage_Voicebox/scripts/frameflow_perf_monitor.py --interval 1 --output /var/log/frameflow-observer/metrics.jsonl
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/frameflow-observer/monitor.log
+StandardError=append:/var/log/frameflow-observer/monitor.log
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/frameflow-observer
+
+[Install]
+WantedBy=multi-user.target

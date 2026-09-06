@@ -120,6 +120,64 @@ For cleaner ducking control, generate isolated stems:
 - `"soft ambient pad in C major, 80 BPM"` — synth pad only
 - Layer stems in FFmpeg during composition for precise ducking control
 
+## Fallback Chain: When No Cloud Music Keys Are Available
+
+When ElevenLabs (`ELEVENLABS_API_KEY`) and Google (`GOOGLE_API_KEY`) are both unavailable,
+do **not** fail — fall through to `pixabay_music`:
+
+```python
+from tools.audio.pixabay_music import PixabayMusic
+
+t = PixabayMusic()
+# Infer the search query from the BPM table above:
+#   video_type → BPM → mood keyword
+result = t.execute({
+    "query": "calm ambient cinematic",   # derive from video type + mood
+    "min_duration": 60,
+    "max_duration": 120,
+    "output_path": "assets/music/background.mp3"
+})
+```
+
+**When to use this fallback:**
+
+| Cloud Keys Available | Tool to Use | Notes |
+|---|---|---|
+| `ELEVENLABS_API_KEY` set | `music_gen` | Primary path — full prompt control, instrumental, SFX |
+| `GOOGLE_API_KEY` set | `google_music` | $0.08/flat, max 184s, no SFX |
+| `ELEVENLABS_API_KEY` unset, `GOOGLE_API_KEY` unset | `pixabay_music` | Free, no key needed, web scraping |
+| No cloud keys AND offline | `music_gen_local` | Free, offline, requires GPU for practical speed |
+
+**Query derivation from the BPM table:**
+
+```
+video_type → look up BPM range → combine with "mood" column
+```
+
+Examples:
+- Educational explainer → "gentle ambient cinematic 90 BPM"
+- Corporate tech → "upbeat corporate tech 110 BPM"
+- Epic reveal → "cinematic orchestral 70 BPM building"
+- Meditation calm → "ambient peaceful 60 BPM meditation"
+
+**pixabay_music constraints to communicate to the agent:**
+
+- `capability = "music_search"` — it searches, not generates; no custom prompt control
+- License: Pixabay Content License (free, no attribution required)
+- Duration filter: set `min_duration=60` and `max_duration=120` for typical video BGM
+- Scraping is fragile: if the search returns 0 results, try a simpler query
+- If pixabay_music also fails, fall back to `music_library` (local files) or skip BGM
+
+**Key differences from music_gen:**
+
+| | `music_gen` | `pixabay_music` |
+|---|---|---|
+| Generation | AI generated, prompt-controlled | Pre-existing tracks |
+| Vocal control | `force_instrumental=true/false` | Depends on track |
+| Duration | Exact match to video | 60-120s clip from longer track |
+| Cost | $0.05/30s (paid) | Free |
+| Key required | Yes (ElevenLabs) | No |
+
 ## Applying to OpenMontage
 
 When using the `music_gen` tool:

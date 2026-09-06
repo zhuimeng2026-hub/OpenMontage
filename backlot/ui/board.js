@@ -867,6 +867,216 @@ function renderFoundMedia(s) {
     grid);
 }
 
+// ---------------------------------------------------------------------------
+// reference panel — shown when a project started from an analyzed reference
+// video. The state.py contract emits `state.reference_brief`; we render the
+// brief as a single panel slotted above the awaiting notice / main column.
+// ---------------------------------------------------------------------------
+
+const REF_GAP_EMOJI = {
+  video_footage: "🎥", images: "️", script: "📝", narration: "🎙️",
+  music: "🎵", sfx: "🔊", brand: "🏷️", character: "", text: "✏️",
+};
+const REF_MOTION_EMOJI = {
+  motion_clip: "🟢", animated_still: "", static_image: "⚪", unknown: "",
+};
+const REF_MOTION_LABEL = {
+  motion_clip: "MC", animated_still: "AS", static_image: "SI", unknown: "?",
+};
+const REF_PLATFORM_EMOJI = {
+  shorts: "📱", youtube: "▶️", tiktok: "🎵", instagram: "📸",
+  local_file: "💾", other_url: "🔗",
+};
+const REF_PIPELINE_DESC = {
+  animation: "短视频 + 高 motion → 适合 AI 视频生成 + 动效组合",
+  cinematic: "慢节奏 + 镜头感强 → 适合电影化叙事",
+  "video-template-remix": "默认兜底 → 保留参考结构 + 替换资产槽位",
+};
+const REF_TONE_HINT = {
+  educational: "blue", entertaining: "amber", cinematic: "red", corporate: "green",
+  casual: "text-2", dramatic: "red", inspirational: "amber", humorous: "green",
+};
+const REF_COMPLEXITY_HINT = {
+  simple: "green", moderate: "amber", complex: "red",
+};
+const REF_PRIORITY_HINT = {
+  must_have: "red", nice_to_have: "amber", optional: "text-3",
+};
+const REF_GAP_STATUS_LABEL = {
+  llm_filled: "LLM 分析", deterministic: "自动推断", pending: "待 LLM",
+};
+
+function fmtCount(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "0";
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `${Math.round(v / 1e3)}K`;
+  return String(v);
+}
+
+function renderReference(s) {
+  const brief = s.reference_brief;
+  if (!brief || !brief.available) return null;
+
+  const src = brief.source || {};
+  const cls = brief.classification || {};
+  const motion = brief.motion_breakdown || {};
+  const gaps = brief.asset_gaps || {};
+  const scenes = Array.isArray(brief.scenes_preview) ? brief.scenes_preview : [];
+
+  const toneHint = REF_TONE_HINT[brief.tone] || "";
+  const complexityHint = REF_COMPLEXITY_HINT[cls.complexity] || "";
+
+  const motionClipPct = Math.round((Number(motion.motion_clip) || 0) * 100);
+  const animatedStillPct = Math.round((Number(motion.animated_still) || 0) * 100);
+  const staticImagePct = Math.round((Number(motion.static_image) || 0) * 100);
+
+  const classification = el("div", { class: "reference-classification" },
+    el("div", { class: "ref-chips" },
+      el("span", { class: `ref-chip tone ${toneHint}` }, brief.tone || ""),
+      el("span", { class: "ref-chip pacing" }, cls.pacing_style || ""),
+      el("span", { class: `ref-chip complexity ${complexityHint}` }, cls.complexity || ""),
+      el("span", { class: `ref-chip motion ${cls.needs_motion ? "yes" : "no"}` },
+        cls.needs_motion ? "motion ✓" : "static"),
+    ),
+    el("div", { class: "ref-stat-grid" },
+      el("div", { class: "ref-stat" }, el("span", {}, "场景数"),
+        el("b", {}, String(cls.total_scenes ?? 0))),
+      el("div", { class: "ref-stat" }, el("span", {}, "平均时长"),
+        el("b", {}, `${(Number(cls.avg_scene_seconds) || 0).toFixed(1)}s`)),
+      el("div", { class: "ref-stat" }, el("span", {}, "cuts/min"),
+        el("b", {}, (Number(cls.cuts_per_minute) || 0).toFixed(1))),
+      el("div", { class: "ref-stat" }, el("span", {}, "uploader"),
+        el("b", {}, src.uploader ? `@${src.uploader}` : "—")),
+      el("div", { class: "ref-stat" }, el("span", {}, "views"),
+        el("b", {}, fmtCount(src.view_count))),
+    ),
+    el("div", { class: "ref-motion-block" },
+      el("div", { class: "ref-motion-label" }, "运动类型分布"),
+      el("div", { class: "ref-motion-bar" },
+        el("div", { class: "ref-motion-seg motion_clip", style: `width:${motionClipPct}%` }),
+        el("div", { class: "ref-motion-seg animated_still", style: `width:${animatedStillPct}%` }),
+        el("div", { class: "ref-motion-seg static_image", style: `width:${staticImagePct}%` }),
+      ),
+      el("div", { class: "ref-motion-legend" },
+        el("span", {}, el("i", { class: "sw motion_clip" }), `motion_clip ${motionClipPct}%`),
+        el("span", {}, el("i", { class: "sw animated_still" }), `animated_still ${animatedStillPct}%`),
+        el("span", {}, el("i", { class: "sw static_image" }), `static_image ${staticImagePct}%`),
+      ),
+    ),
+    el("div", { class: "ref-pipeline-suggest" },
+      el("span", { class: "rps-eyebrow" }, "🤖 建议 pipeline"),
+      el("b", { class: "rps-pick" }, cls.suggested_pipeline || ""),
+      el("span", { class: "rps-reason" }, REF_PIPELINE_DESC[cls.suggested_pipeline] || ""),
+    ),
+  );
+
+  const gapRows = (gaps.gaps || []).map((gap) => {
+    const prio = gap.priority || "";
+    const prioHint = REF_PRIORITY_HINT[prio] || "";
+    const aiClass = gap.can_ai_generate ? "yes" : "no";
+    const aiText = gap.can_ai_generate ? "AI ✓" : "人提供";
+    const catLabel = humanize(gap.category || "asset");
+    const catEmoji = REF_GAP_EMOJI[gap.category] || "";
+    const optButtons = (gap.options || []).map((opt) => el("button", {
+      type: "button",
+      class: "gap-opt",
+      onclick: (e) => e.currentTarget.classList.toggle("selected"),
+    }, String(opt)));
+    return el("li", { class: `gap-row ${prio} ${prioHint}`.trim() },
+      el("div", { class: "gap-cat" }, catEmoji ? `${catEmoji} ${catLabel}` : catLabel),
+      el("div", { class: "gap-content" },
+        el("div", { class: "gap-label" }, gap.label || ""),
+        gap.description ? el("div", { class: "gap-desc" }, gap.description) : null,
+        gap.question_for_user ? el("div", { class: "gap-question" }, gap.question_for_user) : null,
+      ),
+      el("div", { class: "gap-options" }, ...optButtons),
+      el("div", { class: `gap-ai-tag ${aiClass}` }, aiText),
+    );
+  });
+
+  const gapsPanel = el("div", { class: "reference-gaps" },
+    el("div", { class: "ref-gaps-head" },
+      el("h3", {}, "🎬 你需要提供的素材"),
+      el("span", { class: `ref-gaps-status ${gaps.status || "pending"}` },
+        REF_GAP_STATUS_LABEL[gaps.status] || gaps.status || ""),
+    ),
+    gaps.summary ? el("p", { class: "ref-gaps-summary" }, gaps.summary) : null,
+    gapRows.length ? el("ul", { class: "gap-list" }, gapRows) : null,
+  );
+
+  const timelineStrip = el("div", { class: "ref-scenes-strip" },
+    ...scenes.slice(0, 8).map((sc) => {
+      const motionCls = sc.motion_type || "unknown";
+      const motionLbl = REF_MOTION_LABEL[motionCls] || "?";
+      const start = Number(sc.start);
+      const end = Number(sc.end);
+      const dur = Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : null;
+      const wrap = el("div", { class: "ref-scene" });
+      if (sc.keyframe_relpath) {
+        const img = el("img", {
+          class: "ref-scene-thumb",
+          src: mediaURL(s.project_id, sc.keyframe_relpath),
+          loading: "lazy",
+          alt: "",
+        });
+        // A missing keyframe must never render a broken-image glyph (F: broken
+        // links) — swap to a placeholder span.
+        img.onerror = () => {
+          img.remove();
+          if (!wrap.querySelector(".ref-scene-placeholder")) {
+            wrap.append(el("span", { class: "ref-scene-placeholder" }, "—"));
+          }
+        };
+        wrap.append(img);
+      } else {
+        wrap.append(el("span", { class: "ref-scene-placeholder" }, "—"));
+      }
+      wrap.append(el("span", { class: "ref-scene-dur" }, fmtDuration(dur)));
+      wrap.append(el("span", { class: "ref-scene-ix" },
+        `SC ${String(sc.index ?? 0).padStart(2, "0")}`));
+      wrap.append(el("span", { class: `motion-tag ${motionCls}` }, motionLbl));
+      return wrap;
+    }),
+  );
+
+  const subTitle = src.url
+    ? el("a", { class: "reference-source-link", href: src.url, target: "_blank", rel: "noopener" },
+        src.title || "untitled")
+    : (src.title || "untitled");
+
+  const briefRelpath = brief.brief_relpath || "";
+  const briefHref = briefRelpath
+    ? `/api/project/${encodedProjectId}/artifact?path=${encodeURIComponent(briefRelpath)}`
+    : `/api/project/${encodedProjectId}/state`;
+
+  return el("section", { class: "reference-panel" },
+    el("header", { class: "reference-head" },
+      el("div", {},
+        el("div", { class: "reference-eyebrow" }, " REFERENCE-DRIVEN"),
+        el("h2", {}, "做一段类似的"),
+        el("p", { class: "reference-sub" },
+          "基于 ", subTitle,
+          " · ", el("span", { class: "ref-platform" },
+            `${REF_PLATFORM_EMOJI[src.type] || "🔗"} ${src.type || ""}`),
+          " · ", el("span", { class: "ref-duration" }, fmtDuration(src.duration_seconds)),
+          " · ", el("span", { class: "ref-scenes" }, `${cls.total_scenes ?? 0} scenes`),
+        ),
+        brief.summary ? el("p", { class: "reference-summary" }, brief.summary) : null,
+      ),
+      el("div", { class: "reference-actions" },
+        el("a", { class: "ref-btn", href: briefHref, target: "_blank", rel: "noopener" },
+          "查看完整 brief"),
+      ),
+    ),
+    el("div", { class: "reference-body" }, classification, gapsPanel),
+    el("div", { class: "reference-timeline" },
+      el("h4", {}, "场景时间线"),
+      timelineStrip,
+    ),
+  );
+}
+
 function renderNoState(s) {
   if (s.has_pipeline_state) return null;
   return el("div", { class: "notice", style: "border-color:#2b2b33;background:var(--surface-2);color:var(--text-3)" },
@@ -1064,6 +1274,8 @@ function render() {
   if (replayBar) app.append(replayBar);
   const drawer = renderDrawer(s);
   if (drawer) app.append(drawer);
+  const reference = renderReference(s);
+  if (reference) app.append(reference);
   const awaitingNotice = renderAwaitingNotice(s);
   if (awaitingNotice) app.append(awaitingNotice);
   const noState = renderNoState(s);
@@ -1109,6 +1321,7 @@ function normalize(s) {
   }
   s.artifacts = s.artifacts || {};
   s.media = s.media || {};
+  s.reference_brief = s.reference_brief || null;
   s.media.renders = Array.isArray(s.media.renders) ? s.media.renders : [];
   s.media.snapshots = Array.isArray(s.media.snapshots) ? s.media.snapshots : [];
   s.media.music = Array.isArray(s.media.music) ? s.media.music : [];

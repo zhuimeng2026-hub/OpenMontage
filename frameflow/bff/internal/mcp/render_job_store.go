@@ -26,8 +26,8 @@ func (s *RenderJobStore) Record(sessionID string, job RenderJob) error {
 	if created.IsZero() {
 		created = time.Now().UTC()
 	}
-	_, err := s.db.Exec(`INSERT INTO render_jobs(session_id,job_id,batch_id,project_id,name,res,status,created_at)
-VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session_id,job_id) DO UPDATE SET batch_id=excluded.batch_id,project_id=excluded.project_id,name=excluded.name,res=excluded.res,status=excluded.status,created_at=excluded.created_at`, sessionID, job.JobID, job.BatchID, job.ProjectID, job.Name, job.Res, job.Status, created.Format(time.RFC3339Nano))
+	_, err := s.db.Exec(`INSERT INTO render_jobs(session_id,job_id,batch_id,project_id,name,res,status,share_url,created_at)
+	VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,job_id) DO UPDATE SET batch_id=excluded.batch_id,project_id=excluded.project_id,name=excluded.name,res=excluded.res,status=excluded.status,share_url=CASE WHEN excluded.share_url<>'' THEN excluded.share_url ELSE render_jobs.share_url END,created_at=excluded.created_at`, sessionID, job.JobID, job.BatchID, job.ProjectID, job.Name, job.Res, job.Status, job.ShareURL, created.Format(time.RFC3339Nano))
 	return err
 }
 
@@ -35,7 +35,7 @@ func (s *RenderJobStore) List(sessionID string) ([]*RenderJob, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
-	rows, err := s.db.Query(`SELECT job_id,batch_id,project_id,name,res,status,created_at FROM render_jobs WHERE session_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100`, sessionID)
+	rows, err := s.db.Query(`SELECT job_id,batch_id,project_id,name,res,status,share_url,created_at FROM render_jobs WHERE session_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (s *RenderJobStore) List(sessionID string) ([]*RenderJob, error) {
 	for rows.Next() {
 		var j RenderJob
 		var created string
-		if err := rows.Scan(&j.JobID, &j.BatchID, &j.ProjectID, &j.Name, &j.Res, &j.Status, &created); err != nil {
+		if err := rows.Scan(&j.JobID, &j.BatchID, &j.ProjectID, &j.Name, &j.Res, &j.Status, &j.ShareURL, &created); err != nil {
 			return nil, err
 		}
 		j.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
@@ -57,9 +57,13 @@ func (s *RenderJobStore) List(sessionID string) ([]*RenderJob, error) {
 }
 
 func (s *RenderJobStore) UpdateStatus(sessionID, jobID, status string) error {
+	return s.UpdateResult(sessionID, jobID, status, "")
+}
+
+func (s *RenderJobStore) UpdateResult(sessionID, jobID, status, shareURL string) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	_, err := s.db.Exec(`UPDATE render_jobs SET status=? WHERE session_id=? AND job_id=?`, status, sessionID, jobID)
+	_, err := s.db.Exec(`UPDATE render_jobs SET status=?, share_url=CASE WHEN ? <> '' THEN ? ELSE share_url END WHERE session_id=? AND job_id=?`, status, shareURL, shareURL, sessionID, jobID)
 	return err
 }

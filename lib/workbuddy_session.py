@@ -5,6 +5,7 @@ reach disk or logs; state writes use replace-on-same-filesystem semantics.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -15,6 +16,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+try:  # POSIX-only advisory lock; missing on Windows so the import still works.
+    import fcntl
+except ImportError:  # pragma: no cover - exercised on Windows only
+    fcntl = None  # type: ignore[assignment]
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,6 +47,50 @@ def _lock_for(digest: str) -> threading.RLock:
         return _locks.setdefault(digest, threading.RLock())
 
 
+# Cross-process file lock directory. ``flock`` (POSIX advisory lock) is the
+# real safety net for multi-worker / multi-container deployments: the
+# in-process ``_locks`` RLock above only protects within a single Python
+# interpreter. Two concurrent MCP worker processes hitting the same session
+# would otherwise race on _read / _write / register_image, and the chunked
+# upload dedup path in ``asset_upload_chunk.py`` can also delete files based
+# on stale canonical metadata.
+_LOCK_DIR = STATE_DIR / ".locks"  # compatibility alias; use _lock_dir() below
+
+
+def _lock_dir() -> Path:
+    """Return the lock directory for the current (possibly patched) state root."""
+    return Path(STATE_DIR) / ".locks"
+
+
+@contextmanager
+def _flock_for(digest: str) -> Iterator[None]:
+    """Acquire a POSIX advisory lock scoped to one session digest.
+
+    Falls back to a no-op on platforms without fcntl.flock (Windows) so the
+    import doesn't break dev workflows; the in-process RLock still applies.
+    """
+    lock_dir = _lock_dir()
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"{digest}.lock"
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        if fcntl is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except OSError:
+                # Best-effort: single-process deployments still get in-process
+                # safety from ``_lock_for``. Logged at debug level only.
+                pass
+        yield
+    finally:
+        if fcntl is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        os.close(fd)
+
+
 def _state_path(digest: str) -> Path:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     return STATE_DIR / f"{digest}.json"
@@ -51,7 +101,16 @@ def _now() -> str:
 
 
 def _atomic_replace(tmp: Path, target: Path) -> None:
-    """Replace a state file, tolerating short Windows scanner/reader locks."""
+    """Replace a state file, tolerating short Windows scanner/reader locks.
+
+    On Windows the destination can be transiently locked by antivirus or a
+    concurrent reader, making os.replace fail with PermissionError. A short
+    back-off retry is the standard remedy; we never mask a genuinely broken
+    filesystem because the final attempt re-raises the real OSError. The
+    back-off starts at 20 ms and grows linearly (≈ up to ~180 ms total) which
+    is short enough not to keep the caller waiting under normal contention
+    but long enough to ride out an AV scan window.
+    """
     for attempt in range(10):
         try:
             os.replace(tmp, target)
@@ -164,8 +223,30 @@ def find_session_by_job_id(job_id: str) -> dict[str, Any] | None:
     return _read(digest)
 
 
+def update_session_by_job_id(job_id: str, **changes: Any) -> dict[str, Any] | None:
+    """Atomically update a persisted session resolved by its render job id.
+
+    Publish retry callers only have the opaque job id, not the raw MCP session
+    id.  Resolve it through the durable index and reuse the per-session lock
+    and atomic writer used by the normal session APIs.
+    """
+    if not job_id:
+        return None
+    with _index_lock:
+        digest = _read_index().get(job_id)
+    if not digest:
+        return None
+    with _lock_for(digest):
+        state = _read(digest)
+        if not state:
+            return None
+        state.update(changes)
+        _write(_state_path(digest), state)
+        return state
+
+
 # Statuses that mean a render was in-flight when the process died.
-_ORPHAN_STATUSES = frozenset({"rendering", "queued"})
+_ORPHAN_STATUSES = frozenset({"rendering", "queued", "rendered", "uploading", "sharing"})
 
 # render_phase value meaning "claimed a slot but still waiting for a Remotion
 # render slot (blocked on the semaphore)". Such jobs have NOT started
@@ -181,7 +262,7 @@ _JOBS_FILENAME = ".render_jobs.json"
 def recover_orphans_and_rebuild_index() -> dict[str, int]:
     """Startup maintenance: re-enqueue waiting jobs, fail active ones, rebuild index.
 
-    A session left ``rendering``/``queued`` was interrupted by a server
+    A session left in an active render/publish status was interrupted by a server
     crash/restart — the daemon thread that would finish it is gone. Two cases:
 
     * ``render_phase == 'queued_for_slot'`` — the job was *waiting for a render
@@ -216,6 +297,14 @@ def recover_orphans_and_rebuild_index() -> dict[str, int]:
                 data["status"] = "failed"
                 data["failure_stage"] = "orphaned"
                 data["error"] = "interrupted by server restart; please retry the render"
+                # Do not leave stale queue metadata on an orphaned job.  A
+                # worker that had already acquired a slot (or was in the
+                # upload/share phase) can no longer be in the live queue after
+                # a process restart, so exposing its old phase/position would
+                # make the status endpoint report contradictory state.
+                data["render_phase"] = None
+                data["queue_position"] = None
+                data["queue_depth"] = None
                 try:
                     _write(path, data)
                 except OSError:
@@ -237,6 +326,22 @@ def locked(session_id: str | None) -> Iterator[tuple[str, dict[str, Any] | None]
         yield digest, _read(digest)
 
 
+def get_session_assets(session_id: str | None) -> list[dict[str, Any]]:
+    """Return the images already uploaded for an MCP session.
+
+    Used by the frontend to show what is already on the server so the user
+    does not re-upload files after a partial upload failure. Returns [] when
+    the session has no state yet (nothing uploaded) or the id is missing.
+    """
+    digest = session_hash(session_id)
+    if not digest:
+        return []
+    state = _read(digest)
+    if not state:
+        return []
+    return list(state.get("assets", []))
+
+
 def _register_asset(session_id: str | None, project_id: str, asset: dict[str, Any]) -> dict[str, Any]:
     """Register one completed asset in the session's current asset batch.
 
@@ -244,9 +349,15 @@ def _register_asset(session_id: str | None, project_id: str, asset: dict[str, An
     asset API.  Keeping the state shape and transition rules in one place is
     important: existing image uploads continue to participate in the same
     Remotion batch while video/audio uploads become discoverable by asset id.
+
+    Holds BOTH an in-process RLock (cheap, nested-safe) AND a POSIX advisory
+    flock on ``.locks/<digest>.lock`` so that two MCP worker processes (or
+    multiple BFF instances) cannot race on the same session file. The flock
+    is the real cross-process safety net; the RLock prevents recursive
+    deadlock within a single worker.
     """
     digest = require_session(session_id)
-    with _lock_for(digest):
+    with _lock_for(digest), _flock_for(digest):
         state = _read(digest)
         if state and state.get("status") == "rendering":
             raise ValueError("MCP session batch is currently rendering; upload after it completes")
@@ -271,10 +382,12 @@ def _register_asset(session_id: str | None, project_id: str, asset: dict[str, An
             raise ValueError("MCP session is already collecting assets for another project")
 
         digest_value = asset.get("sha256")
-        path_value = asset.get("path")
+        # Prefer the OS-portable relative_path; fall back to path for legacy
+        # session state that predates the relative_path field.
+        rel_value = asset.get("relative_path") or asset.get("path")
         if not any(
             (digest_value and item.get("sha256") == digest_value)
-            or (path_value and item.get("path") == path_value)
+            or (rel_value and (item.get("relative_path") or item.get("path")) == rel_value)
             for item in state["assets"]
         ):
             state["assets"].append(asset)
@@ -311,6 +424,42 @@ def register_asset(session_id: str | None, project_id: str, asset: dict[str, Any
 def register_image(session_id: str | None, project_id: str, asset: dict[str, Any]) -> dict[str, Any]:
     """Add one completed image, preserving the legacy photo-batch behavior."""
     return _register_asset(session_id, project_id, asset)
+
+
+def replace_asset_by_sha(
+    session_id: str | None, project_id: str, asset: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Replace an existing asset entry whose sha256 matches ``asset.sha256``.
+
+    Used by the chunked-upload dedup path when the canonical file referenced
+    by an existing entry is missing on disk (cleanup job / RepoRoot mismatch
+    / earlier race): the new upload must promote itself into the same slot
+    instead of silently deleting its own bytes. ``register_image`` cannot be
+    used for this because its sha-dedup rule refuses to append a duplicate.
+
+    Returns the rewritten state on success, or None when no matching sha
+    was found (caller can fall through to register_image for a clean
+    append). Cross-process safe: same flock + RLock as register_image.
+    """
+    digest = require_session(session_id)
+    target_sha = asset.get("sha256")
+    if not target_sha:
+        return None
+    with _lock_for(digest), _flock_for(digest):
+        state = _read(digest)
+        if not state:
+            return None
+        if state.get("project_id") != project_id:
+            raise ValueError("MCP session is already collecting assets for another project")
+        assets_list = state.get("assets")
+        if not isinstance(assets_list, list):
+            return None
+        for i, item in enumerate(assets_list):
+            if isinstance(item, dict) and item.get("sha256") == target_sha:
+                assets_list[i] = asset
+                _write(_state_path(digest), state)
+                return state
+        return None
 
 
 def find_asset(
@@ -371,8 +520,20 @@ def list_assets(
         return [asset for asset in assets if asset.get("type") == asset_type]
 
 
-def begin_render(session_id: str | None, project_id: str | None = None) -> tuple[str, dict[str, Any]]:
-    """Atomically claim the current batch for one render job."""
+def begin_render(
+    session_id: str | None,
+    project_id: str | None = None,
+    *,
+    allow_continue: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    """Atomically claim the current batch for one render job.
+
+    ``allow_continue=True`` relaxes the ``status=="published"`` rejection so
+    multi-chunk pagination (see ``create_remotion_video_share``'s
+    ``assets_offset`` / ``assets_limit``) can start a fresh render after the
+    previous chunk already published. The ``status=="rendering"`` guard is
+    *not* relaxed — concurrent chunks on the same session are still refused.
+    """
     digest = require_session(session_id)
     with _lock_for(digest):
         state = _read(digest)
@@ -380,7 +541,7 @@ def begin_render(session_id: str | None, project_id: str | None = None) -> tuple
             raise ValueError("No uploaded image batch found for this MCP session")
         if state.get("status") == "rendering":
             raise ValueError("A video is already being generated for this MCP session")
-        if state.get("status") == "published":
+        if state.get("status") == "published" and not allow_continue:
             raise ValueError("The current image batch is already published; upload a new image first")
         if project_id and state.get("project_id") != project_id:
             raise ValueError("project_id does not match the current MCP session batch")

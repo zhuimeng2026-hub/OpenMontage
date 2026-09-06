@@ -19,9 +19,9 @@
 window.FF_CONFIG = {
   wechat: { appId, appSecret, redirectUri, scope, state, token, encodingAESKey }, // 仅 appId 下发前端，其余服务端专用
   remotion: {
-    mcpUrl:      "https://dw.aixifs.com/mcp",          // 真实 MCP 端点（仅展示/参考，前端不直接调用）
-    progressUrl: "https://dw.aixifs.com/render-progress", // SSE 进度（同样经 BFF 代理）
-    bffBaseUrl:  "http://localhost:8080"               // 前端统一请求的 BFF 地址；留空即进入演示模式
+    mcpUrl:      "",                     // 上游 MCP 是服务端细节
+    progressUrl: "",                     // 上游 SSE 是服务端细节
+    bffBaseUrl:  window.location.origin   // 同源 BFF；留空才进入演示模式
   }
 };
 ```
@@ -31,14 +31,14 @@ window.FF_CONFIG = {
 
 ## 本地真实测试（非演示）
 
-真实后台就是 `https://dw.aixifs.com/mcp`，但它由 **BFF 服务端**通过 `MCP_BASE_URL` 持有，
+真实后台是 BFF 通过 `MCP_BASE_URL` 连接的上游 MCP（生产为 `lanes.ymxt.top:8900/mcp`），
 前端只跟本地 BFF 对话。要跑通端到端真实调用：
 
 ```bash
 # 1) 准备服务端凭证（含 MCP_API_TOKEN）
 cd frameflow/bff
 cp .env.example .env
-#   编辑 .env：填 MCP_API_URL/Token（默认 MCP_BASE_URL 已是 https://dw.aixifs.com/mcp）、按需填微信参数
+#   编辑 .env：填 MCP_BASE_URL/MCP_API_TOKEN、按需填微信参数
 #   上线前把 AUTH_REQUIRED 改为 true
 
 # 2) 启动 BFF（它同时托管 ./web 下的 SPA，STATIC_DIR 默认 ./web）

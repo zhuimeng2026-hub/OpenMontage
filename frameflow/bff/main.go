@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -17,12 +16,20 @@ import (
 	"frameflow-bff/internal/imagebatch"
 	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
+	"frameflow-bff/internal/script"
 	"frameflow-bff/internal/state"
 	"frameflow-bff/internal/template"
 )
 
 func main() {
 	cfg := config.Load()
+	if err := config.Validate(cfg); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("[mcp] endpoint=%s progress_endpoint=%s voicebox_upstream=%s",
+		config.SafeEndpoint(cfg.MCPBaseURL),
+		config.SafeEndpoint(cfg.MCPProgressURL),
+		config.SafeEndpoint(cfg.VoiceboxUpstreamURL))
 	if err := os.MkdirAll(filepath.Dir(cfg.StateDBPath), 0750); err != nil {
 		log.Fatal(err)
 	}
@@ -35,18 +42,12 @@ func main() {
 	tierLimits := limits.NewResolver(cfg.DefaultTier, cfg.TierOverrides)
 	usage := limits.NewUsage()
 	imageBatches := imagebatch.NewStore(db)
-	batchSemaphore, err := limits.NewSQLiteSemaphore(db, limits.SemaphoreConfig{
-		GlobalCapacity:  cfg.ImageBatchMaxParallel,
-		PerUserCapacity: cfg.ImageBatchMaxPerUser,
-		LeaseTTL:        time.Duration(cfg.ImageBatchLeaseTTLMin) * time.Minute,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	h := handlers.New(cfg, store, tierLimits, imageBatches)
+	h := handlers.New(cfg, store, tierLimits, imageBatches, db)
 	comps := composition.NewStore()
 	ch := handlers.NewCompositionHandler(cfg, comps, store)
-	ibh := handlers.NewImageBatchHandler(cfg, imageBatches, store, batchSemaphore)
+	scripts := script.NewStore()
+	sh := handlers.NewScriptHandler(cfg, scripts, store)
+	ibh := handlers.NewImageBatchHandler(cfg, imageBatches, store)
 
 	tpls := template.NewStore()
 	var fetcher business.Fetcher
@@ -76,29 +77,52 @@ func main() {
 	{
 		// Expensive, upstream-facing routes: rate-limited (group) + auth-gated.
 		api.POST("/mcp", h.RequireAuth(), h.MCPProxy)
+		// External-agent transparent JSON-RPC passthrough. Mounted ONLY when
+		// EXTERNAL_AGENT_TOKEN is set; otherwise the middleware itself 503s.
+		if h.Cfg.ExternalAgentToken != "" {
+			api.POST("/mcp-raw", h.RequireBearer(), h.MCPRawProxy)
+			// Stateless voicebox proxy — same Bearer, no SessionStore / SQLite.
+			// Disabled whenever EXTERNAL_AGENT_TOKEN is empty, matching mcp-raw.
+			api.POST("/voicebox-mcp", h.RequireBearer(), h.VoiceboxMCPProxy)
+		}
 		api.GET("/render-progress/:jobId", h.RequireAuth(), h.RenderProgress)
 		api.GET("/image-scripts", ibh.Scripts)
 		api.GET("/image-batches", h.RequireAuth(), ibh.List)
 		api.POST("/image-batches", h.RequireAuth(), ibh.Create)
 		api.GET("/image-batches/:id", h.RequireAuth(), ibh.Get)
 		api.POST("/image-batches/:id/render", h.RequireAuth(), ibh.Render)
+		// 当前会话已上传素材：列表（供复选框选择，避免上传失败后重复上传）+ 缩略图。
+		api.GET("/session/assets", h.SessionAssets)
+		api.GET("/assets", h.ServeAsset)
 		// Render queue: returns ONLY the caller's own jobs (scoped by ff_sid).
 		api.GET("/render-queue", h.RequireAuth(), h.RenderQueue)
+		api.POST("/render-queue/:jobId/republish", h.RequireAuth(), h.RepublishRender)
 		// Public: WeChat OAuth entry, session probe, logout.
 		api.GET("/wechat/login", h.WechatLogin)
 		api.GET("/wechat/callback", h.WechatCallback)
+		// Desktop QR-login: create a ticket (rendered as a QR code) and poll it.
+		api.GET("/wechat/qrlogin", h.QrLoginCreate)
+		api.GET("/wechat/qrlogin/status", h.QrLoginStatus)
 		api.GET("/me", h.Me)
 		api.POST("/logout", h.Logout)
 		// DEV-ONLY: bootstraps a logged-in session without a real WeChat IdP,
 		// for verifying per-user queue isolation. 404 unless AuthRequired +
 		// DevLoginAllowed + WechatAppID are all set (see Handlers.DevLogin).
-		api.GET("/_dev_login", h.DevLogin)
+		// Route is only registered when DevLoginAllowed is on, so a misconfigured
+		// production deploy (DEV_LOGIN_ALLOWED=true shipped by accident) does not
+		// expose the endpoint at all. The handler itself still 404s as belt-and-braces.
+		if h.Cfg.DevLoginAllowed {
+			api.GET("/_dev_login", h.DevLogin)
+		}
 		// Custom Remotion composition editor surface (save/list/get are local;
 		// render is upstream-facing and auth-gated).
 		api.GET("/compositions", ch.List)
 		api.POST("/compositions", ch.Create)
 		api.GET("/compositions/:id", ch.Get)
 		api.POST("/compositions/:id/render", h.RequireAuth(), ch.Render)
+		// 定义视频脚本：用户在「定义视频脚本」页保存/列出的视频生成脚本（按会话隔离）。
+		api.POST("/scripts", sh.Create)
+		api.GET("/scripts", sh.List)
 		// Batch-render surface: a reusable Template (fixed script) + Scenarios
 		// (per-scenario image sets from the business system) -> N videos.
 		api.GET("/templates", th.ListTemplates)
@@ -144,6 +168,11 @@ func spaFallback(dir string) gin.HandlerFunc {
 		}
 		full := filepath.Join(dir, filepath.Clean(rel))
 		if info, err := os.Stat(full); err == nil && !info.IsDir() {
+			// Runtime config and the browser-side MCP client contain deployment
+			// endpoints and must not stay stale after a BFF restart/deploy.
+			if rel == "config.js" || rel == "mcp-client.js" || rel == "index.html" {
+				c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+			}
 			c.File(full)
 			return
 		}

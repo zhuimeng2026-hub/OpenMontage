@@ -27,6 +27,7 @@
   var DEMO = !BFF;
   var demoMode = DEMO; // 运行时可切换：点「体验演示模式」后置 true，使全流程走本地模拟
   var CHUNK = 400 * 1000; // 单片二进制字节数，与 om_mcp_probe.py 的 chunk=400_000 对齐
+  var MCP_CALL_TIMEOUT_MS = 120000; // LAN/远程 MCP 上传分块允许更长的网络与处理时间
 
   // ---- base64 / hex 工具 ----
   function b64FromArrayBuffer(buf) {
@@ -44,16 +45,77 @@
     for (var i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, '0');
     return s;
   }
+  // HTTP deployments on a LAN IP are not secure contexts, so Web Crypto is
+  // unavailable there. Keep the upload protocol working without weakening the
+  // SHA-256 checksum contract expected by the BFF.
+  function sha256HexFallback(buf) {
+    var K = [
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b,
+      0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01,
+      0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7,
+      0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+      0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152,
+      0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+      0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+      0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819,
+      0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08,
+      0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f,
+      0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+    ];
+    var H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    var bytes = new Uint8Array(buf);
+    var bitLen = bytes.length * 8;
+    var total = (((bytes.length + 9 + 63) >> 6) << 6);
+    var data = new Uint8Array(total);
+    data.set(bytes);
+    data[bytes.length] = 0x80;
+    var view = new DataView(data.buffer);
+    view.setUint32(total - 4, bitLen >>> 0);
+    view.setUint32(total - 8, Math.floor(bitLen / 0x100000000));
+    function rotr(x, n) { return (x >>> n) | (x << (32 - n)); }
+    for (var offset = 0; offset < total; offset += 64) {
+      var W = new Uint32Array(64);
+      for (var i = 0; i < 16; i++) W[i] = view.getUint32(offset + i * 4);
+      for (var j = 16; j < 64; j++) {
+        var s0 = rotr(W[j - 15], 7) ^ rotr(W[j - 15], 18) ^ (W[j - 15] >>> 3);
+        var s1 = rotr(W[j - 2], 17) ^ rotr(W[j - 2], 19) ^ (W[j - 2] >>> 10);
+        W[j] = (W[j - 16] + s0 + W[j - 7] + s1) >>> 0;
+      }
+      var a = H[0], b = H[1], c = H[2], d = H[3];
+      var e = H[4], f = H[5], g = H[6], h = H[7];
+      for (var k = 0; k < 64; k++) {
+        var S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+        var ch = (e & f) ^ (~e & g);
+        var t1 = (h + S1 + ch + K[k] + W[k]) >>> 0;
+        var S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+        var maj = (a & b) ^ (a & c) ^ (b & c);
+        var t2 = (S0 + maj) >>> 0;
+        h = g; g = f; f = e; e = (d + t1) >>> 0;
+        d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+      }
+      H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0;
+      H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+      H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0;
+      H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
+    }
+    return H.map(function (x) { return x.toString(16).padStart(8, '0'); }).join('');
+  }
   async function sha256Hex(buf) {
-    var digest = await crypto.subtle.digest('SHA-256', buf);
-    return bufToHex(digest);
+    if (window.crypto && window.crypto.subtle) {
+      var digest = await window.crypto.subtle.digest('SHA-256', buf);
+      return bufToHex(digest);
+    }
+    return sha256HexFallback(buf);
   }
 
   // ---- BFF 调用封装 ----
   async function mcpCall(tool, args) {
     if (demoMode) return { __demo: true, tool: tool, args: args || {} };
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, 30000); // 30s 超时，防止请求挂死
+    var timer = setTimeout(function () { ctrl.abort(); }, MCP_CALL_TIMEOUT_MS);
     try {
       var resp = await fetch(BFF + '/api/mcp', {
         method: 'POST',
@@ -87,7 +149,17 @@
        /\.m4a$/i.test(file.name) ? 'audio/mp4' :
        /\.mp3$/i.test(file.name) ? 'audio/mpeg' : 'application/octet-stream');
     var sha = await sha256Hex(buf);
-    var safe = file.name.replace(/[^\w.\-]/g, '_');
+    // MCP 负责将不安全的 basename 自动改名；浏览器端不要先把中文/特殊字符
+    // 替换成以下划线开头的名称，否则会在到达 MCP 前丢失原始名称并触发校验失败。
+    var filename = (file && typeof file.name === 'string' ? file.name.trim() : '');
+    if (!filename) {
+      var extMatch = /\.([A-Za-z0-9]{1,10})$/.exec(file && file.name || '');
+      var mimeExt = {
+        'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+        'image/gif': 'gif', 'image/bmp': 'bmp', 'image/tiff': 'tiff'
+      }[mime] || 'bin';
+      filename = 'upload-' + sha.slice(0, 16) + '.' + (extMatch ? extMatch[1].toLowerCase() : mimeExt);
+    }
 
     if (demoMode) {
       var sent = 0;
@@ -106,7 +178,7 @@
 
     // 1) start
     var start = await mcpCall('upload_asset_chunk', {
-      operation: 'start', project_id: projectId, filename: safe,
+      operation: 'start', project_id: projectId, filename: filename,
       total_bytes: n, mime_type: mime, sha256: sha
     });
     var uploadId = (start && start.upload_id) || (start && start.data && start.data.upload_id);
@@ -118,7 +190,7 @@
       var piece = buf.slice(offset, offset + CHUNK);
       var cb64 = b64FromArrayBuffer(piece);
       var ap = await mcpCall('upload_asset_chunk', {
-        operation: 'append', project_id: projectId, filename: safe,
+        operation: 'append', project_id: projectId, filename: filename,
         upload_id: uploadId, offset: offset, chunk_base64: cb64
       });
       if (!ap || !ap.success) {
@@ -130,9 +202,9 @@
 
     // 3) complete
     var complete = await mcpCall('upload_asset_chunk', {
-      operation: 'complete', project_id: projectId, filename: safe, upload_id: uploadId
+      operation: 'complete', project_id: projectId, filename: filename, upload_id: uploadId
     });
-    if (!complete || complete.success === false || (complete.data && complete.data.success === false)) {
+    if (!complete || complete.success !== true || (complete.data && complete.data.success === false)) {
       throw new Error('chunk complete 失败：' + JSON.stringify(complete));
     }
     return complete;
@@ -215,11 +287,46 @@
       return function () { clearInterval(timer); };
     }
     var es = new EventSource(BFF + '/api/render-progress/' + encodeURIComponent(jobId));
+    var pollTimer = null;
+    var stopped = false;
+    var pollAttempts = 0;
+    function stop(){
+      stopped = true;
+      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      es.close();
+    }
+    function poll(){
+      if (stopped || pollAttempts++ >= 300) {
+        if (!stopped && onError) onError(new Error('render status polling timed out'));
+        return;
+      }
+      getRenderStatus(jobId).then(function(res){
+        if (stopped) return;
+        var data = (res && res.data) || res || {};
+        var status = String(data.status || '').toLowerCase();
+        onEvent(data);
+        if (status === 'published' || status === 'done' || status === 'success' || status === 'completed' || status === 'finished' || status === 'failed' || status === 'error') {
+          stop();
+          return;
+        }
+        pollTimer = setTimeout(poll, 3000);
+      }).catch(function(err){
+        if (stopped) return;
+        if (pollAttempts >= 300) { if (onError) onError(err); return; }
+        pollTimer = setTimeout(poll, 5000);
+      });
+    }
     es.onmessage = function (e) {
       try { onEvent(JSON.parse(e.data)); } catch (err) { onEvent({ raw: e.data }); }
     };
-    es.onerror = function (err) { if (onError) onError(err); es.close(); };
-    return function () { es.close(); };
+    es.onerror = function () {
+      // EventSource cannot be reliably resumed through every reverse proxy.
+      // Switch to the MCP status API so a dropped SSE stream still reaches a
+      // terminal state in the create page and queue.
+      es.close();
+      poll();
+    };
+    return stop;
   }
 
   window.FFMCP = {

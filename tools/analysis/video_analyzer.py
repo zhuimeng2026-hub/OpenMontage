@@ -29,6 +29,18 @@ from tools.base_tool import (
 )
 
 
+def _srt_timecode(tc: str) -> float:
+    """Parse an SRT timecode (``HH:MM:SS,mmm`` or ``HH:MM:SS.mmm``) → seconds.
+
+    Tolerant of the trailing cue settings some emitters append (e.g.
+    ``00:00:03,000 X1``) — caller's split-on-space handles that already,
+    but we still normalize the comma form here.
+    """
+    tc = tc.strip().replace(",", ".")
+    h, m, s = tc.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
 class VideoAnalyzer(BaseTool):
     name = "video_analyzer"
     version = "0.1.0"
@@ -78,6 +90,20 @@ class VideoAnalyzer(BaseTool):
                 "type": "string",
                 "description": "Video file path or URL (YouTube, Shorts, Instagram, TikTok)",
             },
+            "project_id": {
+                "type": "string",
+                "default": "references",
+                "pattern": "^[a-zA-Z0-9._-]{1,64}$",
+                "description": (
+                    "Project-scoped subdirectory under the caller's "
+                    "principal namespace. Analysis outputs land at "
+                    "projects/users/<userid>/<project_id>/analysis_<ts>/. "
+                    "Auto-injected from the MCP session via "
+                    "ProjectWorkspace.for_current_principal() — the same "
+                    "pattern as upload_asset / video_downloader. Defaults "
+                    "to 'references' for ad-hoc reference analysis."
+                ),
+            },
             "analysis_depth": {
                 "type": "string",
                 "enum": ["transcript_only", "standard", "deep"],
@@ -97,7 +123,31 @@ class VideoAnalyzer(BaseTool):
             },
             "output_dir": {
                 "type": "string",
-                "description": "Directory for analysis outputs (default: auto-generated)",
+                "description": (
+                    "OPTIONAL override for the analysis output directory. "
+                    "Must resolve under projects/users/<userid>/<project_id>/ "
+                    "(forwarded through ProjectWorkspace.resolve() which "
+                    "rejects symlink escapes and path traversal). When "
+                    "omitted, defaults to <workspace_root>/analysis_<ts>/."
+                ),
+            },
+            "max_duration_seconds": {
+                "type": "integer",
+                "default": 600,
+                "description": (
+                    "Reject videos longer than this (in seconds). "
+                    "Increase to allow long-form videos (>10 min) as reference material. "
+                    "Corresponds to video_downloader's max_duration_seconds limit."
+                ),
+            },
+            "transcript_path": {
+                "type": "string",
+                "description": (
+                    "Optional path to a pre-existing transcript JSON/SRT. When "
+                    "provided, skips transcript_fetcher and Whisper entirely. "
+                    "Useful when the caller has already transcribed the audio "
+                    "via `transcriber` and wants to avoid a redundant pass."
+                ),
             },
         },
     }
@@ -150,12 +200,60 @@ class VideoAnalyzer(BaseTool):
         source = inputs["source"]
         depth = inputs.get("analysis_depth", "standard")
         max_keyframes = inputs.get("max_keyframes", 20)
+        max_duration = inputs.get("max_duration_seconds", 600)
+        project_id = inputs.get("project_id") or "references"
 
-        # Setup output directory
+        # ─── Workspace resolution (mirrors upload_asset / video_downloader) ──
+        # The MCP session's authenticated principal (WeChat → X-VClaw-User-Id
+        # → _user_id_ctx) is auto-injected via for_current_principal. The
+        # resolved userid is then propagated explicitly to every child tool
+        # so the cascade works even if the ContextVar isn't visible at the
+        # call site. Non-MCP callers (tests, scripts) can supply userid
+        # explicitly — falls through to for_principal(Principal(...), ...).
+        from lib.project_workspace import ProjectWorkspace, WorkspaceErrorError
+        from lib.principal_registry import Principal, PrincipalNotFound
+        try:
+            explicit_userid = inputs.get("userid")
+            if explicit_userid:
+                principal = Principal(kind="user", principal_id=explicit_userid)
+                workspace = ProjectWorkspace.for_principal(principal, project_id)
+            else:
+                workspace = ProjectWorkspace.for_current_principal(project_id)
+            userid = workspace.principal.principal_id
+        except PrincipalNotFound as e:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"no authenticated principal bound to this call: {e}. "
+                    "Send X-VClaw-User-Id on the MCP request, or pass userid "
+                    "explicitly when calling from a non-MCP context."
+                ),
+            )
+        except ValueError as e:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"workspace resolution failed for project_id={project_id!r}: {e}. "
+                    "Pass userid explicitly when calling from a non-MCP context."
+                ),
+            )
+
+        # Setup output directory — workspace-scoped by default. When the
+        # caller supplies output_dir, it must resolve under the workspace
+        # (ProjectWorkspace.resolve() rejects symlink escapes / path traversal).
         if inputs.get("output_dir"):
-            output_dir = Path(inputs["output_dir"])
+            try:
+                output_dir = workspace.resolve(inputs["output_dir"])
+            except (WorkspaceErrorError, ValueError) as e:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"output_dir {inputs['output_dir']!r} escapes workspace "
+                        f"({workspace.root}): {e}"
+                    ),
+                )
         else:
-            output_dir = Path("projects/_analysis") / f"analysis_{int(time.time())}"
+            output_dir = workspace.root / f"analysis_{int(time.time())}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         platform = self._detect_platform(source)
@@ -200,19 +298,31 @@ class VideoAnalyzer(BaseTool):
                 from tools.analysis.video_downloader import VideoDownloader
                 downloader = VideoDownloader()
 
+                # Relative sub-path under the workspace — child tools
+                # forward it through ProjectWorkspace.resolve() which
+                # requires a relative path (absolute inputs are rejected
+                # as "relative path must not be absolute").
+                rel_output = output_dir.relative_to(workspace.root)
+
                 if depth == "transcript_only" and self._is_youtube(platform):
                     # Only get metadata, skip video download
                     dl_result = downloader.execute({
                         "url": source,
-                        "output_dir": str(output_dir),
+                        "userid": userid,
+                        "project_id": project_id,
+                        "output_dir": str(rel_output),
                         "format": "metadata_only",
+                        "max_duration_seconds": max_duration,
                     })
                 else:
                     dl_result = downloader.execute({
                         "url": source,
-                        "output_dir": str(output_dir),
+                        "userid": userid,
+                        "project_id": project_id,
+                        "output_dir": str(rel_output),
                         "format": "video",
                         "max_resolution": "720p",
+                        "max_duration_seconds": max_duration,
                     })
 
                 if dl_result.success:
@@ -257,8 +367,18 @@ class VideoAnalyzer(BaseTool):
         # ─── STEP 2: Get transcript ───
         transcript_data = None
 
+        # First: consult an explicit transcript_path or cached files on disk.
+        # Avoids a redundant Whisper pass when the caller (or a prior agent
+        # pre-flight) has already produced a transcript.
+        transcript_data = self._load_existing_transcript(
+            inputs, output_dir, workspace, source, steps_failed
+        )
+        if transcript_data is not None:
+            brief["narration_transcript"] = transcript_data
+            steps_completed.append("transcript_external")
+
         # Try youtube-transcript-api first (instant, for YouTube)
-        if self._is_youtube(platform):
+        if transcript_data is None and self._is_youtube(platform):
             try:
                 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -306,9 +426,12 @@ class VideoAnalyzer(BaseTool):
                 downloader = VideoDownloader()
                 dl_result = downloader.execute({
                     "url": source,
-                    "output_dir": str(output_dir),
+                    "userid": userid,
+                    "project_id": project_id,
+                    "output_dir": str(output_dir.relative_to(workspace.root)),
                     "format": "video",
                     "max_resolution": "720p",
+                    "max_duration_seconds": max_duration,
                 })
                 if dl_result.success:
                     video_path = dl_result.data.get("video_path")
@@ -332,7 +455,9 @@ class VideoAnalyzer(BaseTool):
                 tr_inputs = {
                     "input_path": audio_path,
                     "model_size": "base",
-                    "output_dir": str(output_dir),
+                    "userid": userid,
+                    "project_id": project_id,
+                    "output_dir": str(output_dir.relative_to(workspace.root)),
                 }
                 # Only set language if we know it from transcript attempt
                 detected_lang = brief.get("narration_transcript", {}).get("language")
@@ -368,6 +493,7 @@ class VideoAnalyzer(BaseTool):
                 "depth": depth,
                 "steps_completed": steps_completed,
                 "steps_failed": steps_failed,
+                "has_transcript": transcript_data is not None,
                 "duration_seconds": round(time.time() - start, 2),
             }
             self._save_brief(brief, output_dir)
@@ -460,9 +586,11 @@ class VideoAnalyzer(BaseTool):
                 sampler = FrameSampler()
                 fs_result = sampler.execute({
                     "input_path": video_path,
+                    "userid": userid,
+                    "project_id": project_id,
                     "strategy": "timestamps",
                     "timestamps": timestamps,
-                    "output_dir": str(keyframe_dir),
+                    "output_dir": str(keyframe_dir.relative_to(workspace.root)),
                     "format": "jpg",
                     "quality": 2,
                 })
@@ -479,6 +607,13 @@ class VideoAnalyzer(BaseTool):
                             "description": "",  # Agent fills via vision
                         })
                     steps_completed.append("keyframes")
+                else:
+                    # FrameSampler returns a ToolResult rather than raising,
+                    # so a success=False failure slips past the `except`
+                    # below. Surface it explicitly — the brief's steps_failed
+                    # is the only signal downstream agents have.
+                    err = (fs_result.error or "FrameSampler returned success=False").strip()
+                    steps_failed.append(f"keyframes: {err}")
             except Exception as e:
                 steps_failed.append(f"keyframes: {e}")
         elif video_path and not scenes:
@@ -488,9 +623,11 @@ class VideoAnalyzer(BaseTool):
                 sampler = FrameSampler()
                 fs_result = sampler.execute({
                     "input_path": video_path,
+                    "userid": userid,
+                    "project_id": project_id,
                     "strategy": "count",
                     "count": min(max_keyframes, 15),
-                    "output_dir": str(keyframe_dir),
+                    "output_dir": str(keyframe_dir.relative_to(workspace.root)),
                     "format": "jpg",
                     "quality": 2,
                 })
@@ -503,6 +640,12 @@ class VideoAnalyzer(BaseTool):
                             "description": "",
                         })
                     steps_completed.append("keyframes_uniform")
+                else:
+                    # Same defensive else as the scene-guided branch above —
+                    # FrameSampler returns success=False without raising,
+                    # so without this branch the failure is invisible.
+                    err = (fs_result.error or "FrameSampler returned success=False").strip()
+                    steps_failed.append(f"keyframes_uniform: {err}")
             except Exception as e:
                 steps_failed.append(f"keyframes_uniform: {e}")
 
@@ -598,6 +741,164 @@ class VideoAnalyzer(BaseTool):
 
     # ─── Helpers ───
 
+    def _load_existing_transcript(
+        self,
+        inputs: dict[str, Any],
+        output_dir: Path,
+        workspace,
+        source: str,
+        steps_failed: list[str],
+    ) -> dict[str, Any] | None:
+        """Try to reuse a transcript produced earlier in this run or session.
+
+        Priority order:
+
+        1. Explicit ``transcript_path`` from the caller — wins outright.
+        2. Known filenames in the freshly-created ``output_dir``
+           (e.g. ``<source_stem>_transcript.json`` if the caller ran
+           ``transcriber`` against this same video just before us).
+        3. Known filenames in ``workspace.root`` — covers the case where
+           the agent pre-flighted the transcript at the workspace level.
+
+        Returns a ``narration_transcript``-shaped dict on success, or ``None``
+        if nothing usable was found. Parse failures are appended to
+        ``steps_failed`` so the analysis audit trail surfaces the bad cache,
+        then we fall through to the YouTube / Whisper paths.
+        """
+        candidates: list[Path] = []
+
+        # Priority 1: explicit path wins outright.
+        explicit = inputs.get("transcript_path")
+        if explicit:
+            candidates.append(Path(explicit))
+
+        # Priority 2 + 3: known filenames in output_dir then workspace root.
+        known = [
+            "_audio_transcript.json",
+            "transcript.json",
+            "transcript.srt",
+        ]
+        if source and not self._is_url(source):
+            # Only derive a source stem for local files — Path("https://…")
+            # produces nonsense. Prepend so it wins over the generic names.
+            stem = Path(source).stem
+            if stem:
+                known.insert(0, f"{stem}_transcript.json")
+
+        for d in (Path(output_dir), getattr(workspace, "root", None)):
+            if d is None:
+                continue
+            for name in known:
+                candidates.append(d / name)
+
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                loaded = self._parse_transcript_file(path)
+            except Exception as e:
+                # Surface the bad cache so the agent can see why it was
+                # ignored, but don't blow up the analysis.
+                steps_failed.append(f"transcript_external:{path.name}: {e}")
+                continue
+            if loaded is not None:
+                return loaded
+        return None
+
+    def _parse_transcript_file(self, path: Path) -> dict[str, Any] | None:
+        """Parse a cached transcript file into the brief's expected shape.
+
+        Accepts:
+
+        - JSON files with a top-level ``segments`` list where each entry has
+          ``start``/``end``/``text`` (e.g. output of ``transcriber``,
+          ``azure_stt``, or ``funasr_transcriber``).
+        - SRT files (minimal parser — does not handle every SRT edge case
+          but covers the common ``HH:MM:SS,mmm --> HH:MM:SS,mmm`` form).
+
+        Returns ``None`` when the file is structurally unusable (empty,
+        missing required fields, unparseable SRT). The caller is responsible
+        for logging exceptions.
+        """
+        suffix = path.suffix.lower()
+        text = path.read_text(encoding="utf-8")
+        if suffix == ".srt":
+            segs = self._parse_srt(text)
+        else:
+            cached = json.loads(text)
+            segs = cached.get("segments", [])
+            # Validate that at least the first few entries look like segments.
+            # We don't require every entry to conform — some emitters add
+            # optional fields — but the core (start/end/text) must be present
+            # on at least the first 3, otherwise we treat the file as bad
+            # cache and return None so the fallback path runs.
+            sample = segs[:3]
+            if not sample or not all(
+                {"start", "end", "text"} <= s.keys() for s in sample
+            ):
+                return None
+
+        if not segs:
+            return None
+
+        if suffix != ".srt":
+            cached_full = cached.get("text") or " ".join(
+                s.get("text", "") for s in segs
+            )
+            language = cached.get("language", "auto")
+        else:
+            cached_full = " ".join(s["text"] for s in segs)
+            language = "auto"
+
+        # Normalize segments to {start, end, text}.
+        norm_segs = [
+            {
+                "start": float(s.get("start", 0)),
+                "end": float(s.get("end", 0)),
+                "text": str(s.get("text", "")).strip(),
+            }
+            for s in segs
+        ]
+        word_count = len(cached_full.split()) or sum(
+            len(s["text"].split()) for s in norm_segs
+        )
+        return {
+            "full_text": cached_full,
+            "segments": norm_segs,
+            "language": language,
+            "word_count": word_count,
+        }
+
+    @staticmethod
+    def _parse_srt(text: str) -> list[dict[str, Any]]:
+        """Minimal SRT parser — ``HH:MM:SS,mmm`` timecodes only."""
+        out: list[dict[str, Any]] = []
+        for block in text.replace("\r\n", "\n").split("\n\n"):
+            lines = [ln for ln in block.split("\n") if ln.strip()]
+            if len(lines) < 2:
+                continue
+            # Find the timecode line — supports either "1\n00:00:00,000 -->"
+            # (with sequence number) or "00:00:00,000 --> ..." directly.
+            tc_line = next(
+                (ln for ln in lines if "-->" in ln),
+                None,
+            )
+            if not tc_line:
+                continue
+            try:
+                tc_a, tc_b = tc_line.split("-->", 1)
+                start = _srt_timecode(tc_a.strip())
+                end = _srt_timecode(tc_b.strip().split(" ", 1)[0])
+            except (ValueError, IndexError):
+                continue
+            # Body is everything after the timecode line.
+            tc_idx = lines.index(tc_line)
+            body = " ".join(lines[tc_idx + 1 :]).strip()
+            if not body:
+                continue
+            out.append({"start": start, "end": end, "text": body})
+        return out
+
     def _get_duration(self, video_path: Path) -> float:
         """Get video duration via ffprobe."""
         cmd = [
@@ -613,34 +914,76 @@ class VideoAnalyzer(BaseTool):
     def _compute_keyframe_timestamps(
         self, scenes: list[dict], max_frames: int, depth: str
     ) -> list[float]:
-        """Compute optimal keyframe timestamps from scene boundaries."""
-        timestamps = []
+        """Compute optimal keyframe timestamps from scene boundaries.
+
+        Coverage-first: every scene gets one keyframe before any scene gets a
+        second. Intra-scene samples (midpoint, plus 25%/75% for deep analysis)
+        are only added if the budget still allows.
+
+        The previous implementation built one flat list of every candidate
+        timestamp and uniformly subsampled it. That had two failure modes:
+        a scene could lose both its start frame and its midpoint, leaving it
+        with no keyframe at all (so the agent could never fill its
+        ``description``), and ``int(i * len / max)`` can never reach the last
+        element, so the tail of the video was always dropped.
+        """
+        guaranteed: list[float] = []
+        extras: list[float] = []
 
         for scene in scenes:
             start = scene.get("start_seconds", 0)
             end = scene.get("end_seconds", 0)
             duration = end - start
 
-            # First frame of each scene
-            timestamps.append(start + 0.1)
+            # Coverage floor — one frame per scene, no matter what.
+            guaranteed.append(start + 0.1)
 
-            # Midpoint for scenes > 3 seconds
+            # Midpoint for scenes > 3 seconds (only if budget allows)
             if duration > 3.0:
-                timestamps.append(start + duration / 2)
+                extras.append(start + duration / 2)
 
             # For deep analysis, add more intra-scene samples
             if depth == "deep" and duration > 6.0:
-                timestamps.append(start + duration * 0.25)
-                timestamps.append(start + duration * 0.75)
+                extras.append(start + duration * 0.25)
+                extras.append(start + duration * 0.75)
 
-        # Deduplicate, sort, and limit
-        timestamps = sorted(set(round(t, 3) for t in timestamps))
-        if len(timestamps) > max_frames:
-            # Uniform subsample to max_frames
-            step = len(timestamps) / max_frames
-            timestamps = [timestamps[int(i * step)] for i in range(max_frames)]
+        guaranteed = sorted(set(round(t, 3) for t in guaranteed))
+        extras = sorted(set(round(t, 3) for t in extras))
 
-        return timestamps
+        if len(guaranteed) >= max_frames:
+            # More scenes than budget. Spread across the whole timeline
+            # instead of truncating, which would drop the tail entirely.
+            return self._pick_evenly(guaranteed, max_frames)
+
+        budget = max_frames - len(guaranteed)
+        if budget > 0 and extras:
+            guaranteed.extend(self._pick_evenly(extras, budget))
+
+        return sorted(set(guaranteed))
+
+    @staticmethod
+    def _pick_evenly(values: list[float], count: int) -> list[float]:
+        """Pick ``count`` values spread across ``values``, keeping both ends.
+
+        The naive ``[values[int(i * len / count)] for i in range(count)]``
+        never reaches the final element: for len=40, count=20 the largest
+        index it produces is 38. Using ``round(i * (len - 1) / (count - 1))``
+        keeps both the first and the last value reachable.
+        """
+        if count <= 0 or not values:
+            return []
+        if count >= len(values):
+            return list(values)
+        if count == 1:
+            return [values[len(values) // 2]]
+
+        last = len(values) - 1
+        picked: list[float] = []
+        for i in range(count):
+            value = values[round(i * last / (count - 1))]
+            if value not in picked:
+                picked.append(value)
+        return picked
 
     def _timestamp_to_scene(self, ts: float, scenes: list[dict]) -> int:
         """Map a timestamp to its scene index."""

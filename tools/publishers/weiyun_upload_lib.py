@@ -44,6 +44,7 @@ import os
 import random
 import struct
 import sys
+import threading
 import time
 
 try:
@@ -215,6 +216,7 @@ def calc_upload_params(file_path):
 # ========== MCP 调用 ==========
 
 _request_id = 0
+_request_id_lock = threading.Lock()
 
 
 def mcp_call(mcp_url, headers, tool_name, arguments, max_retries=3):
@@ -224,10 +226,14 @@ def mcp_call(mcp_url, headers, tool_name, arguments, max_retries=3):
     """
     global _request_id
     for attempt in range(1, max_retries + 1):
-        _request_id += 1
+        # Upload/share workers run concurrently.  Keep IDs unique even when
+        # multiple threads enter this shared transport at the same time.
+        with _request_id_lock:
+            _request_id += 1
+            request_id = _request_id
         payload = {
             "jsonrpc": "2.0",
-            "id": _request_id,
+            "id": request_id,
             "method": "tools/call",
             "params": {"name": tool_name, "arguments": arguments},
         }
@@ -246,7 +252,10 @@ def mcp_call(mcp_url, headers, tool_name, arguments, max_retries=3):
         retcode = parsed.get("retcode", 0)
         if retcode == 50000 and attempt < max_retries:
             wait = random.uniform(2, 5)
-            print(f"  ⚠️ 服务繁忙(50000)，{wait:.1f}s 后重试 ({attempt}/{max_retries})...")
+            # Keep CLI output ASCII-only: production on Windows may use a
+            # cp936/GBK stdout that cannot encode the warning emoji.
+            print(f"  [WARN] service busy (50000), retrying in {wait:.1f}s "
+                  f"({attempt}/{max_retries})...")
             time.sleep(wait)
             continue
         return parsed
@@ -316,7 +325,14 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
     # 第二步 & 第三步：循环「预上传 → 上传一片」
     print(f"[2/3] 开始上传...")
     round_num = 0
-    while round_num < max_rounds:
+    # 每轮只上传一个 512KB 分块；固定 max_rounds=50 会把 >25.6MB 的视频截断
+    # （6.9 分钟 1080×1920 渲染 ≈33MB = 64 块，在 50 轮处报「超过最大上传轮数」）。
+    # 按实际分块数放大轮数上限，保证大文件能完整上传；仍设防御性上限防死循环失控。
+    block_count = len(params.get("block_sha_list") or [])
+    effective_max_rounds = max(max_rounds, block_count + 10)
+    if effective_max_rounds > 2000:
+        effective_max_rounds = 2000
+    while round_num < effective_max_rounds:
         round_num += 1
         # 预上传，获取当前需要上传的通道
         pre_rsp = mcp_call(mcp_url, headers, "weiyun.upload", pre_upload_args)
@@ -327,7 +343,7 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
         if pre_rsp.get("file_exist", False):
             file_id = pre_rsp.get("file_id", "")
             fname = pre_rsp.get("filename", filename)
-            print(f"  ✅ 秒传成功！file_id={file_id}")
+            print(f"  [OK] instant upload succeeded; file_id={file_id}")
             return {"file_id": file_id, "filename": fname}
         # 获取通道列表
         ch_list = pre_rsp.get("channel_list", [])
@@ -346,7 +362,7 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
                 fname = pre_rsp.get("filename", filename) or filename
                 if not file_id:
                     file_id, fname = _resolve_file_id()
-                print(f"  ✅ 上传完成！file_id={file_id}")
+                print(f"  [OK] upload completed; file_id={file_id}")
                 return {"file_id": file_id, "filename": fname}
             raise RuntimeError(f"无可上传通道，upload_state={state}")
         offset = int(ch["offset"])
@@ -383,9 +399,9 @@ def upload_file(file_path, mcp_url, headers, pdir_key=None, max_rounds=50):
             fname = up_rsp.get("filename", filename) or filename
             if not file_id:
                 file_id, fname = _resolve_file_id()
-            print(f"[3/3] ✅ 上传完成！file_id={file_id}, filename={fname}")
+            print(f"[3/3] [OK] upload completed; file_id={file_id}, filename={fname}")
             return {"file_id": file_id, "filename": fname}
-    raise RuntimeError(f"超过最大上传轮数 ({max_rounds})，上传未完成")
+    raise RuntimeError(f"超过最大上传轮数 ({effective_max_rounds})，上传未完成")
 
 
 # ========== 命令行入口 ==========

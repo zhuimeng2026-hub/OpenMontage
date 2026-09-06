@@ -36,6 +36,9 @@ class ComfyUIClient:
             server_url
             or os.environ.get("COMFYUI_SERVER_URL", "http://localhost:8188")
         ).rstrip("/")
+        # 60-second TTL cache so list_tools doesn't re-probe ComfyUI on every call.
+        self._availability_cache: tuple[bool, float] | None = None
+        self._AVAILABILITY_TTL = 60.0
 
     # ------------------------------------------------------------------
     # Health
@@ -47,14 +50,21 @@ class ComfyUIClient:
         return not os.environ.get("COMFYUI_SERVER_URL")
 
     def is_available(self) -> bool:
-        """Return True if the ComfyUI server is reachable."""
+        """Return True if the ComfyUI server is reachable (60s TTL cache)."""
+        now = time.monotonic()
+        if self._availability_cache is not None:
+            cached_result, cached_at = self._availability_cache
+            if now - cached_at < self._AVAILABILITY_TTL:
+                return cached_result
         try:
             resp = requests.get(
                 f"{self.server_url}/system_stats", timeout=5
             )
-            return resp.status_code == 200
+            result = resp.status_code == 200
         except Exception:
-            return False
+            result = False
+        self._availability_cache = (result, now)
+        return result
 
     def unavailable_reason(self) -> str:
         """Human-readable explanation of why the server can't be reached."""

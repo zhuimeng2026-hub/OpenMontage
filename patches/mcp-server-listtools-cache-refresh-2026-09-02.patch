@@ -1,0 +1,36 @@
+--- a/.venv/lib/python3.10/site-packages/mcp/server/lowlevel/server.py
++++ b/.venv/lib/python3.10/site-packages/mcp/server/lowlevel/server.py
+@@ -4,12 +4,31 @@
+         Returns the Tool object if found, None otherwise.
+         """
++        # LOCAL PATCH (2026-09-02): added try/except around the ListToolsRequest
++        # refresh + enriched the "not listed" warning with cache_size and
++        # handler_present so the 2026-08-31 22:29:48 frame_sampler hot-reload
++        # failure mode is diagnosable from the journal alone.
++        # Re-apply after `pip install --upgrade mcp`.
+         if tool_name not in self._tool_cache:
+             if types.ListToolsRequest in self.request_handlers:
+                 logger.debug("Tool cache miss for %s, refreshing cache", tool_name)
+-                await self.request_handlers[types.ListToolsRequest](None)
++                try:
++                    await self.request_handlers[types.ListToolsRequest](None)
++                except Exception:
++                    logger.exception(
++                        "Tool cache refresh failed for '%s' — ListToolsRequest handler raised; "
++                        "the cache may be stale; subsequent validation will be skipped",
++                        tool_name,
++                    )
++                    # fall through to the cache lookup below; we'll still log the warning
+ 
+         tool = self._tool_cache.get(tool_name)
+         if tool is None:
+-            logger.warning("Tool '%s' not listed, no validation will be performed", tool_name)
++            cache_size = len(self._tool_cache)
++            handler_present = types.ListToolsRequest in self.request_handlers
++            logger.warning(
++                "Tool '%s' not listed, no validation will be performed "
++                "(cache_size=%d, list_tools_handler_present=%s)",
++                tool_name, cache_size, handler_present,
++            )
+ 
+         return tool

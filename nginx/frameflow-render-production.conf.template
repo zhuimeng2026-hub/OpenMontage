@@ -1,0 +1,65 @@
+# FrameFlow 生产 HTTPS 模板
+#
+# 机器 A（render.mengxa.com）：本 BFF + nginx，BFF 监听 127.0.0.1:8080。
+# 机器 B（lanes.ymxt.top）：MCP 服务监听 0.0.0.0:8900，仅对机器 A 放行。
+#
+# 不生成或提交证书。将证书路径替换为实际部署路径，并确认私钥权限。
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name render.mengxa.com;
+
+    # ACME/微信域名校验等 HTTP 文件可在此单独放行；其余跳转 HTTPS。
+    location /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name render.mengxa.com;
+
+    ssl_certificate     /etc/letsencrypt/live/render.mengxa.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/render.mengxa.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 50m;
+
+    # BFF 同时托管 SPA 与 API。
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    # SSE 进度流：禁用 nginx 缓冲，避免进度条长时间不刷新。
+    location /api/render-progress/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_set_header X-Accel-Buffering no;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+}

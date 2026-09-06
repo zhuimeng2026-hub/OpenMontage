@@ -1,0 +1,44 @@
+# FrameFlow 本机合并部署模板（无 TLS）
+#
+# 适用场景：render.mengxa.com 与 lanes.ymxt.top 已由开发机 hosts 指向本机，
+# BFF 在 127.0.0.1:8080 运行，BFF 再通过 MCP_BASE_URL 访问 lanes.ymxt.top:8900。
+# 不修改系统 hosts；请由开发者自行维护 hosts 或 DNS。
+#
+# 启用前：复制到 nginx/sites-enabled/，并按 nginx.conf 的 -p/-c 方式运行。
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name render.mengxa.com;
+
+    client_max_body_size 50m;
+
+    # BFF 同时托管 SPA 与 /api；保留 Host/Proto 供微信回调自动组装 URL。
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    # SSE 必须关闭缓冲，并允许长时间保持连接。
+    location /api/render-progress/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_set_header X-Accel-Buffering no;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+}

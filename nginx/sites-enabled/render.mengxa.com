@@ -1,0 +1,89 @@
+# OpenMontage — render.mengxa.com（本机自签 HTTPS 开发环境）
+#
+# 源文件（sites-available），启用方式：
+#   复制/链接到 ../sites-enabled/ 后 reload nginx 即可：
+#     copy render.mengxa.com.conf ..\sites-enabled\render.mengxa.com.conf
+#   或运行仓库提供的 enable.bat
+#
+# 自签证书：nginx/ssl/render.mengxa.com/{fullchain,privkey}.pem
+# 访问前需把 render.mengxa.com 指向 127.0.0.1（已写入系统 hosts）。
+
+# HTTP → HTTPS 跳转
+# 例外：微信「网页授权域名」校验文件在 http 下直接 200，避免 301 导致校验失败。
+server {
+    listen 80;
+    listen [::]:80;
+    server_name render.mengxa.com;
+
+    root C:/Users/Admin/OpenMontage/frameflow/bff/web;
+
+    location ~ ^/MP_verify_[A-Za-z0-9]+\.txt$ {
+        try_files $uri =404;
+        access_log off;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS 站点
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name render.mengxa.com;
+
+    ssl_certificate     /etc/nginx/ssl/render.mengxa.com/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/render.mengxa.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    root C:/Users/Admin/OpenMontage/frameflow/bff/web;
+    index index.html;
+
+    # Gzip
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript image/svg+xml;
+    gzip_min_length 256;
+
+    # 静态资源长缓存
+    location ~* \.(?:css|js|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # BFF API 代理（BFF 在本地 8080 运行）
+    location /api/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        client_max_body_size 50m;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    # 健康检查（转发给 BFF）
+    location /health {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    # SPA fallback — 所有非文件路由返回 index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 安全头
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    access_log ./logs/render.mengxa.com.access.log main;
+    error_log  ./logs/render.mengxa.com.error.log;
+}

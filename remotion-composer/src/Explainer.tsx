@@ -1,3 +1,4 @@
+import { SANS } from "./fonts";
 import {
   AbsoluteFill,
   Audio,
@@ -11,23 +12,23 @@ import {
   useVideoConfig,
 } from "remotion";
 
-// Resolve asset path — handle URLs, absolute paths (Windows/Unix), and public/ relative paths
+// Resolve asset path — pass through URLs/data URIs; everything else routes
+// through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
+// Removed 2026-08-20: the previous `file://` + absolute-path branches were a
+// safety net for stale paths that slipped past Python staging. They caused
+// "Not allowed to load local resource" in headless Chrome. The Python
+// _STAGEABLE_FIELDS / defensive-guard layer now guarantees only relative
+// paths reach the JS layer, so we can drop the file:// escape hatch and
+// surface any drift as a clean error before launch.
 function resolveAsset(src: string): string {
-  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) {
+  if (
+    src.startsWith("http://") ||
+    src.startsWith("https://") ||
+    src.startsWith("data:")
+  ) {
     return src;
   }
-  // Already a file:// URI — return it verbatim (only normalize backslashes).
-  // NOTE: keep the leading "/" of an absolute path ("file:///opt/x" is a valid
-  // file URI; stripping it would corrupt the path and route to staticFile).
-  if (src.startsWith("file://")) {
-    return src.replace(/\\/g, "/");
-  }
-  // Absolute paths (Unix: /foo, Windows: C:\foo or C:/foo) — convert to file:// URI
-  // staticFile() only accepts relative paths within public/, so absolute paths must bypass it
-  if (src.startsWith("/") || /^[A-Za-z]:[\\/]/.test(src)) {
-    return `file:///${src.replace(/\\/g, "/")}`;
-  }
-  return staticFile(src);
+  return staticFile(src.replace(/^file:\/\/\/?/, ""));
 }
 import { TextCard } from "./components/TextCard";
 import { StatCard } from "./components/StatCard";
@@ -53,7 +54,7 @@ import type { ParticleType } from "./components/ParticleOverlay";
 import { resolveTheme, type ThemeConfig, DEFAULT_THEME } from "./Root";
 
 // Use only local system fonts so offline Chromium renders do not fetch fonts.
-const fontFamily = "Arial, Helvetica, sans-serif";
+const fontFamily = SANS;
 
 // ---------------------------------------------------------------------------
 // Animated Background — Gradient Mesh + Floating Orbs
@@ -345,26 +346,43 @@ const Vignette: React.FC = () => (
 // Enhanced Image Scene — spring physics, parallax, variety
 // ---------------------------------------------------------------------------
 
-const ImageScene: React.FC<{ src: string; animation?: string }> = ({
-  src,
-  animation,
-}) => {
+const ImageScene: React.FC<{
+  src: string;
+  animation?: string;
+  animationParams?: Record<string, any>;
+}> = ({ src, animation, animationParams }) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
 
-  // Smooth spring fade-in
-  const fadeIn = spring({ frame, fps, config: { damping: 18, stiffness: 80 } });
+  // Smooth spring fade-in (default); replaced by animationParams.fade_in when present.
+  const fadeIn = animationParams?.fade_in != null
+    ? interpolate(
+        frame,
+        [0, animationParams.fade_in * fps],
+        [0, 1],
+        { extrapolateRight: "clamp" }
+      )
+    : spring({ frame, fps, config: { damping: 18, stiffness: 80 } });
 
-  // Fade-out for crossfade effect
-  const fadeOutStart = durationInFrames - 8;
-  const fadeOut = interpolate(frame, [fadeOutStart, durationInFrames], [1, 0.3], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  // Fade-out: params-driven when present, else last-8-frames default.
+  const fadeOut = animationParams?.fade_out != null
+    ? interpolate(
+        frame,
+        [Math.max(0, durationInFrames - animationParams.fade_out * fps), durationInFrames],
+        [1, 0],
+        { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+      )
+    : interpolate(
+        frame,
+        [durationInFrames - 8, durationInFrames],
+        [1, 0.3],
+        { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+      );
 
   let scale = 1;
   let translateX = 0;
   let translateY = 0;
+  let rotateDeg = 0;
   const anim = animation || "zoom-in";
 
   // Progress with easing — smoother than linear
@@ -374,7 +392,11 @@ const ImageScene: React.FC<{ src: string; animation?: string }> = ({
   });
 
   if (anim === "zoom-in") {
-    scale = 1 + progress * 0.18;
+    if (Array.isArray(animationParams?.scale) && animationParams.scale.length === 2) {
+      scale = interpolate(progress, [0, 1], animationParams.scale);
+    } else {
+      scale = 1 + progress * 0.18;
+    }
   } else if (anim === "zoom-out") {
     scale = 1.18 - progress * 0.18;
   } else if (anim === "pan-left") {
@@ -383,7 +405,7 @@ const ImageScene: React.FC<{ src: string; animation?: string }> = ({
   } else if (anim === "pan-right") {
     translateX = interpolate(progress, [0, 1], [-40, 40]);
     scale = 1.15;
-  } else if (anim === "ken-burns" || anim === "ken-burns-slow-zoom") {
+  } else if (anim === "ken-burns") {
     // Cinematic Ken Burns: gentle zoom + diagonal drift
     scale = 1 + progress * 0.22;
     translateX = interpolate(progress, [0, 1], [0, -25]);
@@ -392,6 +414,14 @@ const ImageScene: React.FC<{ src: string; animation?: string }> = ({
     // Subtle parallax — foreground moves faster
     translateY = interpolate(progress, [0, 1], [15, -15]);
     scale = 1.1;
+  } else if (anim === "rotate") {
+    const range = Array.isArray(animationParams?.rotate)
+      ? animationParams.rotate
+      : [0, 360];
+    const [from, to] = range as [number, number];
+    rotateDeg = interpolate(frame, [0, durationInFrames], [from, to], {
+      extrapolateRight: "clamp",
+    });
   }
   // "static" or "none" → just display
 
@@ -404,7 +434,7 @@ const ImageScene: React.FC<{ src: string; animation?: string }> = ({
           height: "100%",
           objectFit: "cover",
           opacity: fadeIn * fadeOut,
-          transform: `scale(${scale}) translate(${translateX}px, ${translateY}px)`,
+          transform: `rotate(${rotateDeg}deg) scale(${scale}) translate(${translateX}px, ${translateY}px)`,
           willChange: "transform, opacity",
         }}
       />
@@ -709,7 +739,13 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
   const animation = cut.animation || cut.transform?.animation;
 
   if (cut.source && isImage(cut.source)) {
-    return maybeWrapWithBg(<ImageScene src={cut.source} animation={animation} />);
+    return maybeWrapWithBg(
+      <ImageScene
+        src={cut.source}
+        animation={animation}
+        animationParams={cut.transform?.animation_params}
+      />
+    );
   }
 
   if (cut.source && isVideo(cut.source)) {
@@ -718,7 +754,13 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
 
   // Final fallback — try as image if source exists, otherwise show text_card
   if (cut.source) {
-    return maybeWrapWithBg(<ImageScene src={cut.source} animation={animation} />);
+    return maybeWrapWithBg(
+      <ImageScene
+        src={cut.source}
+        animation={animation}
+        animationParams={cut.transform?.animation_params}
+      />
+    );
   }
 
   // No source, no type — render as text card with cut id as fallback

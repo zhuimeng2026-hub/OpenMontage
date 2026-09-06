@@ -17,6 +17,19 @@ func (h *Handlers) RenderProgress(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "jobId required"})
 		return
 	}
+	sid, err := c.Cookie(sessionCookieName)
+	if err != nil || sid == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "render job not found"})
+		return
+	}
+	// Scope the job lookup by the stable WeChat identity (or device session when
+	// anonymous) so a render submitted on one machine is visible after login on
+	// another.
+	scope := renderQueueOwnerID(sid)
+	if !h.Store.OwnsJob(scope, jobID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "render job not found"})
+		return
+	}
 	upstream := fmt.Sprintf("%s/%s", h.Cfg.MCPProgressURL, jobID)
 	req, err := http.NewRequest(http.MethodGet, upstream, nil)
 	if err != nil {

@@ -30,7 +30,11 @@ type bucket struct {
 // Capacity equals the per-minute rate so a client can burst up to that many
 // requests, then refills continuously.
 func NewRateLimiter(perMin int) *RateLimiter {
-	if perMin <= 0 {
+	// A zero value explicitly disables the limiter for local/integration tests.
+	if perMin == 0 {
+		return nil
+	}
+	if perMin < 0 {
 		perMin = 30
 	}
 	cap := float64(perMin)
@@ -46,6 +50,10 @@ func NewRateLimiter(perMin int) *RateLimiter {
 // Middleware returns the gin middleware.
 func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if rl == nil {
+			c.Next()
+			return
+		}
 		now := time.Now()
 		k := rl.key(c)
 		rl.mu.Lock()

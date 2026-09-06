@@ -1,3 +1,4 @@
+import { SANS, SERIF } from "../fonts";
 import {
   AbsoluteFill,
   interpolate,
@@ -40,7 +41,7 @@ export const CalloutBox: React.FC<CalloutBoxProps> = ({
   borderColor,
   backgroundColor,
   textColor = "#1F2937",
-  fontFamily = "Inter, system-ui, sans-serif",
+  fontFamily = SANS,
   fontSize = 32,
   titleFontSize = 38,
   containerBackgroundColor = "#FFFFFF",
@@ -162,7 +163,7 @@ export const CalloutBox: React.FC<CalloutBoxProps> = ({
               opacity: iconOpacity,
               transform: `scale(${iconScale})`,
               color: isQuote ? resolvedBorder : undefined,
-              fontFamily: isQuote ? "Georgia, serif" : undefined,
+              fontFamily: isQuote ? SERIF : undefined,
               fontWeight: isQuote ? 700 : undefined,
               marginTop: isQuote ? -12 : 0,
             }}
@@ -195,7 +196,7 @@ export const CalloutBox: React.FC<CalloutBoxProps> = ({
             )}
             <div
               style={{
-                fontFamily: isQuote ? "Georgia, serif" : fontFamily,
+                fontFamily: isQuote ? SERIF : fontFamily,
                 fontWeight: isQuote ? 400 : 400,
                 fontStyle: isQuote ? "italic" : "normal",
                 fontSize,

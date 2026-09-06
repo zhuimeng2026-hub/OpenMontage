@@ -1,3 +1,4 @@
+import { CJK, DISPLAY } from "./fonts";
 import { Composition, CalculateMetadataFunction } from "remotion";
 import { Explainer, ExplainerProps } from "./Explainer";
 import {
@@ -14,6 +15,7 @@ import { EndTag, EndTagProps } from "./components/EndTag";
 import { HeroTitle } from "./components/HeroTitle";
 import { ProductReveal, ProductRevealProps } from "./components/ProductReveal";
 import { CaptionOverlay, WordCaption } from "./components/CaptionOverlay";
+import { BilingualCaptionOverlay } from "./components/BilingualCaptionOverlay";
 import { CollageBurst, CollageBurstProps } from "./CollageBurst";
 import { LyricOverlay, LyricOverlayProps } from "./LyricOverlay";
 // Shared with the runnable demo so MCP and the local demo use the same
@@ -23,6 +25,27 @@ import {
   ecommerceProductDemoDefaultProps,
   ECOMMERCE_PRODUCT_DEMO_DURATION,
 } from "../../demo/src/EcommerceProductDemo";
+import { CustomComposition } from "./CustomComposition";
+import { FontVerify } from "./components/FontVerify";
+
+// Runtime-compiled user composition: duration is derived from how many images
+// the user supplied (images.length × durationPerImage). Falls back to 30s.
+const calculateCustomMetadata: CalculateMetadataFunction<Record<string, unknown>> = async ({
+  props,
+}) => {
+  const images = Array.isArray((props as { images?: unknown }).images)
+    ? ((props as { images: unknown[] }).images as unknown[])
+    : [];
+  const dpi = Number((props as { durationPerImage?: number }).durationPerImage) || 3;
+  const fps = Number((props as { fps?: number }).fps) || 30;
+  const frames = Math.max(1, Math.round(images.length * dpi * fps));
+  return { durationInFrames: frames };
+};
+
+const calculateEcommerceMetadata: CalculateMetadataFunction<Record<string, unknown>> = async ({ props }) => {
+  const target = Number((props as { targetDurationSeconds?: number }).targetDurationSeconds);
+  return { durationInFrames: target > 0 ? Math.max(1, Math.round(target * 30)) : ECOMMERCE_PRODUCT_DEMO_DURATION };
+};
 
 // ---------------------------------------------------------------------------
 // Theme System — prevents every video from looking like dark fintech
@@ -268,6 +291,7 @@ export const Root: React.FC = () => {
         width={1920}
         height={1080}
         defaultProps={ecommerceProductDemoDefaultProps}
+        calculateMetadata={calculateEcommerceMetadata}
       />
       <Composition
         id="CaptionOverlayOnly"
@@ -282,6 +306,29 @@ export const Root: React.FC = () => {
           fontSize: 58,
           highlightColor: "#FACC15",
           backgroundColor: "rgba(15, 23, 42, 0.75)",
+        }}
+      />
+      <Composition
+        id="BilingualCaptionOverlayOnly"
+        component={BilingualCaptionOverlay}
+        durationInFrames={30 * 300}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          primaryWords: [] as WordCaption[],
+          secondaryWords: [] as WordCaption[],
+          wordsPerPage: 4,
+          rowGap: 6,
+          primaryFontSize: 48,
+          secondaryFontSize: 40,
+          primaryColor: "#F8FAFC",
+          primaryHighlightColor: "#22D3EE",
+          secondaryColor: "#E2E8F0",
+          secondaryHighlightColor: "#FBBF24",
+          backgroundColor: "rgba(15, 23, 42, 0.78)",
+          primaryFontFamily: DISPLAY,
+          secondaryFontFamily: CJK,
         }}
       />
       <Composition
@@ -345,6 +392,28 @@ export const Root: React.FC = () => {
           fadeOutSeconds: 1.5,
           overlay: true,
         } as EndTagProps}
+      />
+      <Composition
+        id="CustomComposition"
+        component={CustomComposition}
+        durationInFrames={30 * 30}
+        fps={30}
+        width={1080}
+        height={1920}
+        defaultProps={{
+          code: "",
+          images: [],
+          durationPerImage: 3,
+        }}
+        calculateMetadata={calculateCustomMetadata}
+      />
+      <Composition
+        id="FontVerify"
+        component={FontVerify}
+        durationInFrames={1}
+        fps={30}
+        width={1920}
+        height={1080}
       />
     </>
   );

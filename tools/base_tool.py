@@ -21,6 +21,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+#: Tools that belong to the decompose phase of the mcp-decompose-and-recompose
+#: skill. Their events.jsonl entries carry phase="decompose" so the dedicated
+#: decompose log monitor can attribute them correctly.
+_DECOMPOSE_TOOLS = frozenset({"scene_detect", "transcriber", "video_analyzer"})
+
 
 def _load_dotenv() -> None:
     """Load .env into os.environ once at import time.
@@ -76,10 +81,82 @@ class ToolStability(str, Enum):
     PRODUCTION = "production"
 
 
-class ToolStatus(str, Enum):
-    AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
-    DEGRADED = "degraded"
+class ToolStatus:
+    """Status of a tool, with optional ``reason`` / ``install_instructions``.
+
+    Backward-compatible with the prior ``(str, Enum)`` shape (the project's
+    pre-2026-08-28 convention) **and** with the dataclass-style construction
+    that the RFC for ``music_gen_local`` (§4.5) introduced:
+
+    * **Bare enum-style** still works — ``ToolStatus.AVAILABLE``,
+      ``ToolStatus.UNAVAILABLE``, ``ToolStatus.DEGRADED`` are class-level
+      singletons with empty reason/instructions, set after the class body.
+    * **Rich construction** — ``ToolStatus(status="unavailable",
+      reason="missing dep: transformers", install_instructions="...")`` is
+      the form new tools should use to convey *why* they are unavailable.
+    * **``status`` and ``value`` are aliases** for the same underlying string,
+      so both the RFC-style ``result.status`` and the legacy
+      ``t.get_status().value == "available"`` access patterns keep working.
+    * **Equality** compares ``status`` only, so a rich UNAVAILABLE
+      (``status="unavailable", reason="x"``) is still ``== ToolStatus.UNAVAILABLE``,
+      which preserves every existing ``tool.get_status() == ToolStatus.AVAILABLE``
+      / ``!= ToolStatus.AVAILABLE`` call site in the codebase
+      (``piper_tts``, ``kokoro_tts``, ``music_gen``, ``google_music``, the
+      ``tts_selector`` chain, etc.).
+    * **String equality** preserves the prior ``(str, Enum)`` semantics —
+      ``ToolStatus.AVAILABLE == "available"`` is True.
+    """
+
+    def __init__(
+        self,
+        status: str = "",
+        *,
+        value: str = "",
+        reason: str = "",
+        install_instructions: str = "",
+    ) -> None:
+        # Accept either ``status=`` (RFC §4.5 convention) or ``value=`` (the
+        # old ``(str, Enum)`` keyword). When both are passed, ``status`` wins.
+        s = status or value
+        self.status = s
+        self.value = s  # alias — keeps legacy `get_status().value` working
+        self.reason = reason
+        self.install_instructions = install_instructions
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ToolStatus):
+            return self.status == other.status
+        if isinstance(other, str):
+            return self.status == other
+        return NotImplemented
+
+    def __ne__(self, other: object) -> bool:
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __hash__(self) -> int:
+        return hash(self.status)
+
+    def __str__(self) -> str:
+        return self.status
+
+    def __repr__(self) -> str:
+        if not self.reason and not self.install_instructions:
+            return f"ToolStatus({self.status!r})"
+        return (
+            f"ToolStatus(status={self.status!r}, reason={self.reason!r}, "
+            f"install_instructions={self.install_instructions!r})"
+        )
+
+
+# Backward-compat singletons — match the previous (str, Enum) member names so
+# every existing ``ToolStatus.AVAILABLE`` / ``UNAVAILABLE`` / ``DEGRADED``
+# reference keeps working unchanged.
+ToolStatus.AVAILABLE = ToolStatus(status="available")
+ToolStatus.UNAVAILABLE = ToolStatus(status="unavailable")
+ToolStatus.DEGRADED = ToolStatus(status="degraded")
 
 
 class ToolRuntime(str, Enum):
@@ -183,6 +260,7 @@ def _instrument_execute(fn: Callable) -> Callable:
             "tool": tool_name,
             "scene_id": scene_id,
             "depth": depth if depth else None,
+            "phase": "decompose" if tool_name in _DECOMPOSE_TOOLS else None,
         }
         if project_dir is not None:
             emit_event(project_dir, {
@@ -415,6 +493,7 @@ class BaseTool(ABC):
         timeout: Optional[int] = None,
         cwd: Optional[Path] = None,
         on_output: Optional["Callable[[str], None]"] = None,
+        env: Optional[dict] = None,
     ) -> subprocess.CompletedProcess:
         """Run a subprocess command with standard error handling.
 
@@ -448,6 +527,7 @@ class BaseTool(ABC):
                     errors="replace",
                     timeout=timeout,
                     cwd=cwd,
+                    env=env,
                     check=True,
                 )
             except subprocess.CalledProcessError as exc:
@@ -473,6 +553,7 @@ class BaseTool(ABC):
             encoding="utf-8",
             errors="replace",
             cwd=cwd,
+            env=env,
         )
         captured: list[str] = []
         assert proc.stdout is not None

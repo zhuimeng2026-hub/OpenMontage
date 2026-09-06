@@ -1,3 +1,4 @@
+import { SANS } from "../fonts";
 import {
   AbsoluteFill,
   interpolate,
@@ -42,7 +43,7 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
   segments,
   height = 32,
   borderRadius = 8,
-  fontFamily = "Inter, system-ui, sans-serif",
+  fontFamily = SANS,
   textColor = "#1F2937",
   labelFontSize = 36,
   percentageFontSize = 28,

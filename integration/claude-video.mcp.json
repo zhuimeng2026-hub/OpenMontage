@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "claude-video": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["/opt/claude-video/skills/watch/scripts/mcp_server.py"],
+      "env": {}
+    },
+    "openmontage": {
+      "type": "http",
+      "url": "http://127.0.0.1:8900/mcp",
+      "headers": {
+        "Authorization": "Bearer h6LQUTVPA5vBmqXijUydpockVrPx2ruUqPaVQRT6WJE"
+      }
+    },
+    "voicebox": {
+      "type": "http",
+      "url": "http://127.0.0.1:17493/mcp",
+      "headers": {
+        "X-Voicebox-Client-Id": "claude-code"
+      }
+    }
+  }
+}

@@ -1,0 +1,231 @@
+{
+  "_comment": "Shared contract fixtures for v2 RemixPackage. Three languages (Python/Go/TS) must produce identical accept/reject results. This file MUST be byte-identical across all three repos at the same SHA256.",
+  "_version": "1.1.0",
+  "_generated_at": "2026-09-05T00:00:00Z",
+  "_source_plan": "B:/docs/vclaw-om-remix-repair-plan-2026-09-05/01-contracts.md (C1-C9)",
+
+  "valid_v2_draft_three_scenes": {
+    "_desc": "C3 sample: 2/5/8 秒，s2/s3 同图重复 replace。draft 状态（review.status=draft），所有 pending 占位可接受。",
+    "expected": "ACCEPT_AS_DRAFT",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [
+        {"asset_id": "video-1", "file_key": "SERVER_RETURNED_VIDEO_KEY", "media_type": "video"},
+        {"asset_id": "image-1", "file_key": "SERVER_RETURNED_IMAGE_KEY", "media_type": "image"}
+      ],
+      "timeline": {
+        "fps": 30,
+        "duration_ms": 15000,
+        "width": 1080,
+        "height": 1920,
+        "scenes": [
+          {"scene_id": "s1", "mode": "keep", "asset_id": "video-1", "start_ms": 0, "end_ms": 2000, "source_start_ms": 0, "source_end_ms": 2000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}},
+          {"scene_id": "s2", "mode": "replace", "asset_id": "image-1", "start_ms": 2000, "end_ms": 7000, "source_start_ms": 2000, "source_end_ms": 7000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}},
+          {"scene_id": "s3", "mode": "replace", "asset_id": "image-1", "start_ms": 7000, "end_ms": 15000, "source_start_ms": 7000, "source_end_ms": 15000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}}
+        ]
+      },
+      "audio": {"mode": "source", "narration_asset_id": null, "volume": 1},
+      "subtitles": [{"id": "c1", "start_ms": 100, "end_ms": 1800, "text": "示例字幕"}],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "draft", "confirmed_scene_ids": [], "audio_confirmed": false}
+    }
+  },
+
+  "valid_v2_ready_three_scenes": {
+    "_desc": "Same three scenes but ready for submit (review confirmed, all assets present, audio_confirmed=true).",
+    "expected": "ACCEPT_AS_READY",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [
+        {"asset_id": "video-1", "file_key": "SERVER_RETURNED_VIDEO_KEY", "media_type": "video"},
+        {"asset_id": "image-1", "file_key": "SERVER_RETURNED_IMAGE_KEY", "media_type": "image"}
+      ],
+      "timeline": {
+        "fps": 30,
+        "duration_ms": 15000,
+        "width": 1080,
+        "height": 1920,
+        "scenes": [
+          {"scene_id": "s1", "mode": "keep", "asset_id": "video-1", "start_ms": 0, "end_ms": 2000, "source_start_ms": 0, "source_end_ms": 2000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}},
+          {"scene_id": "s2", "mode": "replace", "asset_id": "image-1", "start_ms": 2000, "end_ms": 7000, "source_start_ms": 2000, "source_end_ms": 7000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}},
+          {"scene_id": "s3", "mode": "replace", "asset_id": "image-1", "start_ms": 7000, "end_ms": 15000, "source_start_ms": 7000, "source_end_ms": 15000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}}
+        ]
+      },
+      "audio": {"mode": "source", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "confirmed", "confirmed_scene_ids": ["s1", "s2", "s3"], "audio_confirmed": true}
+    }
+  },
+
+  "valid_v1_legacy": {
+    "_desc": "v1 schema_version=1 still readable for legacy drafts.",
+    "expected": "ACCEPT_AS_V1_DRAFT",
+    "package": {"schema_version": 1, "project_id": "p-legacy"}
+  },
+
+  "reject_no_source": {
+    "_desc": "F02: 缺 source_asset_id 不能 submit（仅可 draft）。",
+    "expected": "REJECT_READY:ASSET_NOT_FOUND",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "assets": [{"asset_id": "image-1", "file_key": "K", "media_type": "image"}],
+      "timeline": {"fps": 30, "duration_ms": 2000, "width": 1080, "height": 1920, "scenes": [{"scene_id": "s1", "mode": "replace", "asset_id": "image-1", "start_ms": 0, "end_ms": 2000, "source_start_ms": 0, "source_end_ms": 2000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}}]},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "confirmed", "confirmed_scene_ids": ["s1"], "audio_confirmed": true}
+    }
+  },
+
+  "reject_negative_duration": {
+    "_desc": "C2: 负长 scene 直接拒绝。",
+    "expected": "REJECT:INVALID_TIMELINE",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [{"asset_id": "video-1", "file_key": "K", "media_type": "video"}],
+      "timeline": {"fps": 30, "duration_ms": -100, "width": 1080, "height": 1920, "scenes": []},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "draft", "confirmed_scene_ids": [], "audio_confirmed": false}
+    }
+  },
+
+  "reject_overlap_scenes": {
+    "_desc": "C2: 时间轴重叠。s1 end=5000, s2 start=4000 → overlap.",
+    "expected": "REJECT:INVALID_TIMELINE",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [{"asset_id": "video-1", "file_key": "K", "media_type": "video"}, {"asset_id": "image-1", "file_key": "K2", "media_type": "image"}],
+      "timeline": {"fps": 30, "duration_ms": 8000, "width": 1080, "height": 1920, "scenes": [
+        {"scene_id": "s1", "mode": "keep", "asset_id": "video-1", "start_ms": 0, "end_ms": 5000, "source_start_ms": 0, "source_end_ms": 5000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}},
+        {"scene_id": "s2", "mode": "replace", "asset_id": "image-1", "start_ms": 4000, "end_ms": 8000, "source_start_ms": 4000, "source_end_ms": 8000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}}
+      ]},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "draft", "confirmed_scene_ids": [], "audio_confirmed": false}
+    }
+  },
+
+  "reject_duplicate_scene_id": {
+    "_desc": "C2: 重复 scene_id 拒绝（重复 asset_id 允许）。",
+    "expected": "REJECT:INVALID_TIMELINE",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [{"asset_id": "video-1", "file_key": "K", "media_type": "video"}],
+      "timeline": {"fps": 30, "duration_ms": 4000, "width": 1080, "height": 1920, "scenes": [
+        {"scene_id": "s1", "mode": "keep", "asset_id": "video-1", "start_ms": 0, "end_ms": 2000, "source_start_ms": 0, "source_end_ms": 2000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}},
+        {"scene_id": "s1", "mode": "keep", "asset_id": "video-1", "start_ms": 2000, "end_ms": 4000, "source_start_ms": 2000, "source_end_ms": 4000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}}
+      ]},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "draft", "confirmed_scene_ids": [], "audio_confirmed": false}
+    }
+  },
+
+  "reject_missing_asset": {
+    "_desc": "C3: scene 引用未在 assets 中声明的 asset_id。",
+    "expected": "REJECT:ASSET_NOT_FOUND",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [{"asset_id": "video-1", "file_key": "K", "media_type": "video"}],
+      "timeline": {"fps": 30, "duration_ms": 2000, "width": 1080, "height": 1920, "scenes": [{"scene_id": "s1", "mode": "replace", "asset_id": "image-missing", "start_ms": 0, "end_ms": 2000, "source_start_ms": 0, "source_end_ms": 2000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}}]},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "confirmed", "confirmed_scene_ids": ["s1"], "audio_confirmed": true}
+    }
+  },
+
+  "reject_unknown_mode": {
+    "_desc": "scene.mode 不在 {keep, replace, generate} 之列。",
+    "expected": "REJECT:INVALID_TIMELINE",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [{"asset_id": "video-1", "file_key": "K", "media_type": "video"}],
+      "timeline": {"fps": 30, "duration_ms": 2000, "width": 1080, "height": 1920, "scenes": [{"scene_id": "s1", "mode": "shimmer", "asset_id": "video-1", "start_ms": 0, "end_ms": 2000, "source_start_ms": 0, "source_end_ms": 2000, "fit": "contain", "transition_in": {"type": "cut", "duration_ms": 0}}]},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "draft", "confirmed_scene_ids": [], "audio_confirmed": false}
+    }
+  },
+
+  "reject_unknown_transition": {
+    "_desc": "transition.type 不在 { cut, fade } 之列（首版限制）。",
+    "expected": "REJECT:UNSUPPORTED_TRANSITION",
+    "package": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [{"asset_id": "video-1", "file_key": "K", "media_type": "video"}],
+      "timeline": {"fps": 30, "duration_ms": 2000, "width": 1080, "height": 1920, "scenes": [{"scene_id": "s1", "mode": "keep", "asset_id": "video-1", "start_ms": 0, "end_ms": 2000, "source_start_ms": 0, "source_end_ms": 2000, "fit": "contain", "transition_in": {"type": "wipe", "duration_ms": 500}}]},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "draft", "confirmed_scene_ids": [], "audio_confirmed": false}
+    }
+  },
+
+  "reject_capacity_exceeded_201": {
+    "_desc": "C3: 首版限制 200 scenes；201 个应被 CAPACITY_EXCEEDED 拒绝，不切片。",
+    "expected": "REJECT:CAPACITY_EXCEEDED",
+    "_generator_hint_python": "list(_ for_1 range 201)",
+    "_package_template": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [{"asset_id": "video-1", "file_key": "K", "media_type": "video"}],
+      "timeline": {"fps": 30, "duration_ms": 603000, "width": 1080, "height": 1920, "scenes": "_SCENES_201_"},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "draft", "confirmed_scene_ids": [], "audio_confirmed": false}
+    }
+  },
+
+  "boundary_exactly_200_scenes": {
+    "_desc": "200 个 scene 边界：应被接受（draft 状态）。",
+    "expected": "ACCEPT_AS_DRAFT",
+    "_package_template": {
+      "schema_version": 2,
+      "project_id": "p-demo",
+      "processing_mode": "direct",
+      "source_asset_id": "video-1",
+      "assets": [{"asset_id": "video-1", "file_key": "K", "media_type": "video"}],
+      "timeline": {"fps": 30, "duration_ms": 600000, "width": 1080, "height": 1920, "scenes": "_SCENES_200_"},
+      "audio": {"mode": "mute", "narration_asset_id": null, "volume": 1},
+      "subtitles": [],
+      "render": {"runtime": "remotion", "renderer_family": "reference-remix", "publish": true},
+      "review": {"status": "draft", "confirmed_scene_ids": [], "audio_confirmed": false}
+    }
+  }
+}

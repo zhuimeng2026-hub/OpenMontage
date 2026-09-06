@@ -1,8 +1,10 @@
+import { SANS } from "./fonts";
 import React from "react";
 import {
   AbsoluteFill,
   Audio,
   CalculateMetadataFunction,
+  Img,
   OffthreadVideo,
   Sequence,
   interpolate,
@@ -12,24 +14,30 @@ import {
   useVideoConfig,
 } from "remotion";
 
+// Resolve asset path — pass through URLs/data URIs; everything else routes
+// through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
+// Simplified 2026-08-20: dropped the `file://` + absolute-path branches that
+// leaked through to headless Chrome as "Not allowed to load local resource".
+// Python _STAGEABLE_FIELDS + defensive guard now guarantee only relative
+// paths reach the JS layer.
 function resolveAsset(src: string): string {
-  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) {
+  if (
+    src.startsWith("http://") ||
+    src.startsWith("https://") ||
+    src.startsWith("data:")
+  ) {
     return src;
   }
-  const clean = src.replace(/^file:\/\/\/?/, "");
-  if (clean.startsWith("/") || /^[A-Za-z]:[/\\]/.test(clean)) {
-    return `file:///${clean.replace(/\\/g, "/")}`;
-  }
-  return staticFile(clean);
+  return staticFile(src.replace(/^file:\/\/\/?/, ""));
 }
-import { CinematicRendererProps, CinematicTone, CinematicVideoScene } from "./cinematic/types";
+import { CinematicRendererProps, CinematicScene, CinematicTone, CinematicVideoScene } from "./cinematic/types";
 import { CaptionOverlay } from "./components/CaptionOverlay";
 
 const FPS = 30;
 
 // Keep local rendering self-contained: remote Google Fonts are unavailable to
 // the sandboxed Chromium process, so use the platform's sans-serif stack.
-const fontFamily = "Arial, Helvetica, sans-serif";
+const fontFamily = SANS;
 
 const toneGradient = (tone: CinematicTone) => {
   switch (tone) {
@@ -118,6 +126,22 @@ const SceneVideo: React.FC<{ scene: CinematicVideoScene }> = ({ scene }) => {
       />
     </AbsoluteFill>
   );
+};
+
+const SceneImage: React.FC<{ scene: Extract<CinematicScene, { kind: "image" }> }> = ({ scene }) => {
+  const frame = useCurrentFrame();
+  const { durationInFrames } = useVideoConfig();
+  const fadeInFrames = scene.fadeInFrames ?? 10;
+  const fadeOutFrames = scene.fadeOutFrames ?? 10;
+  const fadeOutStart = Math.max(fadeInFrames, durationInFrames - fadeOutFrames);
+  const fadeIn = fadeInFrames === 0 ? 1 : interpolate(frame, [0, fadeInFrames], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const fadeOut = fadeOutFrames === 0 ? 1 : interpolate(frame, [fadeOutStart, durationInFrames], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const scale = interpolate(frame, [0, durationInFrames], [1.04, 1.01], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  return <AbsoluteFill style={{ backgroundColor: "#020407", opacity: Math.min(fadeIn, fadeOut) }}>
+    <Img src={resolveAsset(scene.src)} style={{ width: "100%", height: "100%", objectFit: "cover", transform: `scale(${scale})`, filter: scene.filter ?? "contrast(1.06) saturate(0.9) brightness(0.92)" }} />
+    <AbsoluteFill style={{ background: toneGradient(scene.tone ?? "cold"), mixBlendMode: "multiply" }} />
+    <AbsoluteFill style={{ background: "radial-gradient(circle at center, transparent 52%, rgba(0,0,0,0.52) 100%)" }} />
+  </AbsoluteFill>;
 };
 
 const SignalTexture: React.FC<{
@@ -503,6 +527,8 @@ export const CinematicRenderer: React.FC<CinematicRendererProps> = ({
         >
           {scene.kind === "video" ? (
             <SceneVideo scene={scene} />
+          ) : scene.kind === "image" ? (
+            <SceneImage scene={scene} />
           ) : (
             <TitleCard
               text={scene.text}

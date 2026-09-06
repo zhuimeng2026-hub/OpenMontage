@@ -3,13 +3,16 @@ package mcp
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
 
 // RenderJob is one entry in a user's render queue. It is recorded by the BFF
-// when a render is submitted and is scoped to the BFF session (ff_sid), so the
-// queue endpoint inherently returns only the caller's own jobs.
+// when a render is submitted and is scoped to the stable owner identity (the
+// WeChat account, or the device session when anonymous), so the queue endpoint
+// inherently returns only the caller's own jobs and the same account sees the
+// same queue across machines.
 type RenderJob struct {
 	JobID     string    `json:"job_id"`
 	Name      string    `json:"name"`
@@ -18,16 +21,21 @@ type RenderJob struct {
 	CreatedAt time.Time `json:"created_at"`
 	BatchID   string    `json:"batch_id,omitempty"`
 	ProjectID string    `json:"project_id,omitempty"`
+	ShareURL  string    `json:"share_url,omitempty"`
 }
 
-// SessionStore keeps the legacy user-scoped MCP Client for manual uploads and
-// one independent MCP Client per image batch. Batch clients are addressable by
-// both batch_id and project_id so every part of a batch uses one upstream MCP
-// session without changing the old user-level flow.
+// SessionStore keeps the per-owner MCP Client for manual uploads and one
+// independent MCP Client per image batch. The owner key is the stable identity
+// returned by handlers.renderQueueOwnerID — a WeChat account keeps one upstream
+// MCP session across all of its browser sessions and machines, so uploaded
+// assets and rendered videos live in the same upstream namespace everywhere the
+// account logs in (anonymous/dev flows fall back to the device session).
+// Batch clients are addressable by both batch_id and project_id so every part
+// of a batch uses one upstream MCP session without changing the old flow.
 //
-// For multi-instance deploys, swap the in-memory map for Redis keyed by the BFF
-// session id (the MCP SID would then need to be persisted alongside, or the
-// upstream must support session resumption).
+// For multi-instance deploys, swap the in-memory map for Redis keyed by the same
+// owner identity (the MCP SID is persisted alongside in mcp_user_sessions /
+// mcp_batch_sessions, or the upstream must support session resumption).
 type SessionStore struct {
 	mu         sync.RWMutex
 	clients    map[string]*Client
@@ -145,11 +153,31 @@ func (s *SessionStore) ListJobs(sessionID string) []*RenderJob {
 	return out
 }
 
+// OwnsJob reports whether a render job belongs to the BFF session. It is used
+// before proxying progress so a caller cannot subscribe to another session's
+// job by guessing its upstream id.
+func (s *SessionStore) OwnsJob(sessionID, jobID string) bool {
+	if sessionID == "" || jobID == "" {
+		return false
+	}
+	for _, job := range s.ListJobs(sessionID) {
+		if job != nil && job.JobID == jobID {
+			return true
+		}
+	}
+	return false
+}
+
 // UpdateJobStatus rewrites the status of a single job (used when the upstream
 // render reaches a terminal state).
 func (s *SessionStore) UpdateJobStatus(sessionID, jobID, status string) {
+	s.UpdateJobResult(sessionID, jobID, status, "")
+}
+
+// UpdateJobResult updates terminal state and its per-job share URL atomically.
+func (s *SessionStore) UpdateJobResult(sessionID, jobID, status, shareURL string) {
 	if s.jobStore != nil {
-		if err := s.jobStore.UpdateStatus(sessionID, jobID, status); err == nil {
+		if err := s.jobStore.UpdateResult(sessionID, jobID, status, shareURL); err == nil {
 			return
 		}
 	}
@@ -158,6 +186,9 @@ func (s *SessionStore) UpdateJobStatus(sessionID, jobID, status string) {
 	for _, j := range s.renderJobs[sessionID] {
 		if j.JobID == jobID {
 			j.Status = status
+			if shareURL != "" {
+				j.ShareURL = shareURL
+			}
 			return
 		}
 	}
@@ -235,8 +266,20 @@ func (s *SessionStore) CreateBatch(sessionID, batchID, projectID string) error {
 	s.mu.RUnlock()
 
 	c := NewClient(s.baseURL, s.token)
-	if err := c.Initialize(); err != nil {
-		return fmt.Errorf("mcp initialize image batch %q: %w", batchID, err)
+	// On restart or another BFF instance, resume the persisted upstream session
+	// instead of initializing a new one and losing the uploaded assets.
+	if persisted, err := s.findPersistedBatchSession(sessionID, batchID, projectID); err != nil {
+		return fmt.Errorf("lookup persisted mcp batch %q: %w", batchID, err)
+	} else if persisted != nil && persisted.UpstreamSessionID != "" {
+		c.SetSessionID(persisted.UpstreamSessionID)
+		log.Printf("[bff-session] batch_resumed scope_hash=%s batch_id=%s upstream_sid_hash=%s", shortHash(sessionID), batchID, shortHash(persisted.UpstreamSessionID))
+	} else {
+		t0 := time.Now()
+		if err := c.Initialize(); err != nil {
+			log.Printf("[bff-session] batch_init_failed scope_hash=%s batch_id=%s elapsed_ms=%d err=%v", shortHash(sessionID), batchID, time.Since(t0).Milliseconds(), err)
+			return fmt.Errorf("mcp initialize image batch %q: %w", batchID, err)
+		}
+		log.Printf("[bff-session] batch_cold_init scope_hash=%s batch_id=%s upstream_sid_hash=%s elapsed_ms=%d", shortHash(sessionID), batchID, shortHash(c.SessionID()), time.Since(t0).Milliseconds())
 	}
 	entry := &batchClient{client: c, batchID: batchID, projectID: projectID}
 	s.mu.Lock()
@@ -275,6 +318,51 @@ func (s *SessionStore) DropBatch(sessionID, batchID, projectID string) {
 	_ = s.deletePersistedBatchSession(sessionID, batchID, projectID)
 }
 
+// persistUserSession / findPersistedUserSession / deletePersistedUserSession
+// keep a durable record of each owner identity's upstream Mcp-Session-Id so
+// another BFF instance (or a restarted one) — and another machine logged in as
+// the same account — can resume the SAME upstream session.
+
+func (s *SessionStore) persistUserSession(sessionID, upstreamID string) error {
+	if s.db == nil {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(`INSERT INTO mcp_user_sessions (session_id, upstream_session_id, created_at, updated_at)
+VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET upstream_session_id=excluded.upstream_session_id, updated_at=excluded.updated_at`,
+		sessionID, upstreamID, now, now)
+	return err
+}
+
+func (s *SessionStore) deletePersistedUserSession(sessionID string) error {
+	if s.db == nil {
+		return nil
+	}
+	_, err := s.db.Exec(`DELETE FROM mcp_user_sessions WHERE session_id=?`, sessionID)
+	return err
+}
+
+func (s *SessionStore) findPersistedUserSession(sessionID string) (string, error) {
+	if s.db == nil {
+		return "", nil
+	}
+	row := s.db.QueryRow(`SELECT upstream_session_id FROM mcp_user_sessions WHERE session_id=? LIMIT 1`, sessionID)
+	var up string
+	if err := row.Scan(&up); err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return up, nil
+}
+
+// getOrCreate returns the long-lived MCP client for an owner identity. On a
+// cold start (no in-memory client) it first tries to RESUME a previously
+// persisted upstream session id, so the same owner identity keeps one upstream
+// Mcp-Session-Id across BFF instances/restarts (and therefore across the
+// account's machines). If none is persisted, it opens a fresh upstream session
+// via initialize and persists the new id.
 func (s *SessionStore) getOrCreate(sessionID string) (*Client, error) {
 	s.mu.RLock()
 	c, ok := s.clients[sessionID]
@@ -287,11 +375,26 @@ func (s *SessionStore) getOrCreate(sessionID string) (*Client, error) {
 	if c, ok := s.clients[sessionID]; ok {
 		return c, nil
 	}
+	// Cold start: resume the durable upstream session if we have one. The
+	// upstream accepts a valid existing Mcp-Session-Id on a fresh connection,
+	// so we skip initialize and just pin the id.
+	if up, err := s.findPersistedUserSession(sessionID); err == nil && up != "" {
+		t0 := time.Now()
+		c := NewClient(s.baseURL, s.token)
+		c.SetSessionID(up)
+		s.clients[sessionID] = c
+		log.Printf("[bff-session] resumed scope_hash=%s upstream_sid_hash=%s elapsed_ms=%d", shortHash(sessionID), shortHash(up), time.Since(t0).Milliseconds())
+		return c, nil
+	}
 	c = NewClient(s.baseURL, s.token)
+	t0 := time.Now()
 	if err := c.Initialize(); err != nil {
+		log.Printf("[bff-session] cold_init_failed scope_hash=%s elapsed_ms=%d err=%v", shortHash(sessionID), time.Since(t0).Milliseconds(), err)
 		return nil, fmt.Errorf("mcp initialize: %w", err)
 	}
 	s.clients[sessionID] = c
+	_ = s.persistUserSession(sessionID, c.SessionID())
+	log.Printf("[bff-session] cold_init scope_hash=%s upstream_sid_hash=%s elapsed_ms=%d", shortHash(sessionID), shortHash(c.SessionID()), time.Since(t0).Milliseconds())
 	return c, nil
 }
 
@@ -314,9 +417,12 @@ func (s *SessionStore) recreateBatch(sessionID, batchID, projectID string, expec
 	s.removeBatchLocked(sessionID, expected)
 
 	c := NewClient(s.baseURL, s.token)
+	t0 := time.Now()
 	if err := c.Initialize(); err != nil {
+		log.Printf("[bff-session] batch_reinit_failed scope_hash=%s batch_id=%s elapsed_ms=%d err=%v", shortHash(sessionID), batchID, time.Since(t0).Milliseconds(), err)
 		return nil, fmt.Errorf("mcp reinitialize image batch %q: %w", batchID, err)
 	}
+	log.Printf("[bff-session] batch_reinit scope_hash=%s batch_id=%s upstream_sid_hash=%s elapsed_ms=%d", shortHash(sessionID), batchID, shortHash(c.SessionID()), time.Since(t0).Milliseconds())
 	entry := &batchClient{client: c, batchID: batchID, projectID: projectID}
 	s.batchIDs[batchScope(sessionID, batchID)] = entry
 	s.projects[batchScope(sessionID, projectID)] = entry
@@ -332,6 +438,7 @@ func (s *SessionStore) recreateBatch(sessionID, batchID, projectID string, expec
 func (s *SessionStore) CallBatch(sessionID, batchID, projectID, tool string, args map[string]interface{}) (map[string]interface{}, error) {
 	entry, err := s.findBatch(sessionID, batchID, projectID)
 	if err != nil {
+		log.Printf("[mcp-route] batch_lookup_failed tool=%s batch_id=%s project_id=%s sid_hash=%s err=%v", tool, batchID, projectID, shortHash(sessionID), err)
 		return nil, err
 	}
 	if entry == nil {
@@ -349,12 +456,24 @@ func (s *SessionStore) CallBatch(sessionID, batchID, projectID, tool string, arg
 			}
 		}
 		if entry == nil {
+			log.Printf("[mcp-route] batch_not_found tool=%s batch_id=%s project_id=%s sid_hash=%s", tool, batchID, projectID, shortHash(sessionID))
 			return nil, fmt.Errorf("mcp batch session not found for batch %q", batchID)
 		}
 	}
+	log.Printf("[mcp-route] batch_call tool=%s batch_id=%s project_id=%s sid_hash=%s upstream_sid_hash=%s", tool, batchID, projectID, shortHash(sessionID), shortHash(entry.client.SessionID()))
 	res, err := entry.client.CallTool(tool, args)
 	_ = s.persistBatchSession(sessionID, batchID, projectID, entry.client.SessionID())
 	if err != nil {
+		if IsSessionTransportError(err) {
+			entry, recreateErr := s.recreateBatch(sessionID, batchID, projectID, entry)
+			if recreateErr != nil {
+				return nil, recreateErr
+			}
+			res, err = entry.client.CallTool(tool, args)
+			_ = s.persistBatchSession(sessionID, batchID, projectID, entry.client.SessionID())
+			return res, err
+		}
+		log.Printf("[mcp-route] batch_call_failed tool=%s batch_id=%s project_id=%s sid_hash=%s err=%v", tool, batchID, projectID, shortHash(sessionID), err)
 		return nil, err
 	}
 	if !IsSessionError(res) {
@@ -404,15 +523,85 @@ func (s *SessionStore) Call(sessionID, tool string, args map[string]interface{})
 	}
 	res, err := c.CallTool(tool, args)
 	if err != nil {
+		if IsSessionTransportError(err) {
+			s.drop(sessionID)
+			_ = s.deletePersistedUserSession(sessionID)
+			c, err = s.getOrCreate(sessionID)
+			if err != nil {
+				return nil, err
+			}
+			res, err = c.CallTool(tool, args)
+			if err == nil {
+				_ = s.persistUserSession(sessionID, c.SessionID())
+			}
+			return res, err
+		}
 		return nil, err
 	}
-	if IsSessionError(res) {
-		s.drop(sessionID)
-		c, err = s.getOrCreate(sessionID)
-		if err != nil {
-			return nil, err
-		}
-		return c.CallTool(tool, args)
+	// Keep the durable upstream session id current (the upstream rotates it on
+	// every response, so re-persist after each successful call).
+	if !IsSessionError(res) {
+		_ = s.persistUserSession(sessionID, c.SessionID())
+		return res, nil
 	}
-	return res, nil
+	// Upstream rejected the session: drop the in-memory client and the durable
+	// record, then open a brand-new upstream session and retry once.
+	s.drop(sessionID)
+	_ = s.deletePersistedUserSession(sessionID)
+	c, err = s.getOrCreate(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return c.CallTool(tool, args)
+}
+
+// RawCall forwards a raw JSON-RPC envelope to the upstream MCP through the
+// per-owner Client. The rotating Mcp-Session-Id is captured from the response
+// so subsequent calls land on the same upstream session. Used by /api/mcp-raw
+// for external CLI/agent callers that want full MCP protocol access.
+//
+// The caller passes the JSON-RPC method name for logging. On a session-loss
+// transport error, the store transparently drops the Client and retries once
+// with a fresh upstream session. The returned bytes are the exact upstream
+// response body (SSE framing preserved).
+func (s *SessionStore) RawCall(sessionID, method string, body []byte) (status int, contentType string, rawResponse []byte, err error) {
+	c, err := s.getOrCreate(sessionID)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	status, ct, raw, err := c.RawSend(method, body)
+	if err != nil {
+		// Transport-layer session loss -> drop, reinit, retry once.
+		if IsSessionTransportError(err) {
+			s.drop(sessionID)
+			_ = s.deletePersistedUserSession(sessionID)
+			c, err = s.getOrCreate(sessionID)
+			if err != nil {
+				return 0, "", nil, err
+			}
+			return c.RawSend(method, body)
+		}
+		return 0, "", nil, err
+	}
+	// Persist the (possibly new) upstream session id so a BFF restart can
+	// resume the same upstream session for this owner.
+	if status < 500 {
+		_ = s.persistUserSession(sessionID, c.SessionID())
+	}
+	return status, ct, raw, nil
+}
+
+// SessionIDForOwner returns the current upstream MCP session id that an owner
+// is pinned to. Returns "" when the owner has never called (no client pinned
+// yet, or the upstream hasn't sent a Mcp-Session-Id header). Used by
+// /api/mcp-raw to forward the rotating session id back to the caller so the
+// same client can send it back on subsequent calls.
+func (s *SessionStore) SessionIDForOwner(sessionID string) string {
+	s.mu.RLock()
+	c, ok := s.clients[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return ""
+	}
+	return c.SessionID()
 }

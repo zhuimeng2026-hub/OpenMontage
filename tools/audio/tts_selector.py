@@ -1,8 +1,20 @@
 """Capability-level text-to-speech selector that chooses among provider tools.
 
-Provider discovery is automatic — any BaseTool with capability="tts"
-is picked up from the registry.  Adding a new TTS provider requires only creating
-the tool file in tools/audio/; no changes to this selector are needed.
+Provider discovery is automatic -- any BaseTool with capability="tts"
+is picked up from the registry. Adding a cloud provider (ElevenLabs,
+OpenAI, DashScope, Doubao, Google, Edge) usually needs no changes here.
+
+The Voicebox local TTS + voice-cloning provider IS auto-discovered, but it
+exposes fields that don't exist on the cloud providers (profile_id, engine
+override, model_size, instruct, personality, seed) plus its own operations
+(clone_voice, list_cloned_voices). Those are passed through to whichever
+provider is selected; they're declared here so MCP / agent callers can
+discover them in the schema rather than reading every provider's docs.
+
+Selection is driven by lib.scoring.rank_providers: voicebox naturally wins
+when intent mentions cloning/privacy/local, and on cost (free) and latency
+(LOCAL runtime). Callers can force a specific provider via
+preferred_provider="voicebox" / "elevenlabs" / etc.
 """
 
 from __future__ import annotations
@@ -14,13 +26,13 @@ from tools.base_tool import BaseTool, ToolResult, ToolRuntime, ToolStability, To
 
 class TTSSelector(BaseTool):
     name = "tts_selector"
-    version = "0.2.0"
+    version = "0.3.0"
     tier = ToolTier.VOICE
     capability = "tts"
     provider = "selector"
     stability = ToolStability.BETA
     runtime = ToolRuntime.HYBRID
-    agent_skills = ["text-to-speech", "elevenlabs", "openai-docs"]
+    agent_skills = ["text-to-speech", "elevenlabs", "openai-docs", "voicebox"]
 
     capabilities = [
         "text_to_speech",
@@ -118,15 +130,73 @@ class TTSSelector(BaseTool):
                 "description": "Provider name or 'auto'. Valid values are discovered at runtime from the registry.",
                 "default": "auto",
             },
+            # ---- Voicebox passthrough fields ----
+            # Voicebox uses profile_id (its "voice_id" equivalent) and exposes
+            # engine / model_size / instruct / personality / seed. Declared
+            # here so MCP / agent callers see them in the schema; each
+            # provider that doesn't recognize a field will simply ignore it.
+            "profile_id": {
+                "type": "string",
+                "description": (
+                    "Voicebox voice profile id (operation=text_to_speech with "
+                    "the voicebox provider). Returned by clone_voice or "
+                    "list_cloned_voices. Other providers ignore this field."
+                ),
+            },
+            "engine": {
+                "type": "string",
+                "enum": [
+                    "qwen", "qwen_custom_voice", "luxtts",
+                    "chatterbox", "chatterbox_turbo", "tada", "kokoro",
+                ],
+                "description": (
+                    "Voicebox TTS engine override. Other providers ignore."
+                ),
+            },
+            "model_size": {
+                "type": "string",
+                "description": (
+                    "Voicebox engine-specific model size (e.g. Qwen3-TTS '0.6B' "
+                    "or '1.7B'). Other providers ignore."
+                ),
+            },
+            "instruct": {
+                "type": "string",
+                "description": (
+                    "Voicebox natural-language delivery instruction (Qwen3-TTS / "
+                    "Qwen CustomVoice only, e.g. 'speak slowly with a smile'). "
+                    "Other providers ignore. Distinct from ElevenLabs-shaped "
+                    "`stability`/`style`/`similarity_boost`."
+                ),
+            },
+            "personality": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Voicebox only: when true AND the profile has a personality "
+                    "prompt, voicebox rewrites the text in-character via its "
+                    "bundled local LLM before TTS."
+                ),
+            },
+            "seed": {
+                "type": "integer",
+                "description": "Voicebox optional seed for reproducibility.",
+            },
             "allowed_providers": {
                 "type": "array",
                 "items": {"type": "string"},
             },
             "operation": {
                 "type": "string",
-                "enum": ["generate", "rank"],
+                "enum": ["generate", "rank", "clone_voice", "list_cloned_voices"],
                 "default": "generate",
-                "description": "Operation mode. 'rank' returns scored provider rankings without generating.",
+                "description": (
+                    "Operation mode. 'generate' (default) synthesizes speech. "
+                    "'rank' returns scored provider rankings without generating. "
+                    "'clone_voice' and 'list_cloned_voices' are voicebox-specific "
+                    "operations and are routed only when voicebox is selected; "
+                    "other providers will return an unknown-operation error."
+                ),
             },
             "output_path": {"type": "string"},
         },
@@ -183,11 +253,71 @@ class TTSSelector(BaseTool):
                 },
             )
 
-        # Normal generation — use scored selection
-        tool, score = self._select_best_tool(inputs, candidates, task_context)
-        if tool is None:
-            return ToolResult(success=False, error="No TTS provider available.")
+        # Normal generation — use scored selection with automatic fallback.
+        # Voicebox is ranked first when available; if it fails (e.g. HF connectivity
+        # edge-case despite cached weights), paid cloud providers are tried in order
+        # until one succeeds — guaranteeing business continuity.
+        rankings = rank_providers(candidates, task_context)
 
+        preferred = inputs.get("preferred_provider", "auto")
+        if preferred != "auto":
+            # Explicit provider requested — try only that one (no fallback loop).
+            for score_item in rankings:
+                if score_item.provider == preferred:
+                    tool = next((t for t in candidates if t.provider == preferred and t.get_status().value == "available"), None)
+                    if tool:
+                        result = self._execute_with_annotations(tool, score_item, inputs, candidates)
+                        return result
+            return ToolResult(success=False, error=f"Requested provider '{preferred}' is not available.")
+
+        # Auto mode: try providers in score order until one succeeds.
+        errors: list[dict[str, str]] = []
+        for score_item in rankings:
+            tool = next(
+                (t for t in candidates
+                 if t.provider == score_item.provider and t.get_status().value == "available"),
+                None
+            )
+            if tool is None:
+                continue
+
+            result = tool.execute(inputs)
+            if result.success:
+                result.data.setdefault("selected_tool", tool.name)
+                result.data["selected_provider"] = tool.provider
+                result.data["selection_reason"] = score_item.explain()
+                result.data["provider_score"] = score_item.to_dict()
+                result.data.update(self._tool_context_payload(tool))
+                result.data["alternatives_considered"] = [
+                    t.name for t in candidates
+                    if t.name != tool.name and t.get_status().value == "available"
+                ]
+                if errors:
+                    result.data["fallback_history"] = errors
+                return result
+
+            errors.append({
+                "provider": tool.provider,
+                "tool": tool.name,
+                "error": result.error or "unknown",
+            })
+
+        # All providers failed.
+        err_detail = "; ".join(f"{e['provider']}:{e['error']}" for e in errors)
+        return ToolResult(
+            success=False,
+            error=f"All TTS providers failed. Errors: {err_detail}",
+            data={"fallback_history": errors},
+        )
+
+    def _execute_with_annotations(
+        self,
+        tool,
+        score,
+        inputs: dict[str, Any],
+        candidates: list,
+    ) -> ToolResult:
+        """Execute a single tool and annotate its result."""
         result = tool.execute(inputs)
         if result.success:
             result.data.setdefault("selected_tool", tool.name)
