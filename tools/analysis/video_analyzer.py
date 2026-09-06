@@ -914,34 +914,76 @@ class VideoAnalyzer(BaseTool):
     def _compute_keyframe_timestamps(
         self, scenes: list[dict], max_frames: int, depth: str
     ) -> list[float]:
-        """Compute optimal keyframe timestamps from scene boundaries."""
-        timestamps = []
+        """Compute optimal keyframe timestamps from scene boundaries.
+
+        Coverage-first: every scene gets one keyframe before any scene gets a
+        second. Intra-scene samples (midpoint, plus 25%/75% for deep analysis)
+        are only added if the budget still allows.
+
+        The previous implementation built one flat list of every candidate
+        timestamp and uniformly subsampled it. That had two failure modes:
+        a scene could lose both its start frame and its midpoint, leaving it
+        with no keyframe at all (so the agent could never fill its
+        ``description``), and ``int(i * len / max)`` can never reach the last
+        element, so the tail of the video was always dropped.
+        """
+        guaranteed: list[float] = []
+        extras: list[float] = []
 
         for scene in scenes:
             start = scene.get("start_seconds", 0)
             end = scene.get("end_seconds", 0)
             duration = end - start
 
-            # First frame of each scene
-            timestamps.append(start + 0.1)
+            # Coverage floor — one frame per scene, no matter what.
+            guaranteed.append(start + 0.1)
 
-            # Midpoint for scenes > 3 seconds
+            # Midpoint for scenes > 3 seconds (only if budget allows)
             if duration > 3.0:
-                timestamps.append(start + duration / 2)
+                extras.append(start + duration / 2)
 
             # For deep analysis, add more intra-scene samples
             if depth == "deep" and duration > 6.0:
-                timestamps.append(start + duration * 0.25)
-                timestamps.append(start + duration * 0.75)
+                extras.append(start + duration * 0.25)
+                extras.append(start + duration * 0.75)
 
-        # Deduplicate, sort, and limit
-        timestamps = sorted(set(round(t, 3) for t in timestamps))
-        if len(timestamps) > max_frames:
-            # Uniform subsample to max_frames
-            step = len(timestamps) / max_frames
-            timestamps = [timestamps[int(i * step)] for i in range(max_frames)]
+        guaranteed = sorted(set(round(t, 3) for t in guaranteed))
+        extras = sorted(set(round(t, 3) for t in extras))
 
-        return timestamps
+        if len(guaranteed) >= max_frames:
+            # More scenes than budget. Spread across the whole timeline
+            # instead of truncating, which would drop the tail entirely.
+            return self._pick_evenly(guaranteed, max_frames)
+
+        budget = max_frames - len(guaranteed)
+        if budget > 0 and extras:
+            guaranteed.extend(self._pick_evenly(extras, budget))
+
+        return sorted(set(guaranteed))
+
+    @staticmethod
+    def _pick_evenly(values: list[float], count: int) -> list[float]:
+        """Pick ``count`` values spread across ``values``, keeping both ends.
+
+        The naive ``[values[int(i * len / count)] for i in range(count)]``
+        never reaches the final element: for len=40, count=20 the largest
+        index it produces is 38. Using ``round(i * (len - 1) / (count - 1))``
+        keeps both the first and the last value reachable.
+        """
+        if count <= 0 or not values:
+            return []
+        if count >= len(values):
+            return list(values)
+        if count == 1:
+            return [values[len(values) // 2]]
+
+        last = len(values) - 1
+        picked: list[float] = []
+        for i in range(count):
+            value = values[round(i * last / (count - 1))]
+            if value not in picked:
+                picked.append(value)
+        return picked
 
     def _timestamp_to_scene(self, ts: float, scenes: list[dict]) -> int:
         """Map a timestamp to its scene index."""
