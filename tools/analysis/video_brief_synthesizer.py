@@ -69,6 +69,54 @@ SYNTHESIS_FIELDS = {
 }
 
 
+def _failure_result(
+    reason: str,
+    *,
+    elapsed: float,
+    model: str = "",
+    frames_used: int = 0,
+    raw_text_preview: str = "",
+    brief_path: str = "",
+    extra: dict[str, Any] | None = None,
+) -> ToolResult:
+    """Build a uniform ``success=True, synthesis.status='failed'`` result.
+
+    Synthesizer no longer hard-fails: env-missing, VLM HTTP error, VLM
+    timeout, and unparseable response all share the same shape so callers
+    can branch on ``synthesis.status`` rather than catching exceptions or
+    checking ``success``. The ``reason`` is surfaced in two places:
+
+    - ``synthesis.error`` for structured callers (scripts, boards)
+    - ``error`` (top-level ToolResult) for backward compatibility with
+      existing ``if not res.success: raise`` call sites — the tool still
+      returns success=True, so those branches will simply not fire.
+
+    The optional ``extra`` dict is merged into ``synthesis`` for fields that
+    are case-specific (e.g. ``http_status`` on a 4xx).
+    """
+    synthesis: dict[str, Any] = {
+        "status": "failed",
+        "error": reason,
+        "elapsed_seconds": round(elapsed, 2),
+        "model": model or None,
+        "frames_used": frames_used,
+    }
+    if raw_text_preview:
+        synthesis["raw_text_preview"] = raw_text_preview
+    if extra:
+        synthesis.update(extra)
+    return ToolResult(
+        success=True,
+        data={
+            "synthesis": synthesis,
+            "brief_path": brief_path,
+            "output_path": None,
+            "fields_filled": [],
+        },
+        duration_seconds=round(elapsed, 2),
+    )
+
+
 class VideoBriefSynthesizer(BaseTool):
     name = "video_brief_synthesizer"
     version = "0.1.0"
@@ -88,6 +136,13 @@ class VideoBriefSynthesizer(BaseTool):
         "the project's aikey4k proxy and any direct Anthropic API key."
     )
     agent_skills = ["video-understand"]
+
+    # Canonical artifact produced by this tool — the synthesizer merges VLM
+    # fills into the same video_analysis_brief schema. Same contract as
+    # video_analyzer; the board renders one consistent schema-validation
+    # column for both producers.
+    output_artifact_name = "video_analysis_brief"
+    fail_on_schema_drift = False
 
     best_for = [
         "filling the agent-fillable vision fields in a video_analysis_brief.json",
@@ -458,16 +513,13 @@ class VideoBriefSynthesizer(BaseTool):
         model = inputs.get("model") or os.environ.get("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5")
 
         if not endpoint or not api_key:
-            return ToolResult(
-                success=True,
-                data={
-                    "synthesis": {"status": "skipped",
-                                  "skip_reason": "ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN not set"},
-                    "brief_path": str(brief_path),
-                    "output_path": None,
-                    "fields_filled": [],
-                },
-                duration_seconds=0.0,
+            # Soft skip — env not configured. Same shape as the failure
+            # paths below so callers branch on synthesis.status uniformly.
+            return _failure_result(
+                "ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN not set",
+                elapsed=0.0,
+                brief_path=str(brief_path),
+                extra={"status": "skipped", "skip_reason": "ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN not set"},
             )
 
         # Frames + transcript
@@ -485,32 +537,34 @@ class VideoBriefSynthesizer(BaseTool):
                 system, messages,
             )
         except urllib.error.HTTPError as e:
-            return ToolResult(
-                success=False,
-                error=f"VLM HTTP {e.code}: {e.read().decode(errors='replace')[:300]}",
-                data={"synthesis": {"status": "failed", "elapsed_seconds": round(time.time() - start, 2)}},
+            body = e.read().decode(errors="replace")[:300]
+            return _failure_result(
+                f"VLM HTTP {e.code}: {body}",
+                elapsed=time.time() - start,
+                model=model,
+                frames_used=len(frames),
+                brief_path=str(brief_path),
+                extra={"http_status": e.code},
             )
         except Exception as e:
-            return ToolResult(
-                success=False,
-                error=f"VLM call failed: {e}",
-                data={"synthesis": {"status": "failed", "elapsed_seconds": round(time.time() - start, 2)}},
+            return _failure_result(
+                f"VLM call failed: {e}",
+                elapsed=time.time() - start,
+                model=model,
+                frames_used=len(frames),
+                brief_path=str(brief_path),
             )
 
         parsed = self._extract_json(text)
         if not parsed:
-            return ToolResult(
-                success=False,
-                error="VLM returned no parseable JSON",
-                data={
-                    "synthesis": {
-                        "status": "failed",
-                        "model": model,
-                        "frames_used": len(frames),
-                        "elapsed_seconds": round(time.time() - start, 2),
-                        "raw_text_preview": text[:500],
-                    }
-                },
+            return _failure_result(
+                "VLM returned no parseable JSON",
+                elapsed=time.time() - start,
+                model=model,
+                frames_used=len(frames),
+                raw_text_preview=text[:500],
+                brief_path=str(brief_path),
+                extra={"parse_failure": True},
             )
 
         # Merge into brief
@@ -575,7 +629,7 @@ class VideoBriefSynthesizer(BaseTool):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(brief, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        return ToolResult(
+        result = ToolResult(
             success=True,
             data={
                 "synthesis": {
@@ -592,3 +646,14 @@ class VideoBriefSynthesizer(BaseTool):
             artifacts=[str(output_path)],
             duration_seconds=round(time.time() - start, 2),
         )
+
+        # Validate the synthesized brief against the canonical schema. We
+        # validate the merged brief (the file on disk), not the response
+        # wrapper — the wrapper carries synthesis status, not the artifact.
+        ok, err = self.validate_output_artifact(brief)
+        result.data["_schema_validation"] = {
+            "artifact_name": self.output_artifact_name,
+            "valid": ok,
+            "error": err or None,
+        }
+        return result

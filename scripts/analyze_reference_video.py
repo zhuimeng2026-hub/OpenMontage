@@ -5,16 +5,27 @@ Pipeline (per CLAUDE.md §"Reference Video Entry Point"):
 
   URL | <local.mp4>
         │
-        ▼  downloader (only if URL — falls back to direct yt-dlp for sources
-        │  whose format IDs are pre-muxed mp4, e.g. Weibo/Douyin/Xiaohongshu;
-        │  video_downloader silently degrades to a JPG cover in that case
-        │  — see docs/bugs/video-analyzer-keyframe-silent-failure-2026-09-05-fix.md)
-        ▼  transcriber (Whisper faster-whisper, language=zh by default)
-        ▼  video-understand (scene frames + 16 kHz mono audio)
-        ▼  video_analyzer (structural skeleton — scenes, pacing, motion,
-        │                 audio_energy, no LLM fill)
-        ▼  video_brief_synthesizer (VLM fills content/style/replication fields)
-        ▼  research_brief.json  (canonical artifact for downstream idea-director)
+        ▼  video_downloader (only if URL — falls back to direct yt-dlp for
+        │  sources whose format IDs are pre-muxed mp4, e.g. Weibo/Douyin/
+        │  Xiaohongshu; video_downloader silently degrades to a JPG cover
+        │  in that case — see docs/bugs/video-analyzer-keyframe-silent-failure-
+        │  2026-09-05-fix.md and the Weibo yt-dlp format-selector memory)
+        ▼  ffmpeg scene-detect + 16 kHz mono audio extraction
+        │  (frames throttled to --frames; ffmpeg `select='gt(scene,0.3)'`
+        │  for scene-change sampling)
+        ▼  transcriber (faster-whisper; --language default = zh; caches
+        │  <stem>_transcript.json so video_analyzer can reuse via
+        │  _load_existing_transcript)
+        ▼  video_analyzer (structural skeleton — scenes, motion_type via
+        │                 Farneback optical flow, pacing, audio_energy;
+        │                 no LLM fill — leaves agent-only fields blank)
+        ▼  video_brief_synthesizer (Anthropic-compatible VLM fills
+        │                         content_analysis / style_profile /
+        │                         replication_guidance; falls through to
+        │                         research_brief.json with status=skipped
+        │                         if env not set — see 2026-09-05 fix below)
+        ▼  research_brief.json (canonical artifact for downstream
+                                 video-template-remix idea-director)
 
 Usage:
 
@@ -31,8 +42,20 @@ Outputs land at:
     projects/users/<userid>/<project-id>/analysis_<ts>/research_brief.json
 
 Set OPENMONTAGE_* env vars before invoking. ANTHROPIC_BASE_URL +
-ANTHROPIC_AUTH_TOKEN must be present for the synthesizer step (the rest of
-the pipeline works without them).
+ANTHROPIC_AUTH_TOKEN must be present for the synthesizer step (the rest
+of the pipeline works without them). If missing, the loop still closes
+in degraded mode — see "Partial loop" branch in main() — and the
+synthesizer can be re-run later by invoking video_brief_synthesizer
+directly with the cached video_analysis_brief.json.
+
+Note on video_understand.py: this script does NOT route through
+tools/analysis/video_understand.py. That tool uses local CLIP/BLIP-2/
+LLaVA models (different runtime, different output contract) and is
+redundant here — video_brief_synthesizer already performs VLM-based
+grounded analysis via the Anthropic-compatible endpoint and writes to
+the canonical video_analysis_brief schema. If you ever need a fully
+local / offline path, route through video_understand explicitly; do
+not silently add it to this script.
 """
 
 from __future__ import annotations
@@ -202,10 +225,12 @@ def _synthesize(brief_path: Path, frames_dir: Path, transcript_path: Path,
         "max_frames": max_frames,
         "max_tokens": max_tokens,
     })
-    if not res.success:
-        raise RuntimeError(f"video_brief_synthesizer failed: {res.error}")
-    if (res.data or {}).get("synthesis", {}).get("status") != "ok":
-        _log(f"synthesizer status={res.data.get('synthesis', {}).get('status')} reason={res.data.get('synthesis', {}).get('skip_reason')}")
+    # Synthesizer is now uniformly success=True with synthesis.status ∈
+    # {ok, skipped, failed} — branch on the status field, not success.
+    synth = (res.data or {}).get("synthesis") or {}
+    status = synth.get("status")
+    if status != "ok":
+        _log(f"synthesizer status={status} reason={synth.get('error') or synth.get('skip_reason')}")
         return None  # type: ignore
     return Path(res.data["output_path"])
 
