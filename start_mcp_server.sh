@@ -54,6 +54,15 @@ if [ -n "$CHROME" ] && [ -x "$CHROME" ]; then
   export REMOTION_CHROME_EXECUTABLE="$CHROME"
 fi
 
+# 5) HF 出口代理（2026-09-07 加入）：video_understand 等工具首次加载 blip2/
+#    llava 等 HF 模型时需访问 huggingface.co；本机直连被防火墙阻断。
+#    与 voicebox / 部署拓扑一致：进程级 export 而非依赖 shell 继承。
+#    故意放在 exec 之前、不影响 npm ci——确保不影响 Remotion 安装步骤。
+if [ -z "${HTTPS_PROXY:-}" ] && [ -z "${HTTP_PROXY:-}" ]; then
+  export HTTPS_PROXY="http://127.0.0.1:7890"
+  export HTTP_PROXY="$HTTPS_PROXY"
+fi
+
 # 6) 启动服务（python3 优先，退回 python；入口可命令行覆盖）
 PYBIN="$(command -v python3 || command -v python)"
 exec "$PYBIN" "$ROOT/mcp_server.py" "$@"
