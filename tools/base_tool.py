@@ -339,6 +339,21 @@ class BaseTool(ABC):
     not_good_for: list[str] = []
     provider_matrix: dict[str, Any] = {}
 
+    # --- Canonical artifact schema binding ---
+    # When set, points to an entry in schemas/artifacts/ARTIFACT_NAMES.
+    # Tools that produce a canonical artifact (brief, scene_plan, asset_manifest,
+    # video_analysis_brief, ...) should set this and call self._validate_output_artifact()
+    # at the end of execute() so contract drift is surfaced as a ToolResult.data
+    # annotation rather than a silent downstream parse failure.
+    output_artifact_name: Optional[str] = None
+    # When True, a schema validation failure inside execute() will turn the
+    # ToolResult into success=False. Default False — validation is reported as
+    # a warning on result.data so existing callers aren't broken by a drift in
+    # fields they may not depend on. Set True on tools whose downstream
+    # consumers strictly require the artifact to validate (e.g. checkpoint
+    # writers, MCP consumers that re-serialize the data).
+    fail_on_schema_drift: bool = False
+
     # --- Resource & retry ---
     resource_profile: ResourceProfile = ResourceProfile()
     retry_policy: RetryPolicy = RetryPolicy()
@@ -403,6 +418,64 @@ class BaseTool(ABC):
                     raise DependencyError(
                         f"Python module {module_name!r} not installed. {self.install_instructions}"
                     )
+
+    def validate_output_artifact(self, data: dict[str, Any]) -> tuple[bool, str]:
+        """Validate ``data`` against the canonical artifact schema.
+
+        Returns ``(valid, error_message)``. When ``output_artifact_name`` is
+        unset (the default), the call is a no-op and returns ``(True, "")`` —
+        backwards-compatible for tools that produce only ad-hoc payloads.
+
+        When set, the tool's ``output_artifact_name`` must match an entry in
+        ``schemas/artifacts/ARTIFACT_NAMES``. Validation uses
+        ``schemas.artifacts.validate_artifact`` which raises
+        ``jsonschema.ValidationError``; we catch and stringify so callers can
+        surface the failure mode without having to import jsonschema.
+
+        Tools should call this at the end of ``execute()`` and pass the
+        result through ``annotate_validation`` (or branch on it when
+        ``fail_on_schema_drift=True``):
+
+            ok, err = self.validate_output_artifact(result.data)
+            if not ok:
+                result = self.annotate_validation(result, ok, err)
+                if self.fail_on_schema_drift:
+                    result.success = False
+                    result.error = f"artifact schema drift: {err}"
+                    return result
+        """
+        if not self.output_artifact_name:
+            return True, ""
+        try:
+            from schemas.artifacts import validate_artifact
+            validate_artifact(self.output_artifact_name, data)
+            return True, ""
+        except Exception as e:  # jsonschema.ValidationError, FileNotFoundError, etc.
+            # Surface enough of the path to debug, but cap to keep error strings sane.
+            msg = str(e)
+            if len(msg) > 600:
+                msg = msg[:600] + "...(truncated)"
+            return False, msg
+
+    @staticmethod
+    def annotate_validation(
+        result: ToolResult, ok: bool, err: str
+    ) -> ToolResult:
+        """Stash the validation verdict on ``result.data['_schema_validation']``.
+
+        Non-destructive: the tool's existing data dict is preserved. The
+        annotation is what downstream consumers (checkpoints, board, MCP
+        logging) should surface when the artifact would not validate.
+        """
+        result.data.setdefault("_schema_validation", {})
+        result.data["_schema_validation"].update({
+            "artifact_name": result.data["_schema_validation"].get(
+                "artifact_name", "unknown"
+            ),
+            "valid": ok,
+            "error": err or None,
+        })
+        return result
 
     def get_info(self) -> dict[str, Any]:
         """Return full tool contract info for registry/discovery."""

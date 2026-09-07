@@ -63,6 +63,14 @@ class VideoAnalyzer(BaseTool):
     )
     agent_skills = ["video-understand", "ffmpeg"]
 
+    # Canonical artifact produced by this tool — used by validate_output_artifact()
+    # to surface contract drift (see tools/base_tool.py).
+    output_artifact_name = "video_analysis_brief"
+    # Validation failure does not block the run: the brief is still on disk and
+    # downstream stages degrade. The verdict is reported on result.data['_schema_validation']
+    # for callers and the Backlot board to surface.
+    fail_on_schema_drift = False
+
     capabilities = [
         "analyze_reference_video",
         "extract_structure",
@@ -497,12 +505,19 @@ class VideoAnalyzer(BaseTool):
                 "duration_seconds": round(time.time() - start, 2),
             }
             self._save_brief(brief, output_dir)
-            return ToolResult(
+            result = ToolResult(
                 success=True,
                 data=brief,
                 artifacts=[str(output_dir / "video_analysis_brief.json")],
                 duration_seconds=round(time.time() - start, 2),
             )
+            ok, err = self.validate_output_artifact(result.data)
+            result.data["_schema_validation"] = {
+                "artifact_name": self.output_artifact_name,
+                "valid": ok,
+                "error": err or None,
+            }
+            return result
 
         # ─── STEP 3: Scene detection (standard + deep) ───
         scenes = []
@@ -732,12 +747,24 @@ class VideoAnalyzer(BaseTool):
         if keyframe_dir.exists():
             artifacts.append(str(keyframe_dir))
 
-        return ToolResult(
+        result = ToolResult(
             success=True,
             data=brief,
             artifacts=artifacts,
             duration_seconds=round(elapsed, 2),
         )
+
+        # Canonical artifact validation — surfaces contract drift on the brief
+        # before downstream stages parse it. Schema failure is non-blocking
+        # (fail_on_schema_drift=False) so existing callers stay green; the
+        # verdict is stashed on data['_schema_validation'] for the board.
+        ok, err = self.validate_output_artifact(result.data)
+        result.data["_schema_validation"] = {
+            "artifact_name": self.output_artifact_name,
+            "valid": ok,
+            "error": err or None,
+        }
+        return result
 
     # ─── Helpers ───
 
