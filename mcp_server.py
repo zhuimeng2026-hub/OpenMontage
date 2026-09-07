@@ -2468,6 +2468,148 @@ queue_owner_id=None, subtitles=None, _queue_ready_event=None,
             pass
 
 
+@mcp.tool()
+async def create_reference_remix_video_share(
+    project_id: str,
+    edit_decisions: dict[str, Any],
+    asset_manifest: dict[str, Any],
+    scene_plan: Any = None,
+    output_path: Optional[str] = None,
+    profile: str = "high_res",
+    _job_id: Optional[str] = None,
+    userid: Optional[str] = None,
+) -> dict[str, Any]:
+    """Queue a reference-remix render while preserving the supplied timeline.
+
+    This is the async counterpart of ``execute_tool(video_compose)`` for
+    VClaw's immutable remix package. It accepts the already compiled cuts and
+    asset paths, so it never invents a fixed duration per image. The worker
+    renders with video_compose, uploads the MP4, and publishes a share URL;
+    callers poll the normal get_render_status tool.
+    """
+    if not isinstance(project_id, str) or not project_id.strip():
+        return {"success": False, "status": "failed", "stage": "validation", "error": "project_id is required"}
+    if not isinstance(edit_decisions, dict) or not isinstance(asset_manifest, dict):
+        return {"success": False, "status": "failed", "stage": "validation", "error": "edit_decisions and asset_manifest must be objects"}
+    cuts = edit_decisions.get("cuts")
+    if not isinstance(cuts, list) or not cuts:
+        return {"success": False, "status": "failed", "stage": "validation", "error": "edit_decisions.cuts must be a non-empty array"}
+    previous_end = 0.0
+    for index, cut in enumerate(cuts):
+        if not isinstance(cut, dict):
+            return {"success": False, "status": "failed", "stage": "validation", "error": f"cut {index + 1} must be an object"}
+        try:
+            start = float(cut.get("in_seconds"))
+            end = float(cut.get("out_seconds"))
+        except (TypeError, ValueError):
+            return {"success": False, "status": "failed", "stage": "validation", "error": f"cut {index + 1} has invalid in_seconds/out_seconds"}
+        if start < 0 or end <= start or (index == 0 and abs(start) > 0.02) or (index > 0 and abs(start - previous_end) > 0.02):
+            return {"success": False, "status": "failed", "stage": "validation", "error": f"cut {index + 1} has a gap, overlap, or invalid duration"}
+        previous_end = end
+    sid = get_mcp_session_id()
+    digest = session_hash(sid)
+    if not digest:
+        return {"success": False, "status": "failed", "stage": "session", "error": "Streamable HTTP Mcp-Session-Id is required"}
+    request_job_id = _job_id.strip() if isinstance(_job_id, str) and _job_id.strip() else None
+    job = create_media_job(
+        session_hash=digest,
+        project_id=project_id,
+        job_type="reference_remix",
+        title=f"{project_id} reference remix",
+        metadata={
+            "timeline_end_seconds": previous_end,
+            "cut_count": len(cuts),
+            "vclaw_job_id": request_job_id,
+            "profile": profile,
+        },
+    )
+    job_id = job["job_id"]
+    user_id = current_user_id() or (userid or "")
+    worker_inputs = {
+        "operation": "render",
+        "edit_decisions": edit_decisions,
+        "asset_manifest": asset_manifest,
+        "scene_plan": scene_plan,
+        "output_path": output_path or str((_PROJECT_ROOT / "projects" / project_id / "renders" / f"{job_id}.mp4").resolve()),
+        "profile": profile,
+        "project_id": project_id,
+        "userid": user_id,
+        "remotion_timeout_ms": 600000,
+        "_job_id": job_id,
+        "_queue_owner_id": user_id or sid,
+    }
+    threading.Thread(
+        target=_run_reference_remix_job,
+        kwargs={"sid": sid, "job_id": job_id, "project_id": project_id, "inputs": worker_inputs},
+        daemon=True,
+    ).start()
+    publish(job_id, progress_event(job_id, phase="queue", status="queued", progress=0, message="Reference remix render queued"))
+    return {
+        "success": True,
+        "status": "queued",
+        "render_job_id": job_id,
+        "job_id": job_id,
+        "project_id": project_id,
+        "cut_count": len(cuts),
+        "duration_seconds": previous_end,
+        "message": "参考视频 remix 已进入后台渲染队列，请使用 get_render_status 查询。",
+    }
+
+
+def _run_reference_remix_job(*, sid: str, job_id: str, project_id: str, inputs: dict[str, Any]) -> None:
+    """Render and publish a remix job registered in media_job_store."""
+    async def _worker() -> None:
+        set_mcp_session_id(sid)
+
+        def stage(name: str, progress: int, message: str, **changes: Any) -> None:
+            update_media_job(job_id, status=name, current_stage=name, progress=progress, **changes)
+            publish(job_id, progress_event(job_id, phase=name, status=name, progress=progress, message=message, **changes))
+
+        try:
+            render_tool = registry.get("video_compose")
+            if render_tool is None:
+                raise RuntimeError("video_compose tool is not registered")
+            stage("rendering", 10, "Rendering reference remix with the supplied timeline")
+            rendered = await _run_tool_sync(render_tool, inputs)
+            if not rendered.success:
+                raise RuntimeError(rendered.error or "Reference remix render failed")
+            data = rendered.data or {}
+            video_path = data.get("output") or data.get("output_path") or inputs["output_path"]
+            if not video_path or not Path(str(video_path)).is_file():
+                raise RuntimeError(f"render completed but output file is missing: {video_path}")
+            stage("uploading", 80, "Uploading rendered reference remix", video_path=str(video_path))
+            upload_tool = registry.get("weiyun_upload")
+            if upload_tool is None:
+                raise RuntimeError("weiyun_upload tool is not registered")
+            uploaded = await _run_tool_sync(upload_tool, {"video_path": str(video_path), "target_dir": "", "overwrite": False})
+            if not uploaded.success:
+                raise RuntimeError(uploaded.error or "Weiyun upload failed")
+            file_id = (uploaded.data or {}).get("file_id")
+            if not file_id:
+                raise RuntimeError("Weiyun upload returned no file_id")
+            share_tool = registry.get("weiyun_share_link")
+            if share_tool is None:
+                raise RuntimeError("weiyun_share_link tool is not registered")
+            stage("sharing", 95, "Creating the final share link", video_path=str(video_path))
+            shared = await _run_tool_sync(share_tool, {"file_list": [file_id], "share_name": f"{project_id}-{job_id[:8]}"})
+            if not shared.success:
+                raise RuntimeError(shared.error or "Weiyun share link failed")
+            share_url = (shared.data or {}).get("short_url") or (shared.data or {}).get("share_url")
+            if not share_url:
+                raise RuntimeError("Weiyun share tool returned no share URL")
+            update_media_job(job_id, status="published", current_stage="published", progress=100, result_url=share_url, video_path=str(video_path), error_code=None, error_message=None)
+            publish(job_id, progress_event(job_id, phase="share", status="published", progress=100, share_url=share_url, video_path=str(video_path), message="Reference remix published"))
+        except Exception as exc:  # noqa: BLE001
+            update_media_job(job_id, status="failed", current_stage="failed", error_code="reference_remix_failed", error_message=str(exc))
+            publish(job_id, progress_event(job_id, phase="failed", status="failed", progress=100, error=str(exc), message="Reference remix failed"))
+
+    try:
+        asyncio.run(_worker())
+    except Exception as exc:  # noqa: BLE001
+        update_media_job(job_id, status="failed", current_stage="background_crash", error_code="background_crash", error_message=str(exc))
+        _log.exception("reference remix background job crashed for %s", job_id)
+
+
 def _queue_media_workflow(
     *, sid: str, project_id: str, job_type: str, video_asset_id: str,
     voice_sample_asset_id: str | None = None, script: str | None = None,
