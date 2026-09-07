@@ -1322,7 +1322,27 @@ async def execute_tool(
             sid = get_mcp_session_id()
             if sid:
                 inputs_for_call["mcp_session_id"] = sid
-        result = await asyncio.to_thread(ctx.run, tool.execute, inputs_for_call)
+        _started_at = time.monotonic()
+        # Safety net: even if the underlying tool wedges (yt-dlp stuck on a
+        # half-open socket, ffmpeg blocked on a closed pipe, etc.), don't let
+        # the await hang forever — mirror the 900s timeout that _run_tool_sync
+        # already enforces for tool.* envelope calls. Without this, a wedged
+        # tool strands an asyncio worker indefinitely (reproduced 2026-09-07
+        # with video_downloader against a Weibo URL: 4 retries all logged
+        # "called" but never "done", executor looked idle, futures lost).
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(ctx.run, tool.execute, inputs_for_call),
+                timeout=900,
+            )
+        except asyncio.TimeoutError:
+            elapsed_ms = round((time.monotonic() - _started_at) * 1000)
+            _log.error(
+                "execute_tool.timeout tool=%s elapsed_ms=%d (>=900s) — "
+                "abandoning. Worker thread continues in background until GC.",
+                tool_name, elapsed_ms,
+            )
+            raise  # outer except wraps into ExecuteResult(success=False, error=...)
         _log.info("execute_tool done: %s success=%s duration=%.2fs",
                   tool_name, result.success, result.duration_seconds or 0)
         # Log the full error (was [:80] — too short; masked the real cause of

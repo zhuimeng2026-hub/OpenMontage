@@ -63,6 +63,28 @@ if [ -z "${HTTPS_PROXY:-}" ] && [ -z "${HTTP_PROXY:-}" ]; then
   export HTTP_PROXY="$HTTPS_PROXY"
 fi
 
+# 5b) 国内站点不走代理（2026-09-07 加入）：微博 / B 站 / 抖音 / 小红书等
+#     走 7890 反而绕远变慢。requests / yt-dlp / ffmpeg / urllib 都遵守 NO_PROXY。
+#     .cn 一行兜底覆盖其它 .cn 域名，下方再补主流 .com 中文站。
+export NO_PROXY="localhost,127.0.0.1,::1,.local,\
+.cn,\
+.weibo.com,.weibocdn.com,.sinaimg.cn,.t.cn,.miaopai.com,\
+.bilibili.com,.bilivideo.com,.hdslb.com,.b23.tv,\
+.douyin.com,.douyincdn.com,.amemv.com,.snssdk.com,\
+.xiaohongshu.com,.xhscdn.com,\
+.kuaishou.com,.yximgs.com,.gifshow.com,\
+.youku.com,.ykimg.com,\
+.iqiyi.com,.qiyipic.com,\
+.qq.com,.gtimg.cn,.video.qq.com,.qpic.cn,\
+.meituan.com,.meituan.net,\
+.taobao.com,.tmall.com,.alicdn.com,.alipay.com,\
+.baidu.com,.bdimg.com,.bdstatic.com,.baidustatic.com,.baiducontent.com,\
+.bytedance.com,.byted.org,.bytetos.com,\
+.163.com,.126.com,.netease.com,.music.126.net,\
+.pinduoduo.com,.yangkeduo.com"
+# 同时设置小写 no_proxy：curl / 部分老代码只读小写
+export no_proxy="$NO_PROXY"
+
 # 6) 启动服务（python3 优先，退回 python；入口可命令行覆盖）
 PYBIN="$(command -v python3 || command -v python)"
 exec "$PYBIN" "$ROOT/mcp_server.py" "$@"
