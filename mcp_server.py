@@ -2476,7 +2476,7 @@ async def create_reference_remix_video_share(
     scene_plan: Any = None,
     output_path: Optional[str] = None,
     profile: str = "high_res",
-    _job_id: Optional[str] = None,
+    job_id: Optional[str] = None,
     userid: Optional[str] = None,
 ) -> dict[str, Any]:
     """Queue a reference-remix render while preserving the supplied timeline.
@@ -2510,7 +2510,7 @@ async def create_reference_remix_video_share(
     digest = session_hash(sid)
     if not digest:
         return {"success": False, "status": "failed", "stage": "session", "error": "Streamable HTTP Mcp-Session-Id is required"}
-    request_job_id = _job_id.strip() if isinstance(_job_id, str) and _job_id.strip() else None
+    request_job_id = job_id.strip() if isinstance(job_id, str) and job_id.strip() else None
     job = create_media_job(
         session_hash=digest,
         project_id=project_id,
