@@ -79,6 +79,63 @@ Header: Content-Type: application/json
 - If `base_resp.status_code != 0` on submit, **do not enter the poll loop** — the request was rejected and there is nothing to wait for.
 - The download URL from `/v1/files/retrieve` is short-lived (typically minutes). Retrieve → GET immediately; don't stage.
 
+#### ⚠️ HARD RULE: Mandatory visual QA after every Hailuo video generation (verified live 2026-09)
+
+`result.success == True` from `minimax_video_direct` is a **false-positive trap** for content quality. The API can return success and write a perfectly-valid mp4 to disk while the visual silently differs from your prompt. This happens systematically for **destruction / breakage / snapping / cracking / collapsing** actions, regardless of:
+
+- prompt wording (violent vs engineering framing both soften)
+- `prompt_optimizer` flag (true or false, both soften)
+
+**Three observed failures from `projects/remix-luggage-v1/` 2026-09-05–06**, all requesting "suitcase handle snaps/collapses":
+
+| Run | Prompt keywords | `prompt_optimizer` | API result | ffprobe | Actual visual |
+|---|---|---|---|---|---|
+| v1 | CRACKS / snaps sideways / plastic stress | true | success | 5.875s / 1366×768 / h264 | Intact handle close-up, no break |
+| v2 | gives way / collapses 30° / engineering stress test | true | success | same | Same clean handle close-up |
+| v3 | same as v2 | **false** | success | same | Near-static joint close-up, t=3.0s and t=4.0s frames are nearly pixel-identical, no break motion |
+
+**Detection protocol — MANDATORY after every Hailuo video generation:**
+
+```bash
+# 1. ffprobe confirms the file is technically valid (cheap, always do)
+ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate \
+  -show_entries format=duration,size -of json <output_path>
+# Expect: h264, 1366×768 (or 1920×1080 for 1080P), duration ≈ 5.875/9.875s, fps=24
+
+# 2. ffmpeg frame extraction + visual inspection (NOT optional)
+mkdir -p /tmp/hailuo_qa
+for t in 2.0 3.0 4.5; do
+  ffmpeg -y -ss $t -i <output_path> -frames:v 1 /tmp/hailuo_qa/t${t}.png
+done
+# Then Read the PNGs and verify the visual content matches your prompt's action
+```
+
+**Decision tree after QA:**
+
+- API success + ffprobe ok + visual matches prompt → ✅ accept, ship to asset_manifest
+- API success + ffprobe ok + visual does NOT match prompt → ❌ **do not retry with prompt variants** (see below). Pivot:
+  - For destruction/breakage broll: switch to stock footage, user-recorded, or text_card + stat_card fallback
+  - For non-destruction content: try a small wording change (e.g. add explicit camera-lock + duration cue) ONCE
+- API fail (4xx/5xx/2067) → escalate per existing troubleshooting rules
+
+**Why you should NOT iterate prompt wording for destruction content:**
+
+Three v1/v2/v3 attempts in this project all softened identically → the safety layer is independent of prompt framing or optimizer settings. Each retry costs ~1 quota cycle + produces an orphan file that pollutes `assets/video/`. The 2067 quota gotcha compounds: see [[minimax-hailuo-2-3-quota-2067]].
+
+**What "destruction / breakage" means for this rule** (broaden to anything the safety layer likely trips on):
+
+- Physical breaking / snapping / cracking / shattering / tearing / ripping
+- Collapse / structural failure / "gives way"
+- Combustion / explosion / burning (separate concern, may also soften)
+- Violence against persons (definitely softens; don't try)
+- Animals in distress (definitely softens; don't try)
+
+**Cross-references:**
+
+- Memory: [[minimax-hailuo-safety-softening-violence]] — first-hand experimental evidence from this project
+- Plan: `docs/hailuo-broll-generation-plan-2026-09-05.md` Appendix B §B.3 — fallback protocol example
+- Decision log example: `projects/remix-luggage-v1/artifacts/decision_log.json` d-009 + d-010
+
 #### OpenMontage Usage
 
 ```python
@@ -192,6 +249,7 @@ result = tool.execute({
 2. **Use the selector unless you need a specific provider.** `image_selector` ranks providers dynamically; explicit `preferred_provider="minimax"` overrides selection when needed.
 3. **Cost tracking.** `result.cost_usd` is an estimate (see verification below) — record it in your project budget. `estimate_cost()` scales with `n`.
 4. **PIL post-processing.** The tool uses Pillow to verify and normalize output (transparent RGBA → RGB for JPEG, transparent WebP handling). If you need explicit format conversion, save with a `.webp` or `.jpg` extension in `output_path` and the tool will re-encode.
+5. **🎬 VIDEO: visual QA is MANDATORY after every Hailuo video generation.** API success ≠ correct visual. See the "HARD RULE" section above for the ffprobe + ffmpeg frame extraction protocol.
 
 ## Parameters (`minimax_image`)
 
@@ -208,6 +266,7 @@ result = tool.execute({
 - **RGBA → JPEG fails:** The tool handles this transparently (converts RGBA to RGB on white background before JPEG encode). If you see this error, file a bug — the auto-conversion should have caught it.
 - **Polling timeout (async path):** Default polling waits up to 60s with 2s intervals. If your queue position is large, the task may need longer. (Future enhancement: make timeout configurable.)
 - **Cost higher than expected:** `estimate_cost()` is unverified. Check your MiniMax billing console at https://intl.minimaxi.com/user-center/billing for actual rates.
+- **🎬 VIDEO: API success but visual doesn't match prompt (especially destruction/breakage/snap actions):** Do NOT iterate prompt wording. See the "HARD RULE: Mandatory visual QA" section above for the detection protocol and the pivot-to-fallback decision tree. Confirmed in `projects/remix-luggage-v1/` 2026-09 with 3 attempts (violent / engineering / optimizer-off) all softening identically.
 
 ## Verification (for this skill's maintainers)
 
