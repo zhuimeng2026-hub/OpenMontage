@@ -9,6 +9,7 @@ Before responding to ANY user message:
 1. [`AGENT_GUIDE.md`](AGENT_GUIDE.md) — complete operating guide and agent contract. Contains the routing rules (onboarding, reference-video entry, pipeline selection, "Present Both Composition Runtimes" rule, checkpoint gating). Skipping it causes the wrong first action.
 2. [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) — architecture, key files, conventions. Single source of truth.
 3. `skills/pipelines/<pipeline>/<stage>-director.md` for whatever stage you are about to execute.
+4. `MEMORY.md` (repo root) — project-specific auto-memory: prior findings, frozen verdicts, host-specific workarounds. Read it; entries there override generic advice when they conflict.
 
 `AGENTS.md`, `CURSOR.md`, `COPILOT.md`, `CODEX.md`, `.cursor/rules/openmontage.mdc` (Cursor: `alwaysApply: true`, `globs: ["**/*"]`), and `.github/copilot-instructions.md` are all thin pointers to the two files above. Do not duplicate content between them.
 
@@ -125,19 +126,20 @@ The OpenClaw-runtime side lives in `/opt/vclaw/openclaw/solutions/product-video-
 1. **All production goes through a pipeline.** No ad-hoc Python scripts that call tools directly. Match the request to a `pipeline_defs/*.yaml` manifest; read its stages; read the stage director skill before executing each stage.
 2. **Read Layer 3 before any generation tool call.** The tool's `agent_skills` field points to the right file. Generic prompts produce generic output.
 3. **`render_runtime` is locked at proposal.** Never silently swap Remotion ↔ HyperFrames ↔ FFmpeg. If the chosen runtime is unavailable, surface a blocker and log a `render_runtime_selection` decision — do not substitute. When both runtimes are available, **Present Both Composition Runtimes (HARD RULE)** — present both with tradeoffs and a recommendation, then wait for explicit approval.
-4. **Gated stages need `human_approved=True` in the checkpoint.** `lib/checkpoint.py` enforces this; bypassing it raises a GATE VIOLATION. The pipeline manifest's `human_approval_default` is binding — never re-judge it.
-5. **Tool outputs go under `projects/<project-id>/`.** Specifying a path outside `projects/` is invisible to the Backlot board and violates the workspace contract. Outputs with no real project (smoke-test TTS, ad-hoc renders, debug dumps) go to `projects/_scratch/<category>/` instead — never to the repo root.
-6. **The `decision_log` is append-only.** When a previously-logged choice changes mid-run, append a new entry with the **same `(category, subject)` pair** — never silently mutate the old one or reword the subject. The board keys decisions on the pair, and a reworded subject reads as a different decision.
+4. **`composition_mode` is a separate proposal-stage decision.** Orthogonal to runtime: **templated** = assemble stock `cut.type` scenes (fast, looks like every other video); **atelier** = hand-author the composition from scratch with `composition_mode: "atelier"` (route through `skills/meta/taste-direction.md` → `skills/meta/bespoke-composition.md`, then read stock scene types *only* as a mechanics codex — never reuse the look). **Default to atelier for hero work** (marketing, launches, brand pieces, single-deliverable explainers that must impress); mention the cost so the user opts in knowingly. Log as `decision_log` entry with `category: "composition_mode"`.
+5. **Gated stages need `human_approved=True` in the checkpoint.** `lib/checkpoint.py` enforces this; bypassing it raises a GATE VIOLATION. The pipeline manifest's `human_approval_default` is binding — never re-judge it. Most pipelines auto-proceed on `edit` and `compose`, but not all — `documentary-montage` gates `edit`; the manifest you loaded is the only authority.
+6. **Tool outputs go under `projects/<project-id>/`.** Specifying a path outside `projects/` is invisible to the Backlot board and violates the workspace contract. Outputs with no real project (smoke-test TTS, ad-hoc renders, debug dumps) go to `projects/_scratch/<category>/` instead — never to the repo root.
+7. **The `decision_log` is append-only.** When a previously-logged choice changes mid-run, append a new entry with the **same `(category, subject)` pair** — never silently mutate the old one or reword the subject. The board keys decisions on the pair, and a reworded subject reads as a different decision.
 
 `AGENT_GUIDE.md` and `PROJECT_CONTEXT.md` are the authoritative sources. When in doubt, read them over this file.
 
 ## Pipelines — Pointer
 
-The full roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelines" and `PROJECT_CONTEXT.md` § "Available Pipelines". 13 pipelines; `video-template-remix` is the default.
+The full roster with stability notes lives in `AGENT_GUIDE.md` § "Available Pipelines" and `PROJECT_CONTEXT.md` § "Available Pipelines". 14 production pipelines + 1 niche subtitle pipeline (`zh-en-bilingual-subtitle`); `video-template-remix` is the default. Two are worth flagging by name because they diverge from the obvious match: `documentary-montage` (retrieval-first thematic edit, gates `edit` stage — unusual), `character-animation` (rigged character acting, no voice/TTS stage).
 
 ## Three-Layer Knowledge Model — Pointer
 
-See `PROJECT_CONTEXT.md` § "Knowledge Architecture" for the canonical description. Quick version: Layer 1 = `tools/` (what exists), Layer 2 = `skills/` (how OpenMontage uses it), Layer 3 = `.agents/skills/` (vendor/tech knowledge). Each tool's `agent_skills` field bridges 1 → 3.
+See `PROJECT_CONTEXT.md` § "Knowledge Architecture" for the canonical description. Quick version: Layer 1 = `tools/` (what exists), Layer 2 = `skills/` (how OpenMontage uses it), Layer 3 = `.agents/skills/` (vendor/tech knowledge). Each tool's `agent_skills` field bridges 1 → 3. `.agents/skills/` is large and includes **project-local** skills (e.g. `minimax/` for MiniMax/Hailuo) alongside vendored vendor skills — when in doubt, read the tool's `agent_skills` list first, then grep `.agents/skills/` by name.
 
 ## Project Layout — Pointer
 
