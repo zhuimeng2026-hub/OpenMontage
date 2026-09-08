@@ -3350,6 +3350,97 @@ def write_checkpoint(
 
 
 # ---------------------------------------------------------------------------
+# Workspace bootstrap tools (vclaw-facing project lifecycle)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def ensure_project_workspace(
+    project_id: str,
+    title: str = "",
+    pipeline_type: Optional[str] = None,
+) -> dict[str, Any]:
+    """Ensure the on-disk workspace for ``project_id`` exists with the canonical layout.
+
+    Creates ``projects/<project_id>/`` plus the standard subdirectory tree
+    (``artifacts/``, ``assets/{images,video,audio,music}/``, ``renders/``)
+    and the ``project.json`` marker that the Backlot board reads to render
+    the project's identity and stage rail.
+
+    Idempotent: re-running with the same ``project_id`` preserves the
+    original ``created_at`` and merges non-conflicting marker fields.
+
+    Use this when an external orchestrator (e.g. vclaw control-plane)
+    creates projects that need to be visible to Backlot / checkpoint
+    gating / decision-log tooling — calling this is what wires a vclaw-
+    minted project id into the OM-side workspace so downstream tools can
+    resolve assets under the canonical layout.
+
+    Args:
+        project_id: Project identifier (matches the vclaw-side
+            ``video_projects.id`` flat form ``YYYYMMDD-<6 hex>``, e.g.
+            ``20260908-6384dc1f94d7``).
+        title: Human-readable title written to ``project.json``. Optional;
+            defaults to ``project_id`` when empty so the marker stays
+            informative without forcing callers to thread one through.
+        pipeline_type: Pipeline manifest name (e.g.
+            ``video-template-remix``). Optional; falls back to the loader's
+            default when omitted.
+
+    Returns:
+        ``{"success": True, "project_dir": "...", "project_id": "...",
+        "created_at": "..."}`` on success. ``created_at`` is the ISO
+        timestamp read back from ``project.json`` — preserved across
+        idempotent re-runs. On failure, ``{"success": False,
+        "error": "..."}``.
+
+    See:
+        ``lib/checkpoint.py::init_project`` — the underlying helper.
+        ``/opt/vclaw/docs/openmontage-workspace-contract-violations-2026-09-08.md``
+        — the vclaw-side fix spec that motivated this tool.
+    """
+    if not project_id or not isinstance(project_id, str):
+        return {"success": False, "error": "project_id is required (non-empty string)"}
+
+    # init_project requires title to be a non-empty string. Default to
+    # the project_id when the caller didn't pass one — keeps the marker
+    # file's title field informative without forcing callers to thread
+    # one through.
+    effective_title = title.strip() if isinstance(title, str) else ""
+    if not effective_title:
+        effective_title = project_id
+
+    try:
+        project_dir = ckpt.init_project(
+            project_id=project_id,
+            title=effective_title,
+            pipeline_type=pipeline_type,
+        )
+    except Exception as e:
+        return {"success": False, "error": f"{type(e).__name__}: {e}"}
+
+    # Read the marker back to surface created_at (which is preserved
+    # across idempotent re-runs via setdefault in init_project).
+    created_at: Optional[str] = None
+    marker_path = project_dir / ckpt.PROJECT_MARKER_FILENAME
+    try:
+        with open(marker_path, "r", encoding="utf-8") as f:
+            marker = json.load(f)
+        created_at = marker.get("created_at")
+    except (OSError, json.JSONDecodeError):
+        # Marker write succeeded (otherwise init_project would have raised),
+        # but reading it back failed — non-fatal; return what we have.
+        pass
+
+    return {
+        "success": True,
+        "project_dir": str(project_dir),
+        "project_id": project_id,
+        "created_at": created_at,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Publish-tier tools (rsync, export bundle)
 # ---------------------------------------------------------------------------
 
