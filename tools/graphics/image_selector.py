@@ -175,6 +175,10 @@ class ImageSelector(BaseTool):
                 "description": "Optional provenance metadata for custom workflow dependencies.",
             },
             "output_path": {"type": "string"},
+            "project_id": {
+                "type": "string",
+                "description": "Project workspace to own the generated image artifact.",
+            },
         },
     }
 
@@ -216,8 +220,46 @@ class ImageSelector(BaseTool):
         from lib.scoring import rank_providers
 
         logger = logging.getLogger(__name__)
+        # Generated images are later read through read_session_asset.  That
+        # reader intentionally rejects projects/_scratch and every other
+        # user's namespace, so never pass a caller-supplied scratch path to a
+        # provider.  Re-home the artifact inside the authenticated principal's
+        # project workspace before invoking the provider.
+        from pathlib import Path
+        from lib.principal_registry import Principal, PrincipalNotFound
+        from lib.project_workspace import ProjectWorkspace
+
+        prepared_inputs = dict(inputs)
+        project_id = str(prepared_inputs.get("project_id") or "generated")
+        # Mirror video_compose.execute(): allow explicit ``userid`` so non-MCP
+        # callers (CLI, cron, smoke tests) can route to a specific workspace
+        # without an MCP session binding.  MCP clients still get the standard
+        # ``for_current_principal`` path via the registered contextvar.
+        explicit_userid = prepared_inputs.get("userid")
+        try:
+            if explicit_userid:
+                principal = Principal(kind="user", principal_id=explicit_userid)
+                workspace = ProjectWorkspace.for_principal(principal, project_id)
+            else:
+                workspace = ProjectWorkspace.for_current_principal(project_id)
+        except PrincipalNotFound as e:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"no authenticated principal bound to this call: {e}. "
+                    "Send X-VClaw-User-Id on the MCP request, or pass "
+                    "userid explicitly when calling from a non-MCP context."
+                ),
+            )
+        requested_output = str(prepared_inputs.get("output_path") or "generated.png")
+        filename = Path(requested_output.replace("\\", "/")).name or "generated.png"
+        output_path = workspace.artifacts / "image_gen" / "keyframes" / filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        prepared_inputs["output_path"] = str(output_path)
+        prepared_inputs.pop("project_id", None)
+        prepared_inputs.pop("userid", None)
         task_context = self._prepare_task_context(inputs)
-        candidates = self._filter_candidates(inputs, self._providers())
+        candidates = self._filter_candidates(prepared_inputs, self._providers())
 
         # Rank mode — return scored provider rankings without generating
         if inputs.get("operation") == "rank":
@@ -232,12 +274,12 @@ class ImageSelector(BaseTool):
             )
 
         # Normal generation — use scored selection
-        tool, score = self._select_best_tool(inputs, candidates, task_context)
+        tool, score = self._select_best_tool(prepared_inputs, candidates, task_context)
         if tool is None:
             return ToolResult(success=False, error="No image provider available.")
 
         # Adapt input keys: stock tools use 'query' while generators use 'prompt'
-        adapted = dict(inputs)
+        adapted = dict(prepared_inputs)
         if hasattr(tool, 'input_schema'):
             props = tool.input_schema.get("properties", {})
             if "query" in props and "query" not in adapted:
