@@ -335,6 +335,28 @@ class ImageSelector(BaseTool):
 
         result = tool.execute(adapted)
         if result.success:
+            # Public image_selector contract: outputs is always the only
+            # artifact field consumed by clients, including for one image.
+            # Providers in the registry have historically returned output,
+            # outputs, image_paths, or ToolResult.artifacts; normalize that
+            # variation at this selector boundary.
+            result_data = result.data if isinstance(result.data, dict) else {}
+            normalized_outputs: list[str] = []
+
+            def add_output(value: Any) -> None:
+                if isinstance(value, str) and value.strip():
+                    normalized_outputs.append(value.strip())
+                elif isinstance(value, (list, tuple)):
+                    for item in value:
+                        add_output(item)
+
+            add_output(result_data.get("outputs"))
+            add_output(result_data.get("output"))
+            add_output(result_data.get("image_paths"))
+            add_output(result.artifacts)
+            result_data["outputs"] = list(dict.fromkeys(normalized_outputs))
+            result_data.pop("output", None)
+            result.data = result_data
             result.data.setdefault("selected_tool", tool.name)
             result.data["selected_provider"] = tool.provider
             result.data["selection_reason"] = score.explain() if score else f"Selected {tool.provider} ({tool.name})"
