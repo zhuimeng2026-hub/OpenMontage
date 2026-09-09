@@ -153,6 +153,17 @@ class MiniMaxVideoDirect(BaseTool):
                     "accepts `first_frame_image` and will reject this legacy alias."
                 ),
             },
+            "image_local_path": {
+                "type": "string",
+                "description": (
+                    "OPTIONAL local filesystem path to a reference image. The tool uploads the "
+                    "file to imgbb (requires network connectivity to api.imgbb.com and the "
+                    "IMGBB_API_KEY env var, with a hardcoded fallback key for development) and "
+                    "uses the returned HTTPS URL as `first_frame_image`. Use this when you have "
+                    "an image on disk and external HTTPS upload services are unreachable. "
+                    "If both `first_frame_image` and `image_local_path` are set, `first_frame_image` wins."
+                ),
+            },
             "output_path": {
                 "type": "string",
                 "description": "Where to write the MP4. Parent directory is created if missing.",
@@ -240,6 +251,49 @@ class MiniMaxVideoDirect(BaseTool):
                 f"accepts the legacy alias as of 2026-08.)",
                 flush=True,
             )
+
+        # Optional fallback: if first_frame is empty but image_local_path is set,
+        # upload the local file to imgbb and use the returned HTTPS URL.
+        # Lets agents keep first_frame on disk when external HTTPS hosts are unreachable.
+        if not first_frame:
+            image_local_path = inputs.get("image_local_path")
+            if image_local_path:
+                import requests as _requests
+                imgbb_key = (
+                    os.environ.get("IMGBB_API_KEY")
+                    or "0381f600a61fbb34ead6bc9f9ee30e4b"
+                )
+                try:
+                    with open(image_local_path, "rb") as _f:
+                        _upload = _requests.post(
+                            "https://api.imgbb.com/1/upload",
+                            params={"key": imgbb_key, "expiration": 3600},
+                            files={"image": _f},
+                            timeout=(10, 60),
+                        )
+                    _upload.raise_for_status()
+                    _upload_data = _upload.json()
+                except Exception as _e:
+                    return ToolResult(
+                        success=False,
+                        error=(
+                            f"image_local_path upload to imgbb failed: {type(_e).__name__}: {_e}. "
+                            f"Pass `first_frame_image` directly (any public HTTPS URL) to bypass."
+                        ),
+                    )
+                if not _upload_data.get("success"):
+                    return ToolResult(
+                        success=False,
+                        error=(
+                            f"image_local_path upload to imgbb returned success=False: "
+                            f"{_upload_data.get('error', {}).get('message', 'unknown')}"
+                        ),
+                    )
+                first_frame = _upload_data["data"]["url"]
+                print(
+                    f"[minimax_video_direct] uploaded {image_local_path} to imgbb → {first_frame}",
+                    flush=True,
+                )
 
         # Map operation to endpoint; image_to_video uses the same endpoint
         # with first_frame_image attached.

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 import time
 from pathlib import Path
@@ -38,6 +39,91 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+#
+# Two independent channels live here:
+#
+# 1. ``_log`` (DEBUG) — opt-in via ``OM_DEBUG_IMAGE_GEN=1``. Used when
+#    reproducing a fault: dumps response shapes, poll status, save magic
+#    bytes — every signal currently lost when ToolResult.error is the only
+#    witness. Off by default so daily traffic stays clean.
+#
+# 2. ``_detail_log`` (INFO) — always on. Emits one structured event per
+#    generation through the ``openmontage.gen_detail`` logger, written to
+#    ``logs/gen_detail.log`` when running under mcp_server (configured in
+#    mcp_server.py). Cheap enough for daily-use monitoring: tool / provider
+#    / model / prompt_snippet / success / cost / duration.
+#
+# Both scrub API keys before logging.
+_log = logging.getLogger(__name__)
+
+_detail_log = logging.getLogger("openmontage.gen_detail")
+# If the host (mcp_server.py) hasn't attached a handler, fall back to
+# stderr so out-of-process scripts still produce output. Set
+# OM_GEN_DETAIL_QUIET=1 to suppress the fallback (e.g. in noisy tests).
+if not _detail_log.handlers and not os.environ.get("OM_GEN_DETAIL_QUIET"):
+    _h = logging.StreamHandler()
+    _h.setFormatter(
+        logging.Formatter(
+            "[%(asctime)s] %(name)s %(levelname)s %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    _detail_log.addHandler(_h)
+_detail_log.setLevel(logging.INFO)
+_detail_log.propagate = False
+
+if os.environ.get("OM_DEBUG_IMAGE_GEN") == "1":
+    _log.setLevel(logging.DEBUG)
+    # Attach a stderr handler so OM_DEBUG is visible even when the host
+    # (mcp_server.py / a script) hasn't configured root. Keep propagate=True
+    # so an externally configured FileHandler also receives these lines.
+    if not _log.handlers:
+        _dh = logging.StreamHandler()
+        _dh.setFormatter(
+            logging.Formatter(
+                "[%(asctime)s] %(name)s %(levelname)s %(message)s",
+                datefmt="%H:%M:%S",
+            )
+        )
+        _log.addHandler(_dh)
+
+
+def _redact(value: str) -> str:
+    """Strip API keys / bearer tokens from a log line defensively."""
+    import re as _re
+
+    if not value:
+        return value
+    value = _re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1<redacted>", value)
+    value = _re.sub(
+        r"(?i)((?:api[_-]?key|token|cookie|authorization)\s*[:=]\s*)[^\s,;]+",
+        r"\1<redacted>",
+        value,
+    )
+    return value
+
+
+def _prompt_snippet(prompt: str, limit: int = 80) -> str:
+    """Truncate a prompt for log lines without leaking secrets."""
+    if not prompt:
+        return ""
+    s = prompt.replace("\n", " ").strip()
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
+def _data_keys(data: Any) -> list[str]:
+    """Return top-level dict keys + nested `data` keys, redacted."""
+    if not isinstance(data, dict):
+        return [type(data).__name__]
+    keys = list(data.keys())
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        keys.append("data." + "/".join(nested.keys()))
+    return [str(k) for k in keys]
 
 
 class MiniMaxImage(BaseTool):
@@ -166,6 +252,25 @@ class MiniMaxImage(BaseTool):
             )
 
         start = time.time()
+        prompt_snippet = _prompt_snippet(inputs.get("prompt", ""))
+        _log.debug(
+            "minimax_image.execute enter prompt=%r aspect=%s n=%s seed=%s output=%s",
+            prompt_snippet,
+            inputs.get("aspect_ratio"),
+            inputs.get("n"),
+            inputs.get("seed"),
+            inputs.get("output_path"),
+        )
+        _detail_log.info(
+            "event=image_gen_detail state=submit tool=minimax_image provider=%s model=%s "
+            "aspect=%s n=%s prompt=%r scene_id=%s",
+            self.provider,
+            self.DEFAULT_MODEL,
+            inputs.get("aspect_ratio"),
+            inputs.get("n"),
+            prompt_snippet,
+            inputs.get("scene_id"),
+        )
         try:
             payload = self._build_payload(inputs)
             response = requests.post(
@@ -177,18 +282,38 @@ class MiniMaxImage(BaseTool):
                 json=payload,
                 timeout=120,
             )
+            _log.debug(
+                "minimax_image.execute http status=%s elapsed_ms=%d",
+                response.status_code,
+                round((time.time() - start) * 1000),
+            )
             response.raise_for_status()
             data = response.json()
+            _log.debug(
+                "minimax_image.execute response keys=%s", _data_keys(data)
+            )
 
             image_bytes_list = self._collect_image_bytes(data, api_key)
+            # NEW: also extract the source URLs so the agent can reuse them
+            # without re-uploading (e.g. as first_frame_image for I2V).
+            image_urls = self._extract_image_urls(data)
             if not image_bytes_list:
-                return ToolResult(
-                    success=False,
-                    error=(
-                        "Unrecognized MiniMax response shape (no images found): "
-                        f"{self._truncate(data)}"
-                    ),
+                err = (
+                    "Unrecognized MiniMax response shape (no images found): "
+                    f"{self._truncate(data)}"
                 )
+                _log.warning(
+                    "minimax_image.execute no_images keys=%s truncated=%r",
+                    _data_keys(data),
+                    _redact(self._truncate(data)),
+                )
+                _detail_log.info(
+                    "event=image_gen_detail state=done tool=minimax_image success=false "
+                    "reason=unrecognized_response keys=%s duration_s=%.2f",
+                    _data_keys(data),
+                    time.time() - start,
+                )
+                return ToolResult(success=False, error=err)
 
             ext = self._infer_extension(inputs.get("output_path"), image_bytes_list[0])
             output_paths = self._resolve_output_paths(
@@ -196,14 +321,43 @@ class MiniMaxImage(BaseTool):
             )
             for path, raw in zip(output_paths, image_bytes_list):
                 path.parent.mkdir(parents=True, exist_ok=True)
-                self._save_image(raw, path, ext)
+                try:
+                    self._save_image(raw, path, ext)
+                except Exception as save_err:
+                    _log.error(
+                        "minimax_image.execute save_failed path=%s bytes=%d magic=%s error=%s",
+                        path,
+                        len(raw),
+                        raw[:16].hex(),
+                        _redact(str(save_err)),
+                    )
+                    raise
 
         except Exception as e:
-            return ToolResult(
-                success=False,
-                error=f"MiniMax image generation failed: {self._safe_error(e)}",
+            err = f"MiniMax image generation failed: {self._safe_error(e)}"
+            _log.error("minimax_image.execute error=%s", _redact(str(e)))
+            _detail_log.info(
+                "event=image_gen_detail state=done tool=minimax_image success=false "
+                "reason=exception error_class=%s duration_s=%.2f",
+                type(e).__name__,
+                time.time() - start,
             )
+            return ToolResult(success=False, error=err)
 
+        duration_s = round(time.time() - start, 2)
+        _log.debug(
+            "minimax_image.execute ok outputs=%d bytes_total=%d duration_s=%.2f",
+            len(output_paths),
+            sum(p.stat().st_size for p in output_paths if p.exists()),
+            duration_s,
+        )
+        _detail_log.info(
+            "event=image_gen_detail state=done tool=minimax_image success=true "
+            "outputs=%d cost_usd=%.4f duration_s=%.2f",
+            len(output_paths),
+            self.estimate_cost(inputs),
+            duration_s,
+        )
         return ToolResult(
             success=True,
             data={
@@ -214,11 +368,15 @@ class MiniMaxImage(BaseTool):
                 "output": str(output_paths[0]),
                 "outputs": [str(p) for p in output_paths],
                 "images_generated": len(output_paths),
+                # NEW: surface the OSS signed URLs from the API response so
+                # downstream tools (e.g. minimax_video_direct I2V first_frame_image)
+                # can reuse them without uploading the local file again.
+                "image_urls": image_urls,
                 "cost_estimate_confidence": "low",
             },
             artifacts=[str(p) for p in output_paths],
             cost_usd=self.estimate_cost(inputs),
-            duration_seconds=round(time.time() - start, 2),
+            duration_seconds=duration_s,
             model=f"minimax/{self.DEFAULT_MODEL}",
         )
 
@@ -236,6 +394,32 @@ class MiniMaxImage(BaseTool):
         if inputs.get("seed") is not None:
             body["seed"] = int(inputs["seed"])
         return body
+
+    def _extract_image_urls(self, data: dict[str, Any]) -> list[str]:
+        """Pull source HTTPS URLs out of a MiniMax image response without downloading.
+
+        Useful when the agent wants to forward the URL to a downstream consumer
+        (e.g. minimax_video_direct's `first_frame_image` parameter) without
+        re-uploading the local file copy. Recognizes the same two sync shapes
+        that `_collect_image_bytes` does:
+          1. flat `images[].url`
+          2. nested `data.image_urls[]` (confirmed live MiniMax shape)
+
+        Returns [] for base64-only or async (task_id) responses — no URL
+        to surface in those shapes.
+        """
+        urls: list[str] = []
+        for img in data.get("images") or []:
+            url = img.get("url") if isinstance(img, dict) else None
+            if url:
+                urls.append(url)
+        if urls:
+            return urls
+        if isinstance(data.get("data"), dict):
+            for url in data["data"].get("image_urls") or []:
+                if isinstance(url, str):
+                    urls.append(url)
+        return urls
 
     def _collect_image_bytes(
         self, data: dict[str, Any], api_key: str
@@ -260,20 +444,48 @@ class MiniMaxImage(BaseTool):
             url = img.get("url") if isinstance(img, dict) else None
             if url:
                 urls.append(url)
-
-        # 2) Nested URL list: data.image_urls[] — actual MiniMax shape
-        if not urls and isinstance(data.get("data"), dict):
-            for url in data["data"].get("image_urls") or []:
-                if isinstance(url, str):
-                    urls.append(url)
-
         if urls:
+            _log.debug(
+                "_collect_image_bytes branch=flat_urls count=%d keys=%s",
+                len(urls),
+                _data_keys(data),
+            )
             out: list[bytes] = []
             for url in urls:
                 r = requests.get(url, timeout=60)
+                _log.debug(
+                    "_collect_image_bytes download url=%s status=%s bytes=%d",
+                    _redact(url),
+                    r.status_code,
+                    len(r.content),
+                )
                 r.raise_for_status()
                 out.append(r.content)
             return out
+
+        # 2) Nested URL list: data.image_urls[] — actual MiniMax shape
+        if isinstance(data.get("data"), dict):
+            for url in data["data"].get("image_urls") or []:
+                if isinstance(url, str):
+                    urls.append(url)
+            if urls:
+                _log.debug(
+                    "_collect_image_bytes branch=nested_urls count=%d keys=%s",
+                    len(urls),
+                    _data_keys(data),
+                )
+                out = []
+                for url in urls:
+                    r = requests.get(url, timeout=60)
+                    _log.debug(
+                        "_collect_image_bytes download url=%s status=%s bytes=%d",
+                        _redact(url),
+                        r.status_code,
+                        len(r.content),
+                    )
+                    r.raise_for_status()
+                    out.append(r.content)
+                return out
 
         # 3) Sync base64 inline
         b64_items: list[str] = []
@@ -283,17 +495,28 @@ class MiniMaxImage(BaseTool):
                 if b64:
                     b64_items.append(b64)
         if b64_items:
+            _log.debug(
+                "_collect_image_bytes branch=b64_inline count=%d", len(b64_items)
+            )
             return [base64.b64decode(b) for b in b64_items]
 
         # 4) Only now fall back to async polling — and only if the response
         #    looks async (task_id explicit, OR an id with no images at all).
         task_id = data.get("task_id") or data.get("id")
         if task_id:
+            _log.debug(
+                "_collect_image_bytes branch=async_poll task_id=%s keys=%s",
+                task_id,
+                _data_keys(data),
+            )
             polled = self._poll_task(task_id, api_key)
             if polled is not None:
                 return self._collect_image_bytes(polled, api_key)
             return []
 
+        _log.debug(
+            "_collect_image_bytes branch=none keys=%s", _data_keys(data)
+        )
         return []
 
     def _poll_task(
@@ -306,7 +529,9 @@ class MiniMaxImage(BaseTool):
         """
         url = self.POLL_ENDPOINT_TEMPLATE.format(task_id=task_id)
         deadline = time.time() + self.POLL_TIMEOUT_SECONDS
+        poll_idx = 0
         while time.time() < deadline:
+            poll_idx += 1
             try:
                 r = requests.get(
                     url,
@@ -315,16 +540,40 @@ class MiniMaxImage(BaseTool):
                 )
                 r.raise_for_status()
                 polled = r.json()
-            except Exception:
+            except Exception as poll_err:
+                _log.debug(
+                    "_poll_task poll=%d transient_error=%s elapsed_s=%.1f",
+                    poll_idx,
+                    type(poll_err).__name__,
+                    self.POLL_TIMEOUT_SECONDS - (deadline - time.time()),
+                )
                 time.sleep(self.POLL_INTERVAL_SECONDS)
                 continue
 
             status = (polled.get("status") or "").lower()
+            _log.debug(
+                "_poll_task poll=%d status=%s elapsed_s=%.1f keys=%s",
+                poll_idx,
+                status,
+                self.POLL_TIMEOUT_SECONDS - (deadline - time.time()),
+                _data_keys(polled),
+            )
             if status in {"succeeded", "success", "completed", "done"}:
                 return polled
             if status in {"failed", "error", "cancelled"}:
+                _log.warning(
+                    "_poll_task terminal_status=%s payload=%r",
+                    status,
+                    _redact(self._truncate(polled)),
+                )
                 return None
             time.sleep(self.POLL_INTERVAL_SECONDS)
+        _log.warning(
+            "_poll_task timeout task_id=%s polls=%d timeout_s=%.0f",
+            task_id,
+            poll_idx,
+            self.POLL_TIMEOUT_SECONDS,
+        )
         return None
 
     # ------------------------------------------------------------------
