@@ -22,6 +22,16 @@
 
 **Budget**: 6 probes, total cost ≈ ¥1.65 on H3-Max 480P 5s clips (if all 6 actually submit). Most probes don't submit; some exit on the pre-flight check. Worst-case real cost: 2 × 0.33 = ¥0.66 if you skip the I2V-with-image probes. Worst-case worst: 6 × 0.33 = ¥1.98.
 
+**Use `dry_run_tool` for pre-validation (zero cost)**:
+
+For any model-permission, duration-floor, or URL-format question, prefer the OM `dry_run_tool` MCP endpoint over a real `execute_tool` / curl submission. It returns `cost_usd` and `duration_seconds` estimates from the BaseTool's `estimate_cost` / `estimate_runtime` (no network calls to kapon). This is the correct way to verify capability without consuming kapon quota.
+
+> **Bad pattern** (consumes quota): running real curl POSTs to `https://models.kapon.cloud/minimaxi/v2/video_generation` to verify "does H3-Max accept 4s?" or "is H3 in my token's allowlist?".
+>
+> **Good pattern**: invoke `dry_run_tool(tool_name="minimax_h3_video", inputs={...})` via MCP, check `result.success` and `result.estimated_cost_usd`. The BaseTool's `estimate_cost` and `validate_inputs` run locally without contacting kapon. Only after dry-run passes should you call `execute_tool`.
+
+> **Note** (verified 2026-09-10, learned the hard way): the `dry_run_tool` exists in OM for exactly this reason. Real submission to kapon is irreversible — the task is queued, billed, and produces a real (possibly junk) video. Treat every real kapon call as money spent; treat `dry_run_tool` as free.
+
 ---
 
 ## Checklist (run in order, stop at first failure)
@@ -302,3 +312,4 @@ done
 - **When to update this doc**: any time a new kapon error code appears that isn't in the decision table, or any time a new model permission tier is added in kapon console.
 - **Owner**: whoever maintains `tools/video/minimax_h3_video.py` owns this doc.
 - **Companion runtime**: this checklist runs against `https://models.kapon.cloud/minimaxi/v2/`. If kapon rotates their base URL, update all curl URLs in this doc and Probe 1.
+- **Cost discipline (learned the hard way)**: never run a real kapon submission to "verify" something that can be answered by `dry_run_tool` or by reading `tools/video/minimax_h3_video.py` source. kapon calls cost money and are not reversible. The `dry_run_tool` MCP endpoint exists precisely to prevent this category of waste.
