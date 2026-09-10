@@ -1,7 +1,28 @@
-"""Scene detection tool wrapping PySceneDetect.
+"""Scene detection tool.
 
-Detects scene boundaries and shot changes in video. Falls back to
-FFmpeg-based detection if PySceneDetect is not installed.
+Detects scene boundaries and shot changes in video. Ships with a
+**PySceneDetect** primary path (Charles University Prague–style Content/
+Threshold/Adaptive detectors) and an **FFmpeg-only fallback** path based
+on ffmpeg's `scene` filter. The fallback path is intentional and always
+available — it trades accuracy (no fade/dissolve detection, weaker on
+low-contrast hard cuts, more false positives under flash/strobe/fast
+motion) for zero extra Python dependencies.
+
+Behaviour at runtime:
+
+* If `scenedetect` is importable → uses PySceneDetect with the requested
+  detector. ``result.data["method"] == "pyscenedetect"``.
+* If `scenedetect` is NOT importable → falls back to FFmpeg's `scene`
+  filter. ``result.data["method"] == "ffmpeg"`` AND
+  ``result.data["downgraded"] is True`` AND
+  ``result.data["capability_loss"]`` is a non-empty list naming what the
+  fallback cannot detect (fades, low-contrast hard cuts, etc.).
+
+Downstream consumers (e.g. ``video_analyzer``, ``video-reference-analyst``)
+should branch on ``downgraded`` and warn the user when True, or
+re-prompt for `pip install scenedetect[opencv]`. See
+``docs/transnetv2-vs-pyscenedetect-2026-09-10.md`` for the failure-mode
+analysis that motivates this distinction.
 """
 
 from __future__ import annotations
@@ -35,10 +56,22 @@ class SceneDetect(BaseTool):
     execution_mode = ExecutionMode.SYNC
     determinism = Determinism.DETERMINISTIC
 
+    # Hard requirement: FFmpeg is needed even for the primary PySceneDetect
+    # path (PySceneDetect shells out to ffmpeg to decode frames).
     dependencies = ["cmd:ffmpeg"]
+    # Soft upgrades — when present, we get a real detector and the fallback
+    # is not used.  Tracked as a class constant (NOT ``dependencies``) so
+    # ``check_dependencies()`` does not raise on hosts where these are
+    # absent: the FFmpeg fallback is a real, working alternative.
+    _OPTIONAL_DEPENDENCIES = ["python:scenedetect"]
     install_instructions = (
-        "FFmpeg is required. For better detection install PySceneDetect:\n"
-        "pip install scenedetect[opencv]"
+        "FFmpeg is required (used for both decode and the FFmpeg fallback path). "
+        "For better accuracy — fade/dissolve detection, low-contrast hard cuts, "
+        "fewer false positives under flash/strobe/fast motion — install "
+        "PySceneDetect with OpenCV:\n"
+        "    pip install scenedetect[opencv]\n"
+        "Until then, the tool runs the FFmpeg `scene` filter fallback and "
+        "flags the result as `downgraded=True` with a `capability_loss` list."
     )
     agent_skills = ["ffmpeg"]
 
@@ -47,6 +80,17 @@ class SceneDetect(BaseTool):
         "detect_content_changes",
         "detect_threshold",
     ]
+
+    # Capability-loss catalogue: surfaced in ToolResult.data["capability_loss"]
+    # whenever the FFmpeg fallback path runs.  Consumers (e.g.
+    # video_analyzer, video-reference-analyst) use this to flag the result
+    # as lower-confidence and to recommend upgrading PySceneDetect.
+    _FFMPEG_FALLBACK_CAPABILITY_LOSS = (
+        "fade/dissolve detection (PySceneDetect-only)",
+        "low-contrast hard cuts (e.g. interview cutaways)",
+        "false-positive suppression under flash/strobe/light flicker",
+        "fast-motion / whip-pan discrimination (sports, action)",
+    )
 
     input_schema = {
         "type": "object",
@@ -57,10 +101,21 @@ class SceneDetect(BaseTool):
                 "type": "string",
                 "enum": ["content", "threshold", "adaptive"],
                 "default": "content",
+                "description": (
+                    "Detector strategy. Only honoured when PySceneDetect is "
+                    "installed; the FFmpeg fallback always uses the ffmpeg "
+                    "`scene` filter (controlled by `threshold`, default 0.3)."
+                ),
             },
             "threshold": {
                 "type": "number",
-                "description": "Detection threshold (method-dependent)",
+                "description": (
+                    "Detection threshold (method-dependent). "
+                    "PySceneDetect content detector default 27.0; "
+                    "PySceneDetect threshold detector default 12.0; "
+                    "PySceneDetect adaptive detector default 3.0; "
+                    "FFmpeg `scene` filter default 0.3 (range 0.0-1.0)."
+                ),
             },
             "min_scene_length_seconds": {
                 "type": "number",
@@ -142,6 +197,16 @@ class SceneDetect(BaseTool):
                 "scene_count": len(scenes),
                 "scenes": scenes,
                 "method": "pyscenedetect" if use_pyscenedetect else "ffmpeg",
+                # `downgraded` is the single field downstream should branch on.
+                # True  → FFmpeg fallback ran; see capability_loss for what
+                #          is NOT detected (fades, low-contrast cuts, ...).
+                # False → PySceneDetect ran; full detector accuracy.
+                "downgraded": not use_pyscenedetect,
+                "capability_loss": (
+                    list(self._FFMPEG_FALLBACK_CAPABILITY_LOSS)
+                    if not use_pyscenedetect
+                    else []
+                ),
                 "output": str(output_path),
                 "status": status,
                 "diagnostics": diagnostics,
