@@ -350,6 +350,8 @@ Want more? See the full **[Prompt Gallery](PROMPT_GALLERY.md)** for tested promp
 
 Each pipeline is a complete production workflow, from idea to finished video.
 
+> **Full roster + decision tree + offline-capability matrix** → see [`docs/PIPELINES-AND-OFFLINE-CAPABILITIES.md`](docs/PIPELINES-AND-OFFLINE-CAPABILITIES.md). The doc index is at [`docs/INDEX.md`](docs/INDEX.md).
+
 | Pipeline | What It Produces | Best For |
 |----------|-----------------|----------|
 | **Animated Explainer** | AI-generated explainer with research, narration, visuals, music | Educational content, tutorials, topic breakdowns |

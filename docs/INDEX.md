@@ -1,0 +1,24 @@
+# docs/ — Index
+
+> Pointer file. Every entry below lives under `docs/`.
+
+## Core references (read first)
+
+- [`PIPELINES-AND-OFFLINE-CAPABILITIES.md`](PIPELINES-AND-OFFLINE-CAPABILITIES.md) — **All 14 production pipelines with usage + decision tree; OM's full capability matrix split into "needs external paid API" vs "fully offline-capable on this host"**. Start here when picking a pipeline or planning offline work.
+- [`MUSIC-ISSUES-AND-FIXES.md`](MUSIC-ISSUES-AND-FIXES.md) — **Audio production gotchas**: Kokoro 40s warm-up per call, MusicGen critical slowness on CPU + offline-mode fix, WhisperX base model homophone errors, license traps for commercial获客 videos, plus the recipe to reuse the already-generated `/tmp/musicgen_test.wav`.
+- [`PROVIDERS.md`](PROVIDERS.md) — every paid provider with setup, pricing, free-tier notes.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — full technical reference (decision log, schema internals).
+- [`PR_REVIEW_GUIDE.md`](PR_REVIEW_GUIDE.md) — review checklist for landing changes.
+
+## Operational guides
+
+- [`tweak-server.md`](tweak-server.md) — end-user render-tweak sidecar protocol.
+- [`single-port-arch.md`](single-port-arch.md) — `:8900` vclaw-fronted topology, SSE streaming fix, auth split.
+
+## Project / production logs
+
+- `projects/`-specific notes live in each project's `events.jsonl`, `decision_log.json`, and per-session handoff files. See also `../HANDOFF-2026-09-10.md` for the most recent cross-session handoff.
+
+## Test plans / QA
+
+- `../QA_PLAN.md` — QA plan referenced from project CLAUDE.md; consult before adding tests under `tests/qa/`.
