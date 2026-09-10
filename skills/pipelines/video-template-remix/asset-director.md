@@ -76,6 +76,41 @@ if hits:
 
 This filter is a contract, not a suggestion. The hailuo-broll plan for `projects/remix-luggage-v1` had to manually rewrite the L02 prompt for exactly this reason; future runs should not have to discover it from scratch.
 
+### 4. Generation-Mode Override (read decision_log before falling back to T2V)
+
+For any scene whose `type == "generated"` (or where `required_assets[].source == "generate"`), the agent MUST consult `artifacts/decision_log.json` before calling a video-generation tool. The structured decision record — not the free-text `description` or `scene_plan.metadata.generation_overrides` bag — is the source of truth for *how* to generate the clip:
+
+```python
+import json
+from pathlib import Path
+
+decision_log = json.loads(Path(f"projects/{project_id}/artifacts/decision_log.json").read_text())
+
+def find_generation_decision(scene_id: str) -> dict | None:
+    """Find the decision_log entry whose subject names this scene's generation mode."""
+    for d in decision_log.get("decisions", []):
+        if d.get("category") != "provider_selection":
+            continue
+        if scene_id in d.get("subject", ""):
+            return d
+    return None
+
+# For each generated scene:
+#   1. Look up decision_log entry by category=provider_selection + subject containing scene_id.
+#   2. From the SELECTED option_id + the entry's `reason` (or label) extract:
+#        - mode: "I2V" | "T2V"
+#        - model: e.g. "MiniMax-H3-Max"
+#        - first_frame_image: relative path or HTTPS URL (I2V only)
+#        - duration_seconds, ratio, resolution
+#   3. Call minimax_video_direct accordingly:
+#        - T2V → no first_frame_image
+#        - I2V → pass first_frame_image as inputs["first_frame_image"] (HTTP(S) URL or staged path)
+#   4. If no matching decision_log entry exists, fall back to T2V and log a NEW
+#      decision_log entry with category="provider_selection" recording the default.
+```
+
+If the decision_log entry and `scene_plan.metadata.generation_overrides.scNN` conflict, **decision_log wins** — that is the whole point of moving the decision into a structured audit record. The override block in scene_plan is a mirror for back-compat with tools that haven't been updated yet, not a competing source of truth.
+
 ## Process
 Resolve user-provided or licensed assets first. For each replace slot, record source slot, asset path, provenance, rights, aspect ratio, duration, crop/fill behavior, and whether generation was approved. Fit replacement media to the original hold; reject assets that require timing changes unless edit approval explicitly allows it. Preserve source audio and subtitles as assets unless marked replace.
 
