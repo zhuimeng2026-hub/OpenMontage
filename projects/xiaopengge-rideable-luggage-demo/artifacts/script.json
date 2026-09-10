@@ -1,0 +1,110 @@
+{
+  "version": "1.0",
+  "title": "小鹏哥可骑行旅行箱｜60秒 TikTok 电商宣传片",
+  "total_duration_seconds": 60,
+  "voice_performance": {
+    "performance_intent": "中文女声，面向欧美生活方式电商广告，亲切、清晰、有轻微惊喜感，不夸张承诺。",
+    "pacing_profile": "conversational",
+    "energy_curve": "前6秒快速建立好奇，中段稳定解释功能，结尾轻快收束。",
+    "pause_policy": "每句之间保留短停顿；产品名和‘骑行’前后略停，字幕以短句同步。",
+    "sample_section_id": "s03",
+    "provider_notes": {
+      "tts_provider": "Kokoro",
+      "voice": "zf_xiaobei",
+      "subtitle_language": "zh-CN",
+      "claim_policy": "只描述画面可证明的功能与使用场景，不添加速度、续航、承重、认证或航空携带承诺。"
+    }
+  },
+  "sections": [
+    {
+      "id": "s01",
+      "label": "Hook",
+      "text": "出门旅行，行李箱也可以更聪明。",
+      "start_seconds": 0,
+      "end_seconds": 11,
+      "speaker_directions": "前半句略带悬念，后半句自然落下。",
+      "delivery_cues": {"pace": "brisk", "energy": "curious", "emphasis_words": ["更聪明"], "pause_after_seconds": 0.5, "delivery_note": "适合开头三秒抓住注意力。", "provider_text": "出门旅行，行李箱也可以更聪明。"},
+      "enhancement_cues": [{"type": "overlay", "description": "主视觉上叠加‘旅行更聪明’；不把文字写进图片。", "timestamp_seconds": 2}],
+      "source_ref": "product_brief:user-provided-product-concept"
+    },
+    {
+      "id": "s02",
+      "label": "Product promise",
+      "text": "小鹏哥，把收纳、移动和骑行装进一只箱子。",
+      "start_seconds": 11,
+      "end_seconds": 17,
+      "speaker_directions": "品牌名清楚，语气像 TikTok 商品介绍。",
+      "delivery_cues": {"pace": "conversational", "energy": "bright", "emphasis_words": ["小鹏哥", "骑行"], "pause_before_seconds": 0.2, "pause_after_seconds": 0.3, "delivery_note": "品牌首次出现要清楚。", "provider_text": "小鹏哥，把收纳、移动和骑行装进一只箱子。"},
+      "source_ref": "product_brief:user-provided-brand-and-product"
+    },
+    {
+      "id": "s03",
+      "label": "Ride demonstration",
+      "text": "打开座垫，握住车把，穿过平整路面。",
+      "start_seconds": 17,
+      "end_seconds": 23,
+      "speaker_directions": "动作词逐个说清楚，‘平整路面’轻微强调。",
+      "delivery_cues": {"pace": "measured", "energy": "confident", "emphasis_words": ["打开座垫", "握住车把", "平整路面"], "pause_after_seconds": 0.2, "delivery_note": "与唯一动态视频严格同步。", "provider_text": "打开座垫，握住车把，穿过平整路面。"},
+      "enhancement_cues": [{"type": "broll", "description": "唯一6秒文生视频：成人在酒店外平整路面上骑行演示，镜头稳定，动作简单。", "timestamp_seconds": 17}],
+      "source_ref": "product_brief:user-provided-rideable-feature"
+    },
+    {
+      "id": "s04",
+      "label": "Pull mode",
+      "text": "不骑时，收起车把，照常拖行。",
+      "start_seconds": 23,
+      "end_seconds": 29,
+      "speaker_directions": "转为轻松、实用的语气。",
+      "delivery_cues": {"pace": "conversational", "energy": "reassuring", "emphasis_words": ["不骑时", "照常拖行"], "pause_after_seconds": 0.3, "delivery_note": "对应拖行静帧，不暗示电机状态之外的参数。", "provider_text": "不骑时，收起车把，照常拖行。"},
+      "source_ref": "product_brief:generated-scene-06-walk"
+    },
+    {
+      "id": "s05",
+      "label": "Charging",
+      "text": "接上电源，为下一段旅程补充能量。",
+      "start_seconds": 29,
+      "end_seconds": 35,
+      "speaker_directions": "温和解释，不说充电时长或续航。",
+      "delivery_cues": {"pace": "measured", "energy": "calm", "emphasis_words": ["接上电源"], "pause_after_seconds": 0.3, "delivery_note": "只描述画面可见的充电动作。", "provider_text": "接上电源，为下一段旅程补充能量。"},
+      "source_ref": "product_brief:generated-scene-03-charge"
+    },
+    {
+      "id": "s06",
+      "label": "Storage",
+      "text": "侧开空间，衣物和随身物品一目了然。",
+      "start_seconds": 35,
+      "end_seconds": 41,
+      "speaker_directions": "清楚、利落，给收纳画面留出观察时间。",
+      "delivery_cues": {"pace": "conversational", "energy": "useful", "emphasis_words": ["侧开空间", "一目了然"], "pause_after_seconds": 0.3, "delivery_note": "不宣称具体容量。", "provider_text": "侧开空间，衣物和随身物品一目了然。"},
+      "source_ref": "product_brief:generated-scene-04-storage"
+    },
+    {
+      "id": "s07",
+      "label": "Travel contexts",
+      "text": "放进后备箱，抵达酒店，咖啡街角，随时切换。",
+      "start_seconds": 41,
+      "end_seconds": 53,
+      "speaker_directions": "连续场景切换时保持节奏，‘随时切换’稍微上扬。",
+      "delivery_cues": {"pace": "brisk", "energy": "lifestyle", "emphasis_words": ["后备箱", "酒店", "随时切换"], "pause_after_seconds": 0.2, "delivery_note": "覆盖后备箱、酒店、咖啡场景。", "provider_text": "放进后备箱，抵达酒店，咖啡街角，随时切换。"},
+      "source_ref": "product_brief:generated-scenes-05-to-08"
+    },
+    {
+      "id": "s08",
+      "label": "CTA",
+      "text": "小鹏哥，让每次出发更轻松。",
+      "start_seconds": 53,
+      "end_seconds": 60,
+      "speaker_directions": "品牌收束，温暖、确定，不喊口号。",
+      "delivery_cues": {"pace": "measured", "energy": "warm", "emphasis_words": ["小鹏哥", "更轻松"], "pause_before_seconds": 0.3, "pause_after_seconds": 0.6, "delivery_note": "末尾留出 CTA 和品牌标识停留。", "provider_text": "小鹏哥，让每次出发更轻松。"},
+      "enhancement_cues": [{"type": "overlay", "description": "品牌名、简短行动提示和‘演示款’小字；所有文字由后期字幕/图层完成。", "timestamp_seconds": 57}],
+      "source_ref": "product_brief:user-provided-brand"
+    }
+  ],
+  "metadata": {
+    "platform": "TikTok-style vertical social commerce demo",
+    "aspect_ratio": "9:16",
+    "visual_duration_plan": "10 still images plus one 6-second text-to-video shot",
+    "narration_character_count_intent": "约145个中文字符，适合60秒留白式电商剪辑",
+    "not_included_claims": ["速度", "续航", "承重", "航空携带许可", "防水等级", "安全认证"]
+  }
+}
