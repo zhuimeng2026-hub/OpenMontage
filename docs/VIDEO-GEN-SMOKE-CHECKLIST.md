@@ -208,9 +208,9 @@ done
 ```
 
 **Expected** `(verified 2026-09-10)`:
-- `duration=1` → `http=400 {"code":"invalid_request","message":"duration must be between 5 and 15 seconds"}`
-- `duration=4` → same 400 (H3-Max floor is 5s, not 4s)
-- For H3 (non-Max), floor is 4s — try `duration=3` instead, expect 400.
+- `duration=1` → `http=400 {"code":"invalid_request","message":"duration must be between 5 and 15 seconds"}` (H3-Max floor)
+- `duration=4` → same 400 for H3-Max; **for H3 (non-Max), 4s is the floor and 200** (verified 2026-09-10 by re-test)
+- For H3, floor is 4s — try `duration=3`, expect `http=400 {"code":"invalid_request","message":"duration must be between 4 and 15 seconds"}`
 
 ### Reference media on H3 (NOT H3-Max)
 
@@ -278,7 +278,8 @@ done
 | `403 model_not_allowed` | token lacks model permission in kapon console | Enable model in kapon console, re-run Probe 1 |
 | `401` | token wrong / rotated | Re-issue token, re-run Probe 1 |
 | `400 illegal base64 at input byte 4` | data URI with bad Base64 | Don't use data URI; use ocbot mirror |
-| `400 duration must be between 5 and 15` | duration too low for H3-Max | Set duration ≥ 5 |
+| `400 duration must be between 5 and 15` (H3-Max) | duration < 5 (H3-Max floor) | Set duration ≥ 5; or switch to H3 if you need 4s |
+| `400 duration must be between 4 and 15` (H3) | duration < 4 (H3 floor) | Set duration ≥ 4 |
 | `400 prompt > 7000 chars` (implicit via kapon payload size) | prompt too long | Trim prompt |
 | `2013 media url unreachable` | URL on anti-bot-blocked CDN (imgbb) or non-HTTPS | Mirror to ocbot.aixfs.com |
 | `task polled: failed` with 2013 | kapon couldn't fetch first_frame_image mid-poll | Probe 5 should have caught this; check URL |
