@@ -1,0 +1,142 @@
+identity:
+  name: "Shipinhao Commerce"
+  category: custom
+  mood: bright, trustworthy, high-energy, shoppable
+  pace: fast
+  best_for: "WeChat Channels (视频号) 带货短视频 — 商品卡挂链的 30-90s 竖屏产品演示片"
+
+# ---------------------------------------------------------------------------
+# delivery — 投放规格。非 schema 必需段，但下游 compose / subtitle 阶段应读取。
+# 数字针对「视频号 + 挂商品卡」这一种最紧的场景标定；不带货请用 safe_area_no_card。
+# ---------------------------------------------------------------------------
+delivery:
+  platform: "wechat_channels"
+  commerce: true
+  canvas:
+    width: 1080
+    height: 1920
+    aspect_ratio: "9:16"
+    fps: 30
+  encode:
+    container: mp4
+    video_codec: h264
+    profile: high
+    pixel_format: yuv420p
+    video_bitrate: "7M"
+    audio_codec: aac
+    audio_bitrate: "128k"
+    audio_sample_rate: 44100
+    loudness_target_lufs: -16
+  duration:
+    recommended_seconds: [30, 60]
+    hard_max_seconds: 300
+
+  # 单位 px @ 1080x1920。任何字幕/角标/CTA 文字都不得进入 reserve 区域。
+  safe_area:
+    bottom_reserve: 470   # 账号名 + 文案 + 展开按钮 (~330) + 商品卡 (~140)
+    right_reserve: 180    # 点赞 / 评论 / 转发 / 关注 竖排交互栏
+    top_reserve: 180      # 状态栏 + 顶部 tab
+    left_reserve: 48
+  safe_area_no_card:
+    bottom_reserve: 350
+    right_reserve: 180
+    top_reserve: 180
+    left_reserve: 48
+
+  # 由 safe_area 推导，供 ffmpeg drawtext / Remotion 直接引用
+  text_zone:
+    x_min: 48
+    x_max: 900          # 1080 - 180
+    y_min: 180
+    y_max: 1450         # 1920 - 470
+  subtitle:
+    baseline_y: 1380
+    anchor: bottom-center
+    max_chars_per_line: 14
+    max_lines: 2
+    min_font_px: 52
+    style: "白字 + 3px 深灰描边 + 半透明黑底条(圆角12px, 不透明度0.35)"
+  cta:
+    placement: "y 1150-1400 之间居中；禁止贴底，会被商品卡吞掉"
+    rule: "口播 CTA 与画面 CTA 必须同帧出现，且指向商品卡而非评论区"
+
+  cover:
+    grid_crop: "1:1 中心裁切 — 主页九宫格"
+    immersive: "3:4 (1080x1440) — 沉浸式 / 分享卡"
+    rule: "产品主体与标题大字必须落在中心 1080x1080 内，否则九宫格裁切会切掉标题"
+    export_from: "hero 场景单独出图，不要直接截帧"
+
+  i2v_rule: >-
+    图生视频(I2V)的首帧图必须先按本模板的 safe_area 构好图再送生成，
+    否则生成片段无法二次调整构图。
+
+visual_language:
+  color_palette:
+    primary: ["#FF3B30", "#FF6B35"]
+    accent: ["#FFD60A", "#00C853"]
+    background: "#FFFFFF"
+    text: "#1A1A1A"
+    muted: "#6E6E73"
+  composition: >-
+    竖构图中上部承载产品主体（y 300-1150），下部留给字幕与 CTA。
+    产品永远不压在右侧 180px 交互栏下。关键卖点文字居中偏上。
+  texture: 干净明亮，轻微通透感，无颗粒无暗角
+
+typography:
+  headings:
+    font: "Source Han Sans SC"
+    weight: 900
+    tracking: "-0.01em"
+  body:
+    font: "Source Han Sans SC"
+    weight: 500
+    line_height: 1.4
+  stat_card:
+    font: "Source Han Sans SC"
+    weight: 900
+    size_multiplier: 2.6
+  scale_system: "major_third"
+  weight_matrix:
+    title: 900
+    heading: 700
+    body: 500
+    caption: 400
+
+motion:
+  transitions: [cut, fade, whip-pan]
+  animation_style: "干脆利落，硬切为主，无弹跳缓动；Ken Burns 推进幅度 ≤ 8%"
+  pacing_rules:
+    min_scene_hold_seconds: 2.0
+    max_scene_hold_seconds: 7.0
+    text_card_hold_seconds: 2.5
+    stat_card_hold_seconds: 2.5
+    transition_duration_seconds: 0.25
+  entrance: "由下往上 12px 位移 + 淡入，180ms"
+  exit: "直接硬切"
+
+audio:
+  voice_style: "亲切、语速偏快、有推荐感但不喊麦；中文女声"
+  music_mood: "明亮轻快的电子流行，鼓点清晰便于卡点"
+  music_volume: 0.07
+  sfx_style: "转场轻 whoosh，卖点出字配短促 pop"
+  ducking_threshold_db: -6
+
+asset_generation:
+  image_prompt_prefix: >-
+    竖构图 9:16 商业产品摄影，明亮自然光，干净背景，产品主体位于画面中上部，
+    画面下方三分之一保持简洁留白以便叠加字幕，
+  image_negative_prompt: "文字水印, 拼接边框, 暗调, 杂乱背景, 低分辨率, 主体贴底, 主体贴右边缘"
+  consistency_anchors:
+    - "同一产品在所有场景保持一致外形、配色与品牌标记"
+    - "全片统一明亮通透的白天光线"
+    - "画面下方 470px 与右侧 180px 永远保持视觉简洁（无主体、无文字）"
+
+quality_rules:
+  - "输出必须为 1080x1920 / H.264 / yuv420p，不接受 768 宽的中间产物直接交付"
+  - "任何文字的最低基线不得超过 y=1450；字幕基线固定 y=1380"
+  - "任何文字/主体不得进入右侧 180px 交互栏区域"
+  - "封面单独出图，主体必须落在中心 1:1 区域内"
+  - "画面 CTA 与口播 CTA 必须同帧，且指向商品卡"
+  - "整片响度归一到 -16 LUFS，BGM 在人声段落必须 ducking"
+  - "I2V 片段上采样倍率 > 1.3x 时需人工看片确认，必要时重生成而非硬拉"
+  - "单场景静止时长不得超过 7s，30-60s 带货片节奏必须紧"

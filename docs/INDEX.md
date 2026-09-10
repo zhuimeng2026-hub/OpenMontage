@@ -4,6 +4,7 @@
 
 ## Core references (read first)
 
+- [`om-concepts-pipeline-playbook-template.md`](om-concepts-pipeline-playbook-template.md) — **新人第一站：管道 / 流水线 / 模板的概念科普**。管道==流水线（同一个 pipeline）；"模板"在 OM 里是歧义词，对应 style playbook、`video-template-remix` 管道、Remotion TSX 三个不同的东西。含三层分工对照表、`compatible_playbooks` 接口、视频号带货参考组合与安全区、"为什么不直接用 Remotion"、常见误区速查、自定义 playbook 最小流程。
 - [`PIPELINES-AND-OFFLINE-CAPABILITIES.md`](PIPELINES-AND-OFFLINE-CAPABILITIES.md) — **All 14 production pipelines with usage + decision tree; OM's full capability matrix split into "needs external paid API" vs "fully offline-capable on this host"**. Start here when picking a pipeline or planning offline work.
 - [`MUSIC-ISSUES-AND-FIXES.md`](MUSIC-ISSUES-AND-FIXES.md) — **Audio production gotchas**: Kokoro 40s warm-up per call, MusicGen critical slowness on CPU + offline-mode fix, WhisperX base model homophone errors, license traps for commercial获客 videos, plus the recipe to reuse the already-generated `/tmp/musicgen_test.wav`.
 - [`RESOURCES.md`](RESOURCES.md) — **Canonical handoff index of all available assets on 2026-09-10** (4 Pixabay BGM candidates with hashes, MusicGen outputs, TTS tests, final mp4, recipe to build the office-demo version with `pixabay_happy.mp3` as primary BGM pick). Point another LLM at this file when scripting a new获客 video.

@@ -54,6 +54,7 @@ compatible_playbooks:
   also_works:
     - clean-professional
     - minimalist-diagram
+    - shipinhao-commerce      # WeChat Channels commerce vertical; carries delivery.safe_area
   custom_allowed: true
 
 stages:
