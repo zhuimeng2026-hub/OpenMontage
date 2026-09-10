@@ -115,6 +115,46 @@ if not _health_log.handlers:
     ))
     _health_log.addHandler(_health_handler)
 
+# ---------------------------------------------------------------------------
+# Generation-detail structured log (logs/gen_detail.log)
+# ---------------------------------------------------------------------------
+# Always-on INFO-level structured events emitted by image / video generation
+# tools (minimax_image, minimax_video, future peers). One event per call,
+# cheap enough for daily monitoring: tool / provider / model / prompt_snippet
+# / operation / cost / duration / success. Channels-separated from
+# mcp_health.log so 30s heartbeats stay clean.
+#
+# Tools import this logger by name (``logging.getLogger("openmontage.gen_detail")``)
+# so the handler setup must happen BEFORE any tool import. The config below
+# mirrors the mcp_health setup — locked-file fallback to a timestamped file,
+# NullHandler if even that fails, so a permission error never crashes startup.
+_gen_detail_log = logging.getLogger("openmontage.gen_detail")
+_gen_detail_log.setLevel(logging.INFO)
+_gen_detail_log.propagate = False
+if not _gen_detail_log.handlers:
+    _gen_candidates = [
+        _LOG_DIR / "gen_detail.log",
+        _LOG_DIR / f"gen_detail_{int(time.time())}.log",
+    ]
+    _gen_handler: Optional[logging.Handler] = None
+    for _gp in _gen_candidates:
+        try:
+            _gen_handler = RotatingFileHandler(
+                _gp,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            break
+        except (PermissionError, OSError):
+            continue
+    if _gen_handler is None:
+        _gen_handler = logging.NullHandler()
+    _gen_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S"
+    ))
+    _gen_detail_log.addHandler(_gen_handler)
+
 _PROCESS_START = time.time()
 _tool_pending_lock = threading.Lock()
 _tool_pending: dict[str, int] = {}  # tool name -> 在飞工具调用数（submit++ / done--）
