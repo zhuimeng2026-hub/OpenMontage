@@ -6,7 +6,7 @@ PIP = $(RUN_PYTHON) -m pip
 
 .DEFAULT_GOAL := setup
 
-.PHONY: setup install install-dev install-gpu test test-contracts test-integration lint clean preflight demo demo-list hyperframes-doctor hyperframes-warm musicgen-fetch venv ensure-venv tweak-server tweak-server-stop
+.PHONY: setup install install-dev install-gpu test test-contracts test-integration lint clean preflight demo demo-list hyperframes-doctor hyperframes-warm musicgen-fetch transnetv2-fetch venv ensure-venv tweak-server tweak-server-stop
 
 # ---- Virtual environment ----
 
@@ -127,6 +127,18 @@ musicgen-fetch:
 	@echo "    ~300MB download, one-time. After this, music_gen_local works offline."
 	$(RUN_PYTHON) -c "from transformers import pipeline; pipeline('text-to-audio', model='facebook/musicgen-small')"
 	@echo "==> MusicGen weights cached."
+
+# TransNetV2 sanity-check — the transnetv2_pytorch PyPI wheel bundles
+# the converted .pth weights, so there is no separate fetch step. This
+# target just verifies the package is importable and the model loads
+# (so scene_detect can route to it as the highest-accuracy backend).
+# CPU-friendly: 7.6M params, ~80MB wheels, no GPU required.
+# See docs/transnetv2-vs-pyscenedetect-2026-09-10.md for context.
+transnetv2-fetch:
+	@echo "==> Verifying TransNetV2 (transnetv2_pytorch) is installed and importable..."
+	@echo "    The PyPI wheel bundles the converted .pth weights — no separate fetch step."
+	$(RUN_PYTHON) -c "from transnetv2_pytorch import TransNetV2; m = TransNetV2(); total = sum(p.numel() for p in m.parameters()); print(f'    TransNetV2 loaded OK ({total/1e6:.1f}M params, device={m._detect_best_device()})')"
+	@echo "==> TransNetV2 ready."
 
 demo: ensure-venv
 	@echo "==> Rendering zero-key demo videos (no API keys needed)..."

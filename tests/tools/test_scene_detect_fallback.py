@@ -51,17 +51,31 @@ def _build_synthetic_cut_clip(path: Path, duration_seconds: float = 5.0) -> Path
 
 
 class SceneDetectFallbackTests(unittest.TestCase):
-    """Pin the FFmpeg-fallback branch end-to-end."""
+    """Pin the FFmpeg-fallback branch end-to-end.
 
-    def test_fallback_runs_when_pyscenedetect_missing(self):
-        """Without PySceneDetect the tool must still complete via FFmpeg."""
+    These tests pre-date the TransNetV2 backend (added 2026-09-10) and
+    pin the behaviour that matters on hosts where neither PySceneDetect
+    nor TransNetV2 is installed: the tool must still run end-to-end via
+    FFmpeg's `scene` filter, must surface `downgraded=True` +
+    `capability_loss` so downstream consumers can warn the user, and
+    must not crash on PySceneDetect-only `method` values.
+
+    The complementary cases — TransNetV2 path and PySceneDetect path —
+    are covered by ``test_scene_detect_transnetv2.py``. Together they
+    pin all three branches of the new `_select_backend` decision in
+    `SceneDetect.execute()`.
+    """
+
+    def test_fallback_runs_when_no_upgraded_backend_available(self):
+        """Without TransNetV2 or PySceneDetect the tool must still complete
+        via FFmpeg."""
         detector = SceneDetect()
-        # Pin the assumption this test guards: in the host that runs this
-        # suite, PySceneDetect is not installed. If that ever flips, this
-        # test still passes (we are testing the FFmpeg branch) but a new
-        # test should be added for the PySceneDetect branch.
-        self.assertFalse(detector._has_pyscenedetect(),
-                         "PySceneDetect appears installed — fallback path test is moot")
+        # Force the FFmpeg fallback by mocking both soft deps as absent.
+        # On the host that runs this suite TransNetV2 IS installed (and
+        # PySceneDetect may or may not be); this test cares about the
+        # fallback branch specifically, so we override the runtime checks.
+        detector._has_transnetv2 = Mock(return_value=False)
+        detector._has_pyscenedetect = Mock(return_value=False)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             tmp = Path(temp_dir)
@@ -92,6 +106,11 @@ class SceneDetectFallbackTests(unittest.TestCase):
         consumers that read the artifact (rather than ToolResult.data)
         cannot miss partial failure."""
         detector = SceneDetect()
+        # Force the FFmpeg fallback so this test exercises the
+        # downgraded-artifact path regardless of which backends are
+        # actually installed on the host.
+        detector._has_transnetv2 = Mock(return_value=False)
+        detector._has_pyscenedetect = Mock(return_value=False)
         with tempfile.TemporaryDirectory() as temp_dir:
             tmp = Path(temp_dir)
             clip = _build_synthetic_cut_clip(tmp / "merged.mp4", duration_seconds=5.0)
@@ -108,10 +127,22 @@ class SceneDetectFallbackTests(unittest.TestCase):
         self.assertIsInstance(payload["scenes"], list)
         self.assertGreaterEqual(len(payload["scenes"]), 1)
 
-    def test_pyscenedetect_path_does_not_set_downgraded(self):
-        """When PySceneDetect is the active backend, downgrade fields
-        must read as the non-degraded case."""
+    def test_pyscenedetect_path_is_mid_tier_and_reports_downgraded(self):
+        """When PySceneDetect is the active backend (e.g. user forced
+        ``method="content"`` and TransNetV2 is unavailable), downgrade
+        fields must reflect the mid-tier contract:
+
+        * ``method == "pyscenedetect"``
+        * ``downgraded is True`` (TransNetV2 is the only non-downgraded path)
+        * ``capability_loss`` is the *smaller* PySceneDetect-specific list,
+          NOT the FFmpeg fallback list.
+
+        See ``docs/transnetv2-vs-pyscenedetect-2026-09-10.md`` § Part 1
+        for the failure-mode analysis that motivates the mid-tier
+        classification.
+        """
         detector = SceneDetect()
+        detector._has_transnetv2 = Mock(return_value=False)
         detector._has_pyscenedetect = Mock(return_value=True)
         detector._detect_pyscenedetect = Mock(return_value=[
             {"index": 0, "start_seconds": 0.0, "end_seconds": 2.0,
@@ -123,14 +154,23 @@ class SceneDetectFallbackTests(unittest.TestCase):
             out = Path(temp_dir) / "scenes.json"
             result = detector.execute({
                 "input_path": str(input_path),
+                "method": "content",          # force PySceneDetect
                 "output_path": str(out),
             })
 
         self.assertTrue(result.success)
         self.assertEqual(result.data["method"], "pyscenedetect")
-        self.assertFalse(result.data["downgraded"],
-                         "downgraded must be False on the PySceneDetect path")
-        self.assertEqual(result.data["capability_loss"], [])
+        self.assertTrue(result.data["downgraded"],
+                        "PySceneDetect path is mid-tier — downgraded must be True")
+        self.assertIsInstance(result.data["capability_loss"], list)
+        self.assertGreater(len(result.data["capability_loss"]), 0,
+                           "PySceneDetect path must list its capability loss")
+        # Mid-tier loss is strictly smaller than the FFmpeg fallback loss.
+        self.assertLess(
+            len(result.data["capability_loss"]),
+            len(detector._FFMPEG_FALLBACK_CAPABILITY_LOSS),
+            "PySceneDetect capability_loss should be smaller than FFmpeg's",
+        )
         detector._detect_pyscenedetect.assert_called_once()
 
     def test_capability_loss_lists_known_regressions(self):

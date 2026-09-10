@@ -24,6 +24,7 @@ class SceneDetectLongVideoTests(unittest.TestCase):
     def test_execute_resets_status_when_detector_instance_is_reused(self):
         detector = SceneDetect()
         detector._has_pyscenedetect = Mock(return_value=True)
+        detector._has_transnetv2 = Mock(return_value=False)
         detector._detect_pyscenedetect = Mock(return_value=[
             {"index": 0, "start_seconds": 0.0, "end_seconds": 2.0, "duration_seconds": 2.0}
         ])
@@ -81,6 +82,7 @@ class SceneDetectLongVideoTests(unittest.TestCase):
             input_path = Path(temp_dir) / "input.mp4"
             input_path.write_bytes(b"placeholder")
             detector._has_pyscenedetect = Mock(return_value=False)
+            detector._has_transnetv2 = Mock(return_value=False)
             def degraded_detection(_inputs):
                 detector._detection_status = "degraded"
                 detector._detection_diagnostics = ["segment timeout"]
@@ -97,6 +99,7 @@ class SceneDetectLongVideoTests(unittest.TestCase):
     def test_timeout_does_not_return_a_successful_single_scene(self):
         detector = SceneDetect()
         detector._has_pyscenedetect = Mock(return_value=False)
+        detector._has_transnetv2 = Mock(return_value=False)
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "input.mp4"
             output_path = Path(temp_dir) / "scenes.json"

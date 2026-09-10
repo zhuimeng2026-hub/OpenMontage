@@ -257,7 +257,7 @@ Already cached and ready to use:
 | Image captioning (per-frame) | BLIP-2 opt-2.7b | ✅ Cached + loadable; CPU ~46s/frame per recent memory |
 | Music generation | MusicGen-small | ✅ Cached; CPU slow per `MUSIC-ISSUES-AND-FIXES.md` |
 | **Shot boundary detection (current)** | PySceneDetect | ❌ **broken — not installed, but OM imports it** |
-| Shot boundary detection (target) | TransNetV2 | ⚠️ **needs `pip install transnetv2` + model weights; CPU-only inference will be slow** |
+| Shot boundary detection (target) | TransNetV2 | ✅ **installed 2026-09-10** via `transnetv2_pytorch` PyPI wheel (1.0.5); CPU-only inference verified at 7.6M params; routed to as the new top-tier backend by `tools/analysis/scene_detect.py` `_select_backend()` |
 | Word-level ASR timestamps | WhisperX | ❌ not installed |
 | Speaker diarization | pyannote.audio | ❌ not installed |
 | Object detection / segmentation | YOLO / SAM2 | ❌ not installed; ❌ no GPU |
@@ -277,7 +277,7 @@ Already cached and ready to use:
 ### Upgrade recommendations, in order of ROI
 
 1. **Patch `scene_detect.py` runtime.** Either `pip install scenedetect[opencv] opencv-python` or route all calls through ffmpeg's `select=gt(scene,X)` filter. The current latent import error will surface as a crash the first time someone calls the tool expecting scene cuts.
-2. **Install TransNetV2** (`pip install transnetv2` + download `transnetv2-weights/v2_1/`). Even CPU-only is fine for occasional reference-video analysis. Better than the current broken PySceneDetect path.
+2. **Install TransNetV2** (`pip install transnetv2_pytorch` + the wheel-bundled .pth weights). ✅ **Done 2026-09-10.** PyPI wheel `transnetv2_pytorch>=1.0.5` ships the converted `.pth` weights — no separate fetch step, no tensorflow conversion needed. Wired into `tools/analysis/scene_detect.py` as the new top-tier `_select_backend` path (`method="transnetv2"` or `method="auto"`/`None`). End-to-end tests in `tests/tools/test_scene_detect_transnetv2.py`. Makefile target: `make transnetv2-fetch`. CPU-only inference verified at 7.6M params on this host; expect ~0.3-1× realtime per the doc above.
 3. **Wire BLIP-2 into `video_understand`** (model is already cached). Replaces whatever captioner the tool currently uses. ~46s/frame on CPU is slow but usable for offline per-shot descriptions.
 4. **Install WhisperX** if word-level timestamps become a requirement. faster-whisper alone gives segment-level only.
 5. **Do NOT install YOLO / SAM2 / pyannote / InternVideo / Qwen-VL-72B** until GPU is available. CPU inference for these is not viable at production volume.
