@@ -64,7 +64,7 @@ The first frame already encodes the product shape + person styling + scene setti
 ### Cost of the switch
 
 - Upload 1 PNG (`06-walk.png`) to `ocbot.aixifs.com/videopic/` via imgbb (with HTTPS proxy 7890)
-- Change `sc03` from `type: "generated"` (T2V) to `type: "image_to_video"` (I2V) with `first_frame_image: "https://ocbot.aixifs.com/videopic/06-walk.png"`
+- Keep `sc03` as `type: "generated"` because that is the canonical scene-plan type. Set its generation mode to I2V in `scene_plan.metadata.generation_overrides.sc03`, with `first_frame_image: "assets/images/06-walk.png"` (or the runtime's resolved HTTPS mirror URL).
 - Replace the verbose T2V prompt (referencing shape details) with the short action-focused I2V prompt above
 
 Visual diversity cost: `06-walk.png` was originally assigned to `sc08` (41-47s, walking/pulling mode). `sc03` (11-17s, riding demo) and `sc08` (41-47s, walking) are 24 seconds apart, so the visual repetition is acceptable for a TikTok-fast edit.
@@ -77,7 +77,7 @@ Visual diversity cost: `06-walk.png` was originally assigned to `sc08` (41-47s, 
 |---|---|---|---|---|---|
 | sc01 | 0-6s | broll | s01 Hook | `01-hero.png` | zoompan slow push-in |
 | sc02 | 6-11s | broll | s01 Hook (continues) | `09-detail.png` | zoompan slow push-in (texture + brand mark) |
-| **sc03** | **11-17s** | **image_to_video** | **s02 Promise** | **`06-walk.png` (uploaded to ocbot)** | **H3-Max I2V, 6s** |
+| **sc03** | **11-17s** | **generated** | **s02 Promise** | **`06-walk.png` (uploaded to ocbot)** | **H3-Max I2V, 6s** |
 | sc04 | 17-23s | broll | s03 Ride demo | `02-controls.png` | zoompan slow push-in |
 | sc05 | 23-29s | broll | s04 Pull mode | `03-charge.png` | zoompan slow push-in |
 | sc06 | 29-35s | broll | s05 Charging | `04-storage.png` | zoompan slow push-in |
