@@ -6,6 +6,8 @@
 
 - [`PIPELINES-AND-OFFLINE-CAPABILITIES.md`](PIPELINES-AND-OFFLINE-CAPABILITIES.md) — **All 14 production pipelines with usage + decision tree; OM's full capability matrix split into "needs external paid API" vs "fully offline-capable on this host"**. Start here when picking a pipeline or planning offline work.
 - [`MUSIC-ISSUES-AND-FIXES.md`](MUSIC-ISSUES-AND-FIXES.md) — **Audio production gotchas**: Kokoro 40s warm-up per call, MusicGen critical slowness on CPU + offline-mode fix, WhisperX base model homophone errors, license traps for commercial获客 videos, plus the recipe to reuse the already-generated `/tmp/musicgen_test.wav`.
+- [`RESOURCES.md`](RESOURCES.md) — **Canonical handoff index of all available assets on 2026-09-10** (4 Pixabay BGM candidates with hashes, MusicGen outputs, TTS tests, final mp4, recipe to build the office-demo version with `pixabay_happy.mp3` as primary BGM pick). Point another LLM at this file when scripting a new获客 video.
+- [`PROMPT-FOR-SCRIPT-LLM.md`](PROMPT-FOR-SCRIPT-LLM.md) — **Copy-paste prompt template to send to the script LLM** + complete output JSON schema + hard constraints + failure-mode pre-avoidance + worked example. Pair with `RESOURCES.md` for the canonical "generate a获客 video script" workflow.
 - [`PROVIDERS.md`](PROVIDERS.md) — every paid provider with setup, pricing, free-tier notes.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — full technical reference (decision log, schema internals).
 - [`PR_REVIEW_GUIDE.md`](PR_REVIEW_GUIDE.md) — review checklist for landing changes.
