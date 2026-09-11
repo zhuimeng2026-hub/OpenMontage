@@ -27,6 +27,13 @@ import {
 } from "../../demo/src/EcommerceProductDemo";
 import { CustomComposition } from "./CustomComposition";
 import { FontVerify } from "./components/FontVerify";
+import {
+  LuggageComposition,
+  luggageAProps,
+  luggageBProps,
+  luggageCProps,
+  totalFramesFor,
+} from "./LuggageConcepts";
 
 // Runtime-compiled user composition: duration is derived from how many images
 // the user supplied (images.length × durationPerImage). Falls back to 30s.
@@ -414,6 +421,33 @@ export const Root: React.FC = () => {
         fps={30}
         width={1920}
         height={1080}
+      />
+      <Composition
+        id="LuggageA"
+        component={LuggageComposition}
+        durationInFrames={totalFramesFor(luggageAProps.scenes)}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={luggageAProps}
+      />
+      <Composition
+        id="LuggageB"
+        component={LuggageComposition}
+        durationInFrames={totalFramesFor(luggageBProps.scenes)}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={luggageBProps}
+      />
+      <Composition
+        id="LuggageC"
+        component={LuggageComposition}
+        durationInFrames={totalFramesFor(luggageCProps.scenes)}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={luggageCProps}
       />
     </>
   );
