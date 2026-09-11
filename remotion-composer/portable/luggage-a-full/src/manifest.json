@@ -1,0 +1,257 @@
+{
+  "conceptId": "a",
+  "assetDir": "_staged/luggage-a-full",
+  "scenes": [
+    {
+      "type": "hero",
+      "duration": 12,
+      "audio": "voice/00_hook.wav",
+      "title": "5 个硬指标",
+      "subtitle": "测评社 · 26 款行李箱实测"
+    },
+    {
+      "type": "host",
+      "duration": 8,
+      "audio": "voice/10_m1_intro.wav",
+      "image": "images/host.png",
+      "caption": "硬指标一：放摔测试",
+      "captionEn": "DROP TEST",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "stat",
+      "duration": 8,
+      "audio": "voice/11_m1_stat.wav",
+      "stat": "≥100 次",
+      "subtitle": "跌落测试底线",
+      "accentColor": "#F59E0B"
+    },
+    {
+      "type": "host",
+      "duration": 11,
+      "audio": "voice/12_m1_detail.wav",
+      "image": "images/host.png",
+      "caption": "一米、五米、十米，三个高度",
+      "captionEn": "1m / 5m / 10m",
+      "motion": "pan_right"
+    },
+    {
+      "type": "product",
+      "duration": 12,
+      "audio": "voice/13_m1_visual.wav",
+      "image": "images/metric1_drop.png",
+      "annotation": "≥100 次",
+      "annotationColor": "#F59E0B",
+      "caption": "看这个测试现场",
+      "captionEn": "drop test in progress",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "text",
+      "duration": 5,
+      "audio": "voice/14_m1_take.wav",
+      "text": "100 次是底线",
+      "accentColor": "#F59E0B"
+    },
+    {
+      "type": "host",
+      "duration": 8,
+      "audio": "voice/20_m2_intro.wav",
+      "image": "images/host.png",
+      "caption": "硬指标二：拉链品牌",
+      "captionEn": "ZIPPER BRAND",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "stat",
+      "duration": 8,
+      "audio": "voice/21_m2_stat.wav",
+      "stat": "YKK",
+      "subtitle": "日本品牌，全球高端拉链",
+      "accentColor": "#2563EB"
+    },
+    {
+      "type": "host",
+      "duration": 10,
+      "audio": "voice/22_m2_detail.wav",
+      "image": "images/host.png",
+      "caption": "占全球高端拉链八成份额",
+      "captionEn": "80% market share",
+      "motion": "pan_right"
+    },
+    {
+      "type": "product",
+      "duration": 12,
+      "audio": "voice/23_m2_visual.wav",
+      "image": "images/metric2_zipper.png",
+      "annotation": "YKK",
+      "annotationColor": "#2563EB",
+      "caption": "看拉链头这个标志",
+      "captionEn": "look for this mark",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "text",
+      "duration": 5,
+      "audio": "voice/24_m2_take.wav",
+      "text": "没标的别买",
+      "accentColor": "#2563EB"
+    },
+    {
+      "type": "host",
+      "duration": 8,
+      "audio": "voice/30_m3_intro.wav",
+      "image": "images/host.png",
+      "caption": "硬指标三：轮轴承重",
+      "captionEn": "WHEEL LOAD",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "stat",
+      "duration": 8,
+      "audio": "voice/31_m3_stat.wav",
+      "stat": "≥30 kg",
+      "subtitle": "装满衣物日用品的重量底线",
+      "accentColor": "#10B981"
+    },
+    {
+      "type": "host",
+      "duration": 10,
+      "audio": "voice/32_m3_detail.wav",
+      "image": "images/host.png",
+      "caption": "装满就推不动的箱子不能用",
+      "captionEn": "below 30kg = unusable",
+      "motion": "pan_right"
+    },
+    {
+      "type": "product",
+      "duration": 12,
+      "audio": "voice/33_m3_visual.wav",
+      "image": "images/metric3_wheel.png",
+      "annotation": "30 kg",
+      "annotationColor": "#10B981",
+      "caption": "看这个承重测试",
+      "captionEn": "load test in progress",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "text",
+      "duration": 5,
+      "audio": "voice/34_m3_take.wav",
+      "text": "30 公斤是起步",
+      "accentColor": "#10B981"
+    },
+    {
+      "type": "host",
+      "duration": 8,
+      "audio": "voice/40_m4_intro.wav",
+      "image": "images/host.png",
+      "caption": "硬指标四：海关锁",
+      "captionEn": "TSA LOCK",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "stat",
+      "duration": 8,
+      "audio": "voice/41_m4_stat.wav",
+      "stat": "TSA",
+      "subtitle": "美国海关唯一认可的密码锁",
+      "accentColor": "#8B5CF6"
+    },
+    {
+      "type": "host",
+      "duration": 10,
+      "audio": "voice/42_m4_detail.wav",
+      "image": "images/host.png",
+      "caption": "没有 TSA 锁，海关会撬",
+      "captionEn": "no TSA = forced open",
+      "motion": "pan_right"
+    },
+    {
+      "type": "product",
+      "duration": 12,
+      "audio": "voice/43_m4_visual.wav",
+      "image": "images/metric4_tsa.png",
+      "annotation": "TSA",
+      "annotationColor": "#8B5CF6",
+      "caption": "看这个红色菱形标志",
+      "captionEn": "red diamond logo",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "text",
+      "duration": 5,
+      "audio": "voice/44_m4_take.wav",
+      "text": "认准这个标志",
+      "accentColor": "#8B5CF6"
+    },
+    {
+      "type": "host",
+      "duration": 8,
+      "audio": "voice/50_m5_intro.wav",
+      "image": "images/host.png",
+      "caption": "硬指标五：售后保修",
+      "captionEn": "WARRANTY",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "stat",
+      "duration": 8,
+      "audio": "voice/51_m5_stat.wav",
+      "stat": "≥2 年",
+      "subtitle": "行李箱不是耐用品，零件总会坏",
+      "accentColor": "#EC4899"
+    },
+    {
+      "type": "host",
+      "duration": 10,
+      "audio": "voice/52_m5_detail.wav",
+      "image": "images/host.png",
+      "caption": "保修低于两年 = 自己修",
+      "captionEn": "<2 yr = DIY repair",
+      "motion": "pan_right"
+    },
+    {
+      "type": "product",
+      "duration": 12,
+      "audio": "voice/53_m5_visual.wav",
+      "image": "images/metric5_warranty.png",
+      "annotation": "2 年",
+      "annotationColor": "#EC4899",
+      "caption": "看这个保修卡",
+      "captionEn": "warranty card",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "text",
+      "duration": 5,
+      "audio": "voice/54_m5_take.wav",
+      "text": "两年是底线",
+      "accentColor": "#EC4899"
+    },
+    {
+      "type": "host",
+      "duration": 12,
+      "audio": "voice/60_recap.wav",
+      "image": "images/host.png",
+      "caption": "五个硬指标，三个关键词",
+      "captionEn": "5 metrics · 3 keywords",
+      "motion": "zoom_in"
+    },
+    {
+      "type": "product",
+      "duration": 8,
+      "audio": "voice/60_recap.wav",
+      "image": "images/outdoor.png",
+      "caption": "100 次，YKK，30 公斤",
+      "captionEn": "100 drops · YKK · 30kg load",
+      "motion": "zoom_out"
+    },
+    {
+      "type": "end",
+      "duration": 8,
+      "audio": "voice/70_end.wav",
+      "text": "测评社 · 下一期拆哪款"
+    }
+  ]
+}
