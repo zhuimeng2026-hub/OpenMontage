@@ -85,6 +85,14 @@ if (typeof document !== "undefined" && !fontsRegistered) {
   fontsRegistered = true;
   const handle = delayRender();
 
+  // ALWAYS unblock the render handle immediately. We let the browser load
+  // webfonts in the background; chromium repaints with whatever is ready at
+  // each frame, and the CJK fallback chain (Noto CJK SC etc.) keeps Chinese
+  // legible regardless. Without this, long renders (7680 frames × ~25 font
+  // faces) can hit the 5-min default timeout when one face stalls during
+  // image-heavy scenes.
+  continueRender(handle);
+
   const tasks = FACES.map(async (spec) => {
     const url = staticFile("fonts/" + spec.file);
     const face = new FontFace(spec.family, `url(${url}) format("woff2")`, {
@@ -97,11 +105,13 @@ if (typeof document !== "undefined" && !fontsRegistered) {
 
   Promise.all(tasks)
     .then(() => document.fonts.ready)
-    .then(() => continueRender(handle))
+    .then(() => {
+      // eslint-disable-next-line no-console
+      console.log(`[fonts] all ${FACES.length} faces loaded`);
+    })
     .catch((err) => {
       // eslint-disable-next-line no-console
       console.error("[fonts] Font load error (render continues with fallback):", err);
-      continueRender(handle);
     });
 }
 

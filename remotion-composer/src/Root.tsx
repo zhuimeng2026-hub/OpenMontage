@@ -32,6 +32,7 @@ import {
   luggageAProps,
   luggageBProps,
   luggageCProps,
+  luggageAFullProps,
   totalFramesFor,
 } from "./LuggageConcepts";
 
@@ -448,6 +449,15 @@ export const Root: React.FC = () => {
         width={1920}
         height={1080}
         defaultProps={luggageCProps}
+      />
+      <Composition
+        id="LuggageAFull"
+        component={LuggageComposition}
+        durationInFrames={totalFramesFor(luggageAFullProps.scenes)}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={luggageAFullProps}
       />
     </>
   );
