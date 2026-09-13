@@ -3,3 +3,7 @@ frameflow-bff
 frameflow-bff~
 _ffbin
 *.exe
+
+# 运行时数据（SQLite 状态库 / 上传素材），勿入库
+data/
+.env.test

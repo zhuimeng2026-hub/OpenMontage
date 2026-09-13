@@ -10,6 +10,10 @@ google-auth>=2.0       # service-account auth for Google TTS + Imagen (Vertex AI
 google-genai>=1.0.0    # Gemini Developer API clients for Lyria, Veo, and Gemini Omni
 openai>=2.44.0         # Videos API support for Sora 2
 
+# Shot boundary detection (highest-accuracy SOTA; CPU-friendly).
+# PyPI wheel bundles the converted .pth weights — no separate fetch step.
+transnetv2_pytorch>=1.0.5
+
 # Backlot - the living storyboard (local board server)
 fastapi>=0.110
 uvicorn>=0.29

@@ -1,3 +1,4 @@
+import { SANS } from "../fonts";
 import {
   AbsoluteFill,
   Img,
@@ -84,15 +85,21 @@ interface ScreenshotSceneProps {
 
 // ---------- Helpers ----------
 
+// Resolve asset path — pass through URLs/data URIs; everything else routes
+// through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
+// Simplified 2026-08-20: dropped the `file://` + absolute-path branches that
+// leaked through to headless Chrome as "Not allowed to load local resource".
+// Python _STAGEABLE_FIELDS + defensive guard now guarantee only relative
+// paths reach the JS layer.
 function resolveAsset(src: string): string {
-  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) {
+  if (
+    src.startsWith("http://") ||
+    src.startsWith("https://") ||
+    src.startsWith("data:")
+  ) {
     return src;
   }
-  const clean = src.replace(/^file:\/\/\/?/, "");
-  if (clean.startsWith("/") || /^[A-Za-z]:[\\/]/.test(clean)) {
-    return `file:///${clean.replace(/\\/g, "/")}`;
-  }
-  return staticFile(clean);
+  return staticFile(src.replace(/^file:\/\/\/?/, ""));
 }
 
 /** Compute the rendered bounding box of the backdrop inside a canvas,
@@ -394,7 +401,7 @@ const OverlayForStep: React.FC<OverlayProps> = ({
           display: "flex",
           alignItems: "center",
           paddingLeft: Math.round(rect.w * 0.012),
-          fontFamily: "Inter, -apple-system, sans-serif",
+          fontFamily: SANS,
           fontSize: fontPx,
           color: step.color ?? "#E5E7EB",
           pointerEvents: "none",
@@ -473,7 +480,7 @@ const OverlayForStep: React.FC<OverlayProps> = ({
           border: `1px solid ${border}`,
           borderRadius: Math.round(rect.w * 0.008),
           padding: `${Math.round(rect.h * 0.015)}px ${Math.round(rect.w * 0.012)}px`,
-          fontFamily: "Inter, -apple-system, sans-serif",
+          fontFamily: SANS,
           fontSize: fontPx,
           color: "#F1F5F9",
           lineHeight: 1.5,
@@ -646,7 +653,7 @@ const OverlayForStep: React.FC<OverlayProps> = ({
           width: maxW,
           background: color,
           color: "#0B0F1A",
-          fontFamily: "Inter, -apple-system, sans-serif",
+          fontFamily: SANS,
           fontWeight: 600,
           fontSize: fontPx,
           lineHeight: 1.35,

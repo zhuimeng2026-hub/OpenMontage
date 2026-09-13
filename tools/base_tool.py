@@ -21,6 +21,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+#: Tools that belong to the decompose phase of the mcp-decompose-and-recompose
+#: skill. Their events.jsonl entries carry phase="decompose" so the dedicated
+#: decompose log monitor can attribute them correctly.
+_DECOMPOSE_TOOLS = frozenset({"scene_detect", "transcriber", "video_analyzer"})
+
 
 def _load_dotenv() -> None:
     """Load .env into os.environ once at import time.
@@ -76,10 +81,82 @@ class ToolStability(str, Enum):
     PRODUCTION = "production"
 
 
-class ToolStatus(str, Enum):
-    AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
-    DEGRADED = "degraded"
+class ToolStatus:
+    """Status of a tool, with optional ``reason`` / ``install_instructions``.
+
+    Backward-compatible with the prior ``(str, Enum)`` shape (the project's
+    pre-2026-08-28 convention) **and** with the dataclass-style construction
+    that the RFC for ``music_gen_local`` (§4.5) introduced:
+
+    * **Bare enum-style** still works — ``ToolStatus.AVAILABLE``,
+      ``ToolStatus.UNAVAILABLE``, ``ToolStatus.DEGRADED`` are class-level
+      singletons with empty reason/instructions, set after the class body.
+    * **Rich construction** — ``ToolStatus(status="unavailable",
+      reason="missing dep: transformers", install_instructions="...")`` is
+      the form new tools should use to convey *why* they are unavailable.
+    * **``status`` and ``value`` are aliases** for the same underlying string,
+      so both the RFC-style ``result.status`` and the legacy
+      ``t.get_status().value == "available"`` access patterns keep working.
+    * **Equality** compares ``status`` only, so a rich UNAVAILABLE
+      (``status="unavailable", reason="x"``) is still ``== ToolStatus.UNAVAILABLE``,
+      which preserves every existing ``tool.get_status() == ToolStatus.AVAILABLE``
+      / ``!= ToolStatus.AVAILABLE`` call site in the codebase
+      (``piper_tts``, ``kokoro_tts``, ``music_gen``, ``google_music``, the
+      ``tts_selector`` chain, etc.).
+    * **String equality** preserves the prior ``(str, Enum)`` semantics —
+      ``ToolStatus.AVAILABLE == "available"`` is True.
+    """
+
+    def __init__(
+        self,
+        status: str = "",
+        *,
+        value: str = "",
+        reason: str = "",
+        install_instructions: str = "",
+    ) -> None:
+        # Accept either ``status=`` (RFC §4.5 convention) or ``value=`` (the
+        # old ``(str, Enum)`` keyword). When both are passed, ``status`` wins.
+        s = status or value
+        self.status = s
+        self.value = s  # alias — keeps legacy `get_status().value` working
+        self.reason = reason
+        self.install_instructions = install_instructions
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ToolStatus):
+            return self.status == other.status
+        if isinstance(other, str):
+            return self.status == other
+        return NotImplemented
+
+    def __ne__(self, other: object) -> bool:
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __hash__(self) -> int:
+        return hash(self.status)
+
+    def __str__(self) -> str:
+        return self.status
+
+    def __repr__(self) -> str:
+        if not self.reason and not self.install_instructions:
+            return f"ToolStatus({self.status!r})"
+        return (
+            f"ToolStatus(status={self.status!r}, reason={self.reason!r}, "
+            f"install_instructions={self.install_instructions!r})"
+        )
+
+
+# Backward-compat singletons — match the previous (str, Enum) member names so
+# every existing ``ToolStatus.AVAILABLE`` / ``UNAVAILABLE`` / ``DEGRADED``
+# reference keeps working unchanged.
+ToolStatus.AVAILABLE = ToolStatus(status="available")
+ToolStatus.UNAVAILABLE = ToolStatus(status="unavailable")
+ToolStatus.DEGRADED = ToolStatus(status="degraded")
 
 
 class ToolRuntime(str, Enum):
@@ -183,6 +260,7 @@ def _instrument_execute(fn: Callable) -> Callable:
             "tool": tool_name,
             "scene_id": scene_id,
             "depth": depth if depth else None,
+            "phase": "decompose" if tool_name in _DECOMPOSE_TOOLS else None,
         }
         if project_dir is not None:
             emit_event(project_dir, {
@@ -261,6 +339,21 @@ class BaseTool(ABC):
     not_good_for: list[str] = []
     provider_matrix: dict[str, Any] = {}
 
+    # --- Canonical artifact schema binding ---
+    # When set, points to an entry in schemas/artifacts/ARTIFACT_NAMES.
+    # Tools that produce a canonical artifact (brief, scene_plan, asset_manifest,
+    # video_analysis_brief, ...) should set this and call self._validate_output_artifact()
+    # at the end of execute() so contract drift is surfaced as a ToolResult.data
+    # annotation rather than a silent downstream parse failure.
+    output_artifact_name: Optional[str] = None
+    # When True, a schema validation failure inside execute() will turn the
+    # ToolResult into success=False. Default False — validation is reported as
+    # a warning on result.data so existing callers aren't broken by a drift in
+    # fields they may not depend on. Set True on tools whose downstream
+    # consumers strictly require the artifact to validate (e.g. checkpoint
+    # writers, MCP consumers that re-serialize the data).
+    fail_on_schema_drift: bool = False
+
     # --- Resource & retry ---
     resource_profile: ResourceProfile = ResourceProfile()
     retry_policy: RetryPolicy = RetryPolicy()
@@ -325,6 +418,64 @@ class BaseTool(ABC):
                     raise DependencyError(
                         f"Python module {module_name!r} not installed. {self.install_instructions}"
                     )
+
+    def validate_output_artifact(self, data: dict[str, Any]) -> tuple[bool, str]:
+        """Validate ``data`` against the canonical artifact schema.
+
+        Returns ``(valid, error_message)``. When ``output_artifact_name`` is
+        unset (the default), the call is a no-op and returns ``(True, "")`` —
+        backwards-compatible for tools that produce only ad-hoc payloads.
+
+        When set, the tool's ``output_artifact_name`` must match an entry in
+        ``schemas/artifacts/ARTIFACT_NAMES``. Validation uses
+        ``schemas.artifacts.validate_artifact`` which raises
+        ``jsonschema.ValidationError``; we catch and stringify so callers can
+        surface the failure mode without having to import jsonschema.
+
+        Tools should call this at the end of ``execute()`` and pass the
+        result through ``annotate_validation`` (or branch on it when
+        ``fail_on_schema_drift=True``):
+
+            ok, err = self.validate_output_artifact(result.data)
+            if not ok:
+                result = self.annotate_validation(result, ok, err)
+                if self.fail_on_schema_drift:
+                    result.success = False
+                    result.error = f"artifact schema drift: {err}"
+                    return result
+        """
+        if not self.output_artifact_name:
+            return True, ""
+        try:
+            from schemas.artifacts import validate_artifact
+            validate_artifact(self.output_artifact_name, data)
+            return True, ""
+        except Exception as e:  # jsonschema.ValidationError, FileNotFoundError, etc.
+            # Surface enough of the path to debug, but cap to keep error strings sane.
+            msg = str(e)
+            if len(msg) > 600:
+                msg = msg[:600] + "...(truncated)"
+            return False, msg
+
+    @staticmethod
+    def annotate_validation(
+        result: ToolResult, ok: bool, err: str
+    ) -> ToolResult:
+        """Stash the validation verdict on ``result.data['_schema_validation']``.
+
+        Non-destructive: the tool's existing data dict is preserved. The
+        annotation is what downstream consumers (checkpoints, board, MCP
+        logging) should surface when the artifact would not validate.
+        """
+        result.data.setdefault("_schema_validation", {})
+        result.data["_schema_validation"].update({
+            "artifact_name": result.data["_schema_validation"].get(
+                "artifact_name", "unknown"
+            ),
+            "valid": ok,
+            "error": err or None,
+        })
+        return result
 
     def get_info(self) -> dict[str, Any]:
         """Return full tool contract info for registry/discovery."""
@@ -393,11 +544,44 @@ class BaseTool(ABC):
 
     @abstractmethod
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
-        """Run the tool. Subclasses must implement this."""
+        """Run the tool. Subclasses must implement this.
+
+        **WARNING: ``execute()`` is a real call — not a dry-run.** For paid
+        API tools it consumes quota and costs real money; for publishing
+        tools it produces irreversible side effects (uploads, posted
+        comments, deleted files). Treat every call as a spend.
+
+        For zero-cost preflight (cost estimation, dependency check, input
+        shape validation, "would this work?" look) call
+        :meth:`dry_run` instead — it never hits the network and never
+        mutates state. The same surface is exposed to MCP clients via the
+        ``dry_run_tool`` method on ``mcp_server.py``.
+
+        Subclasses must implement this and return a :class:`ToolResult`.
+        """
         ...
 
     def dry_run(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        """Preflight check without side effects. Override for paid/publishing tools."""
+        """Preflight check without side effects. Override for paid/publishing tools.
+
+        This is the **safe** alternative to :meth:`execute` — use it for
+        any preflight, smoke test, or "is this provider available right
+        now?" check before paying for an :meth:`execute` call:
+
+        - Never hits the network (no API call, no quota consumption).
+        - Never mutates state (no file writes, no publishes, no deletes).
+        - Returns ``estimated_cost_usd``, ``estimated_runtime_seconds``,
+          ``status``, and a ``would_execute`` flag — enough to decide
+          whether to call :meth:`execute` without paying for it.
+
+        Exposed to MCP clients via the ``dry_run_tool`` method on
+        ``mcp_server.py``; reachable from the registry as
+        ``registry.get(name).dry_run(inputs)``.
+
+        Returns:
+            dict with keys ``tool``, ``estimated_cost_usd``,
+            ``estimated_runtime_seconds``, ``status``, ``would_execute``.
+        """
         return {
             "tool": self.name,
             "estimated_cost_usd": self.estimate_cost(inputs),
@@ -415,6 +599,7 @@ class BaseTool(ABC):
         timeout: Optional[int] = None,
         cwd: Optional[Path] = None,
         on_output: Optional["Callable[[str], None]"] = None,
+        env: Optional[dict] = None,
     ) -> subprocess.CompletedProcess:
         """Run a subprocess command with standard error handling.
 
@@ -448,6 +633,7 @@ class BaseTool(ABC):
                     errors="replace",
                     timeout=timeout,
                     cwd=cwd,
+                    env=env,
                     check=True,
                 )
             except subprocess.CalledProcessError as exc:
@@ -473,6 +659,7 @@ class BaseTool(ABC):
             encoding="utf-8",
             errors="replace",
             cwd=cwd,
+            env=env,
         )
         captured: list[str] = []
         assert proc.stdout is not None

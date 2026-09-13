@@ -110,6 +110,29 @@ class AutoReframe(BaseTool):
             },
             "codec": {"type": "string", "default": "libx264"},
             "crf": {"type": "integer", "default": 18},
+            "project_id": {
+                "type": "string",
+                "default": "reframes",
+                "pattern": "^[a-zA-Z0-9._-]{1,64}$",
+                "description": (
+                    "Project-scoped subdirectory under the caller's "
+                    "principal namespace. Auto-injected from the MCP "
+                    "session via ProjectWorkspace.for_current_principal() "
+                    "— the same pattern as upload_asset / video_downloader "
+                    "/ video_analyzer. Propagated to FaceTracker so "
+                    "future workspace validation on the target doesn't "
+                    "break the cascade."
+                ),
+            },
+            "userid": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+                "description": (
+                    "OPTIONAL fallback for non-MCP callers (tests, scripts). "
+                    "When the MCP session's X-VClaw-User-Id is set, the "
+                    "userid is auto-resolved and this input is ignored."
+                ),
+            },
         },
     }
 
@@ -129,6 +152,34 @@ class AutoReframe(BaseTool):
     ]
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
+        # ── Workspace resolution (mirrors video_analyzer / video_compose) ──
+        # Auto-injects userid from the MCP session; falls through to
+        # explicit userid for non-MCP callers. Result is stashed on self so
+        # the FaceTracker cascade below can pick it up without re-resolving.
+        from lib.principal_registry import Principal, PrincipalNotFound
+        from lib.project_workspace import ProjectWorkspace
+        project_id = inputs.get("project_id") or "reframes"
+        explicit_userid = inputs.get("userid")
+        try:
+            if explicit_userid:
+                principal = Principal(kind="user", principal_id=explicit_userid)
+                workspace = ProjectWorkspace.for_principal(principal, project_id)
+            else:
+                workspace = ProjectWorkspace.for_current_principal(project_id)
+            self._resolved_userid = workspace.principal.principal_id
+            self._resolved_project_id = project_id
+        except PrincipalNotFound as e:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"no authenticated principal bound to this call: {e}. "
+                    "Send X-VClaw-User-Id on the MCP request, or pass "
+                    "userid explicitly when calling from a non-MCP context."
+                ),
+            )
+        except ValueError as e:
+            return ToolResult(success=False, error=f"workspace resolution failed: {e}")
+
         input_path = Path(inputs["input_path"])
         if not input_path.exists():
             return ToolResult(success=False, error=f"Input not found: {input_path}")
@@ -319,6 +370,8 @@ class AutoReframe(BaseTool):
             result = tracker.execute({
                 "input_path": str(input_path),
                 "sample_fps": sample_fps,
+                "userid": getattr(self, "_resolved_userid", None),
+                "project_id": getattr(self, "_resolved_project_id", None),
             })
             if result.success and result.data:
                 # Read the generated JSON

@@ -141,9 +141,9 @@ make setup
 
 就是这么简单。智能体会通过实时网络搜索研究您的主题，生成 AI 图像，撰写并配音带有语音指导的脚本，自动寻找免版税的背景音乐，烧录词级字幕，并渲染最终视频。在您看到任何内容之前，系统会运行多点自我审查——ffprobe 验证、帧采样、音频电平分析、交付承诺验证以及字幕检查。每一个提供商的选择都会在 7 个维度上进行评分，并附有可审计的决策日志。每一个创意决定都需要您的批准。
 
-> **没有 `make`？** macOS/Linux：`python3 -m venv .venv && source .venv/bin/activate && python -m pip install -r requirements.txt && cd remotion-composer && npm install && cd .. && python -m pip install piper-tts && cp .env.example .env`
+> **没有 `make`？** macOS/Linux：`python3 -m venv .venv && source .venv/bin/activate && python -m pip install -r requirements.txt && cd remotion-composer && npm install && cd .. && cd demo && npm install && cd .. && python -m pip install piper-tts && cp .env.example .env`
 >
-> Windows PowerShell：`py -3 -m venv .venv; .\.venv\Scripts\Activate.ps1; python -m pip install -r requirements.txt; cd remotion-composer; npm install; cd ..; python -m pip install piper-tts; Copy-Item .env.example .env`
+> Windows PowerShell：`py -3 -m venv .venv; .\.venv\Scripts\Activate.ps1; python -m pip install -r requirements.txt; cd remotion-composer; npm install; cd ..; cd demo; npm install; cd ..; python -m pip install piper-tts; Copy-Item .env.example .env`
 >
 > **Windows:** 如果 `npm install` 报错 `ERR_INVALID_ARG_TYPE`，请改用 `npx --yes npm install`。
 
@@ -653,6 +653,48 @@ OpenMontage 被设计为高度可扩展的。最常见的两种贡献是：
 有关错误反馈、功能请求和工作流讨论，请使用 [GitHub Issues](https://github.com/calesthio/OpenMontage/issues) 和 [GitHub Discussions](https://github.com/calesthio/OpenMontage/discussions)，以确保每件事都能保持可见和可操作。
 
 ---
+
+## 自定义脚本契约
+
+「脚本模式」允许用户提交自定义 Remotion TSX 源码（例如由 DeepSeek 生成），由 `remotion-composer/src/CustomComposition.tsx` 在运行时编译并渲染。生成或编写脚本时，请严格遵循以下 props 契约——这是组件实际注入到用户代码中的全部入参：
+
+| prop | 类型 | 含义 | 说明 |
+|------|------|------|------|
+| `images` | `string[]` | 上传图片的相对路径 | 必须用 `staticFile(src)` 引用；路径由渲染管线 staging 到 `public/_staged/<id>/` 后注入 |
+| `durationPerImage` | `number` | 每张图展示时长（秒） | 默认 `3`；由 `create_remotion_video_share` 的 `duration` 参数决定 |
+| `fps` | `number` | 合成帧率 | 固定 `30` |
+| `width` / `height` | `number` | 画布尺寸 | 如 9:16 为 `1080 × 1920`，由 `aspect_ratio` 决定 |
+
+**约定与约束：**
+
+- 用户代码须导出可渲染组件：`export const MyComposition = (props) => {...}` 或 `export default`。
+- 组件必须使用 Remotion API（`AbsoluteFill`、`useCurrentFrame`、`Sequence` 等）返回 React 元素。
+- 图片路径是相对 `public/` 的，**必须**用 `staticFile(src)` 包裹，不能用绝对路径或 `file://`。
+- 视频总时长（帧）= `images.length × durationPerImage × fps`，由 `Root.tsx` 的 `calculateCustomMetadata` 计算，用户代码无需也无法改总时长。
+- 默认模板见 BFF `web/index.html` 的 `DEFAULT_COMP`，脚本生成（如 DeepSeek）应以其为对齐范本。
+
+最小可用示例：
+
+```tsx
+import {AbsoluteFill, useCurrentFrame, Sequence, staticFile} from "remotion";
+
+export const MyComposition = ({images, durationPerImage = 3, fps = 30}) => {
+  const frame = useCurrentFrame();
+  const fpi = Math.round(durationPerImage * fps);
+  const idx = Math.min(Math.floor(frame / fpi), Math.max(images.length, 1) - 1);
+  return (
+    <AbsoluteFill>
+      {images.map((src, i) => (
+        <Sequence key={i} from={i * fpi} durationInFrames={fpi}>
+          <AbsoluteFill>
+            <img src={staticFile(src)} style={{width: "100%", height: "100%", objectFit: "cover"}} />
+          </AbsoluteFill>
+        </Sequence>
+      ))}
+    </AbsoluteFill>
+  );
+};
+```
 
 ## 测试
 

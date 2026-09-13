@@ -1,0 +1,120 @@
+name: zh-en-bilingual-subtitle
+version: "1.0"
+description: >
+  Generate Chinese ↔ English bilingual subtitles from a single audio or video file.
+  Fully offline stack: faster-whisper ASR → NLLB-200 translation → dual-language
+  ASS rendering. Optional final stage burns the bilingual subtitles into a copy
+  of the source video via FFmpeg `subtitles=`.
+
+  Two-way: same pipeline handles zh→en and en→zh by setting source_lang /
+  target_lang on the translate stage. Word-level timestamps are preserved
+  through translation so the bilingual ASS layout is audio-aligned without
+  any re-alignment pass.
+
+  Intended for direct tool invocation (execute_tool(name="transcriber", …)
+  → execute_tool(name="nllb_translator", …) → execute_tool(name="subtitle_gen", …)).
+  EP orchestration is not enabled — director skill files are intentionally
+  omitted. Add them under skills/pipelines/zh-en-bilingual-subtitle/ if you
+  want this pipeline to participate in the guided checkpoint flow.
+
+  Stage runtime inputs (form-layer):
+    transcribe        : input_path, model_size, language (null=auto), diarize (bool)
+    translate         : source_lang (en|zh|zh-tw|ja|ko|fr|de|es|ru|ar|hi|pt|it),
+                        target_lang (same enum), model_size (600M|1.3B|3.3B),
+                        glossary (optional protected-term map)
+    render_subtitles  : subtitle_format (dual_ass default | dual_srt),
+                        secondary_font (default Noto Sans CJK SC),
+                        max_chars_per_line (default 42),
+                        max_words_per_cue (default 8)
+    burn_into_video   : input_path, output_path (skipped when input is audio-only)
+
+  Defaults if not specified:
+    source_lang = auto (transcriber detects; pass detected code to translate)
+    target_lang = zh (en → zh default direction)
+    model_size  = facebook/nllb-200-distilled-600M
+    subtitle_format = dual_ass
+category: custom
+stability: beta
+default_checkpoint_policy: guided
+
+compatible_playbooks:
+  recommended:
+    - clean-professional
+  also_works: []
+  custom_allowed: false
+
+stages:
+  # Stage `description` is intentionally omitted — schema
+  # schemas/pipelines/pipeline_manifest.schema.json sets
+  # additionalProperties:false on stage items, so per-stage descriptions
+  # fail strict validation. The pipeline-level `description` above carries
+  # the full operator-facing rationale.
+
+  - name: transcribe
+    produces:
+      - transcript
+    required_tools:
+      - transcriber
+    tools_available:
+      - transcriber
+    checkpoint_required: false
+    human_approval_default: false
+    success_criteria:
+      - Schema-valid transcript artifact
+      - Segments have word-level timestamps
+
+  - name: translate
+    required_artifacts_in:
+      - transcript
+    produces:
+      - translated_transcript
+    required_tools:
+      - nllb_translator
+    tools_available:
+      - nllb_translator
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Source/target language pair matches the brief
+      - Glossary / brand names preserved (spot-check 3-5 segments)
+      - Segment count matches the source transcript (1:1 alignment)
+    success_criteria:
+      - Schema-valid translated_transcript artifact
+      - translated_transcript.segments has same length as transcript.segments
+      - Each translated segment carries the source start/end timestamps
+
+  - name: render_subtitles
+    required_artifacts_in:
+      - transcript
+      - translated_transcript
+    produces:
+      - subtitle_file
+    required_tools:
+      - subtitle_gen
+    tools_available:
+      - subtitle_gen
+    checkpoint_required: false
+    human_approval_default: false
+    success_criteria:
+      - Subtitle file exists on disk and parses as valid ASS / SRT
+      - Cue count matches segment count of the source transcript
+
+  - name: burn_into_video
+    required_artifacts_in:
+      - subtitle_file
+    optional_artifacts_in:
+      - translated_transcript
+    produces:
+      - burn_report
+    required_tools:
+      - video_compose
+    optional_tools:
+      - ffmpeg
+    tools_available:
+      - video_compose
+      - ffmpeg
+    checkpoint_required: false
+    human_approval_default: false
+    success_criteria:
+      - Output video exists and passes ffprobe validation
+      - Burned subtitles visible at expected timestamps

@@ -1,0 +1,22 @@
+{
+  "name": "luggage-a-full-portable",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-contained Remotion bundle for the 5-hard-metrics luggage concept. Reads manifest.json at render time; copy this directory to any host with Node 18+ and Chromium to re-render.",
+  "scripts": {
+    "render": "remotion render src/index.tsx LuggageAFull out.mp4 --codec h264",
+    "smoke": "remotion compositions src/index.tsx",
+    "package": "bash package.sh"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.508",
+    "@remotion/cli": "4.0.508"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/node": "20.11.0",
+    "typescript": "5.4.5"
+  }
+}

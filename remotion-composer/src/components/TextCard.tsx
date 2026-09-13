@@ -1,3 +1,4 @@
+import { SANS } from "../fonts";
 import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig } from "remotion";
 
 interface TextCardProps {
@@ -39,7 +40,7 @@ export const TextCard: React.FC<TextCardProps> = ({
           transform: `scale(${scale})`,
           fontSize,
           color,
-          fontFamily: "Inter, system-ui, sans-serif",
+          fontFamily: SANS,
           fontWeight: 700,
           textAlign: "center",
           maxWidth: "80%",

@@ -788,6 +788,61 @@ HyperFrames workspaces live under `projects/<project-name>/hyperframes/`. Final 
 
 ---
 
+### MusicGen — Local Open-Source BGM
+
+> **Free, fully offline instrumental background music.** Meta MusicGen small runs locally — no API key, no cost, no network. Instrumental-only by construction (model has no vocal path), which satisfies the `music-gen-usage` mandate automatically. Trade-off: quality below ElevenLabs Music and Google Lyria; this is the availability fallback, not a quality swap.
+
+**Tool:** `music_gen_local`
+**Runtime:** CPU (GPU auto-detected when available — CUDA or Apple Silicon MPS)
+**Env var:** None
+**Cost:** Free. Always local.
+
+#### Setup
+
+```bash
+# 1. Install dependencies (transformers, torch, soundfile)
+pip install 'transformers>=4.40' torch soundfile numpy
+
+# 2. Pre-fetch the MusicGen small weights (~300 MB, one-time):
+make musicgen-fetch
+# Or manually:
+python -c "from transformers import pipeline; \
+  pipeline('text-to-audio', model='facebook/musicgen-small', \
+  cache_dir='~/.cache/huggingface')"
+
+# 3. Optional GPU acceleration:
+pip install accelerate   # auto-detected by the tool
+```
+
+Weights land in `~/.cache/huggingface/` (honors `HF_HOME` override, consistent with `kokoro_tts`). After the one-time fetch, the tool runs fully offline.
+
+#### Capabilities
+
+- `generate_background_music` only — does **not** expose `generate_sfx` (use `music_gen` or `freesound_music` for SFX).
+- Duration range: 5–30 seconds per single-pass generation (MusicGen's decoder positional limit).
+- Longer BGM: set `loop_to_duration_seconds` to opt into a crossfade-loop strategy that extends the seed clip up to the target duration (no silent truncation).
+- Instrumental-only output (mandate is automatic; `force_instrumental=False` is rejected with a pointer to `suno_music`).
+- `model_variant` knob exposes `small` (default, 300M params, CPU-friendly), `medium`, `large`, and `melody` (melody is reserved/unwired in v1).
+
+#### When to Use MusicGen (Local) vs the Cloud Options
+
+| Pick | When |
+|------|------|
+| **MusicGen local** | No API key available, network is unreliable, vendor quota at risk, or the pipeline is a long-form BGM-heavy run (documentary-montage, animation, cinematic). |
+| **ElevenLabs `music_gen`** | Best quality and you have `ELEVENLABS_API_KEY`; also the only cloud tool exposing `generate_sfx`. |
+| **Suno `suno_music`** | You need a vocal track or custom lyrics. |
+| **Google Lyria `google_music`** | You want image-conditioned music or Google ecosystem integration and accept the 184s hard cap. |
+
+**Quality caveat:** MusicGen small is below ElevenLabs Music and Lyria on most subjective prompts. Pipelines with `ELEVENLABS_API_KEY` set should still hit `music_gen` first; `music_gen_local` is the last hop before `unavailable` in the fallback chain.
+
+**Runtime caveat:** CPU generation runs ~2–3× realtime (a 30s clip ≈ 60–90s wall). For `loop_to_duration_seconds` > 60s on CPU, warn before kicking off.
+
+#### Reference
+
+See `docs/music-gen-local-rfc-2026-08-28.md` for the full design rationale, schema contract, loop strategy, and test plan.
+
+---
+
 ### Piper TTS — Offline Text-to-Speech
 
 > **Completely free, fully offline TTS.** No network required. Good quality for drafts and budget-constrained projects.
@@ -951,7 +1006,7 @@ How many providers cover each capability:
 | **Image Generation** | FLUX, Kling Official, Grok, Google Imagen, GPT Image 2, Recraft | Local Diffusion | Pexels, Pixabay (stock) |
 | **Video Generation** | Grok, Kling Official, Kling via fal.ai, Runway, Veo, Gemini Omni, Higgsfield, MiniMax, HeyGen | WAN, Hunyuan, CogVideo, LTX | Pexels, Pixabay (stock) |
 | **Text-to-Speech** | ElevenLabs, Google TTS, Kling Official, OpenAI | Piper | Piper, Google free tier, ElevenLabs free tier |
-| **Music Generation** | ElevenLabs, Suno, Google Lyria | — | ElevenLabs free tier |
+| **Music Generation** | ElevenLabs, Suno, Google Lyria | MusicGen (local) | ElevenLabs free tier |
 | **Post-Production** | — | FFmpeg (compose, stitch, trim, mix, enhance, grade) | All free |
 | **Analysis** | — | WhisperX, Scene Detect, Frame Sampler, CLIP/BLIP-2 | All free |
 | **Enhancement** | — | Upscale, BG Remove, Face Enhance, Face Restore | All free |

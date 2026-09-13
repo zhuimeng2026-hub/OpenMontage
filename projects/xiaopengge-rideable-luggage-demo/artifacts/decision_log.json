@@ -1,0 +1,37 @@
+{
+  "version": "1.0",
+  "project_id": "xiaopengge-rideable-luggage-demo",
+  "decisions": [
+    {
+      "decision_id": "d-001",
+      "stage": "scene_plan",
+      "category": "provider_selection",
+      "subject": "sc03 generation mode and reference image",
+      "options_considered": [
+        {
+          "option_id": "t2v_h3max_no_first_frame",
+          "label": "T2V · MiniMax-H3-Max · 6s · 9:16 · 768P · no first frame",
+          "score": 0.4,
+          "reason": "Original plan. Matches scene_plan.scene.type=\"generated\" semantics and requires no extra image upload. Risk: Hailuo silently drifts the silver ribbed shell, black seat/handle/wheel, and '小鹏哥' mark — the visual proof of 'this exact box can be ridden' is weakened."
+        },
+        {
+          "option_id": "i2v_h3max_walk_first_frame",
+          "label": "I2V · MiniMax-H3-Max · 6s · 9:16 · 768P · first_frame_image=assets/images/06-walk.png",
+          "score": 0.9,
+          "reason": "Anchor the product silhouette + Western female styling + hotel-outdoor setting to a frame we already authored and trust. Scene stays a 'real motion' proof shot. Cost: 1 PNG upload to ocbot.aixifs.com/videopic/ (HTTPS proxy 7890)."
+        },
+        {
+          "option_id": "i2v_h3_fast_walk_first_frame",
+          "label": "I2V · MiniMax-Hailuo-2.3-Fast · 6s · 9:16 · first_frame_image=assets/images/06-walk.png",
+          "score": 0.55,
+          "reason": "Cheaper and quota-friendlier, but H3-Max was chosen for stronger motion coherence on a single tracking shot — Fast tier is visibly weaker on smooth tracking_right and tends to drop the back wheel under parallax."
+        }
+      ],
+      "selected": "i2v_h3max_walk_first_frame",
+      "reason": "Visual-accuracy beats quota savings on the one hero motion shot. T2V drift on product silhouette is the documented failure mode for this product line; anchoring via 06-walk.png removes the risk. sc03 (11-17s, riding) and sc08 (41-47s, walking) reusing the same source image is acceptable — they are 24s apart in a fast TikTok edit and the human action differs (riding vs. pulling).",
+      "user_visible": true,
+      "user_approved": true,
+      "confidence": 0.85
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "voicebox": {
+      "type": "http",
+      "url": "http://127.0.0.1:17493/mcp",
+      "headers": {
+        "X-Voicebox-Client-Id": "claude-code"
+      }
+    },
+    "openmontage": {
+      "type": "http",
+      "url": "http://127.0.0.1:8900/mcp",
+      "headers": {
+        "Authorization": "Bearer h6LQUTVPA5vBmqXijUydpockVrPx2ruUqPaVQRT6WJE"
+      }
+    }
+  }
+}

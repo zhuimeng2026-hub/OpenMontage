@@ -123,6 +123,35 @@
   .btn-wechat:hover{opacity:.92;transform:translateY(-1px);}
   .btn-wechat:active{transform:translateY(0);}
   .wx-icon{width:22px;height:22px;}
+  /* 桌面扫码登录弹窗 */
+  .qr-modal{
+    position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(5,1,15,0.7);backdrop-filter:blur(4px);z-index:200;
+  }
+  .qr-modal.show{display:flex;}
+  .qr-card{
+    width:300px;padding:28px 24px 22px;border-radius:18px;text-align:center;
+    background:var(--bg-surface);border:1px solid var(--border-soft);
+    box-shadow:0 24px 60px rgba(0,0,0,0.5);
+  }
+  .qr-card .qr-title{font-size:18px;font-weight:700;color:var(--text-primary);}
+  .qr-card .qr-sub{font-size:13px;color:var(--text-secondary);margin:6px 0 18px;}
+  .qr-canvas-wrap{
+    width:220px;height:220px;margin:0 auto;border-radius:12px;overflow:hidden;
+    background:#fff;display:flex;align-items:center;justify-content:center;
+  }
+  .qr-canvas-wrap canvas{display:block;}
+  .qr-card .qr-hint{font-size:12px;color:var(--text-tertiary);margin-top:14px;line-height:1.5;}
+  .qr-card .qr-expired{display:none;font-size:13px;color:var(--warning);margin-top:8px;}
+  .qr-card.expired .qr-expired{display:block;}
+  .qr-card.expired .qr-canvas-wrap{display:none;}
+  .qr-card .qr-btns{display:flex;gap:10px;margin-top:16px;}
+  .qr-card .qr-btns button{
+    flex:1;height:38px;border:1px solid var(--border-input);border-radius:10px;
+    background:transparent;color:var(--text-primary);font-size:13px;font-family:inherit;cursor:pointer;
+  }
+  .qr-card .qr-btns button.qr-primary{border-color:var(--primary);color:var(--primary);font-weight:600;}
+  .qr-card .qr-btns button:hover{background:rgba(255,255,255,0.06);}
   .demo-mode{text-align:center;font-size:13px;color:var(--text-secondary);margin-top:18px;}
   .demo-mode b{color:var(--primary);font-weight:500;cursor:pointer;}
   #toast{
@@ -170,6 +199,30 @@
   .topbar .icon-btn{width:28px;height:28px;border-radius:14px;background:var(--bg-surface);flex:none;display:flex;align-items:center;justify-content:center;}
   .topbar .icon-btn svg{width:15px;height:15px;color:var(--text-secondary);}
   .topbar .avatar{width:36px;height:36px;border-radius:18px;}
+  /* 右上角头像下拉菜单 */
+  .avatar-menu{position:relative;display:flex;align-items:center;}
+  .avatar-menu .avatar{cursor:pointer;transition:transform .15s ease,box-shadow .15s ease;}
+  .avatar-menu .avatar:hover{transform:scale(1.05);box-shadow:0 0 0 2px rgba(124,92,255,0.5);}
+  .avatar-menu.guest .avatar{cursor:default;}
+  .avatar-menu.guest .avatar:hover{transform:none;box-shadow:none;}
+  .avatar-dropdown{
+    position:absolute;top:46px;right:0;min-width:184px;
+    background:var(--bg-surface);border:1px solid var(--border-soft);
+    border-radius:12px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,0.5);
+    opacity:0;transform:translateY(-6px);pointer-events:none;
+    transition:opacity .15s ease,transform .15s ease;z-index:120;
+  }
+  .avatar-menu.open .avatar-dropdown{opacity:1;transform:translateY(0);pointer-events:auto;}
+  .avatar-menu.guest .avatar-dropdown{display:none;}
+  .avatar-dropdown .ad-head{padding:8px 10px 10px;border-bottom:1px solid var(--border-subtle);margin-bottom:6px;}
+  .avatar-dropdown .ad-name{font-size:14px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .avatar-dropdown .ad-sub{font-size:12px;color:var(--text-tertiary);margin-top:2px;}
+  .avatar-dropdown .ad-item{
+    width:100%;text-align:left;height:38px;padding:0 10px;border:none;border-radius:8px;
+    background:transparent;color:var(--text-primary);font-size:13px;font-family:inherit;cursor:pointer;
+    display:flex;align-items:center;gap:8px;
+  }
+  .avatar-dropdown .ad-item:hover{background:rgba(255,77,79,0.12);color:#ff6b6b;}
 
   .content{flex:1;overflow-y:auto;padding:28px 32px 60px;}
   .view{display:none;}
@@ -195,6 +248,13 @@
   .vcard .meta{padding:16px 12px 18px;}
   .vcard .t{font-size:15px;font-weight:600;}
   .vcard .m{font-size:12px;color:var(--text-secondary);margin-top:4px;}
+  .vcard .qdownload{display:inline-flex;align-items:center;margin-top:12px;height:28px;padding:0 10px;border:1px solid rgba(52,211,153,.45);border-radius:6px;color:var(--success);font-size:11px;line-height:1;text-decoration:none;}
+  .vcard .qdownload:hover{background:rgba(52,211,153,.12);border-color:var(--success);}
+  .vcard .qrepublish{display:inline-flex;align-items:center;margin-top:12px;height:28px;padding:0 10px;border:1px solid rgba(255,190,92,.5);border-radius:6px;color:var(--warning);font-size:11px;line-height:1;background:transparent;cursor:pointer;}
+  .vcard .qrepublish:hover{background:rgba(255,190,92,.12);border-color:var(--warning);}
+  .vcard .qerror{display:block;margin-top:6px;color:var(--error);font-size:11px;line-height:1.35;}
+  .vcard.video-link{cursor:pointer;}
+  .vcard.video-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}
   .queue-row{
     display:flex;align-items:center;gap:16px;height:64px;padding:0 16px;margin-bottom:8px;
     background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-sm);
@@ -224,9 +284,31 @@
   .upload-preview{margin-top:14px;}
   .script-tag{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);}
   .script-tag b{color:var(--primary);font-weight:600;}
+  /* ============ 渲染脚本选择器（系统 + 我的脚本，单选 / 分页） ============ */
+  .script-list{max-height:240px;overflow:auto;border:1px solid var(--border-soft);border-radius:10px;background:var(--bg-surface);padding:8px;}
+  .script-group-title{font-size:12px;color:var(--text-secondary);margin:6px 2px 4px;font-weight:600;}
+  .script-opt{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;cursor:pointer;font-size:14px;}
+  .script-opt:hover{background:rgba(255,255,255,0.04);}
+  .script-opt input{accent-color:var(--primary);}
+  .script-opt-user{color:var(--text-primary);}
+  .script-key{margin-left:auto;font-size:11px;color:var(--text-secondary);font-family:monospace;}
+  .script-empty{font-size:13px;color:var(--text-secondary);padding:6px 4px;}
+  .script-hint{font-size:12px;color:#F8B4B4;margin-top:8px;min-height:16px;}
+  .script-pager{display:flex;align-items:center;gap:10px;margin-top:8px;}
+  .pager-btn{background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft);border-radius:8px;padding:4px 12px;cursor:pointer;font-size:13px;}
+  .pager-btn:disabled{opacity:.4;cursor:not-allowed;}
+  .pager-info{font-size:12px;color:var(--text-secondary);}
   .thumb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:10px;margin-top:10px;}
   .thumb{position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;background:rgba(255,255,255,0.05);border:1px solid var(--border-soft);}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  /* Subtitle view */
+  .sub-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 18px;padding:12px 14px;background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-card);}
+  .sub-toolbar .btn-primary,.sub-toolbar .btn-ghost{font-size:13px;}
+  .sub-toolbar .sub-status{margin-left:auto;font-size:12px;color:var(--text-secondary);}
+  .sub-card{background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-card);padding:14px 16px;margin-bottom:14px;}
+  .sub-card h4{font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:8px;}
+  .sub-card #sub-srt-download{font-size:12px;color:var(--accent);text-decoration:none;padding:4px 10px;border:1px solid var(--border-soft);border-radius:6px;}
+  .sub-card #sub-srt-download:hover{background:rgba(124,92,255,0.12);}
   .thumb .idx{position:absolute;left:6px;top:6px;font-size:10px;font-weight:600;color:#fff;background:rgba(0,0,0,.55);border-radius:9px;padding:1px 6px;line-height:1.5;}
   .thumb .nm{position:absolute;left:0;right:0;bottom:0;font-size:10px;line-height:1.3;padding:3px 5px;background:linear-gradient(transparent,rgba(0,0,0,.72));color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .tmpl{height:150px;border-radius:12px;position:relative;cursor:pointer;border:2px solid transparent;transition:transform .15s ease;}
@@ -242,6 +324,44 @@
   .panel .opt{height:40px;border-radius:10px;background:rgba(255,255,255,0.06);display:flex;align-items:center;padding:0 16px;font-size:14px;margin-bottom:8px;}
   .create-row{display:flex;gap:24px;position:relative;}
 
+  /* ============ 再来一组 / 我的渲染任务（多任务可见） ============ */
+  .btn-restart{
+    width:100%;height:48px;border:none;border-radius:12px;margin-top:14px;
+    background:rgba(79,216,255,0.14);border:1px solid rgba(79,216,255,0.5);
+    color:#9fe9ff;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    transition:background .15s ease,opacity .15s ease;
+  }
+  .btn-restart:hover{background:rgba(79,216,255,0.22);}
+  .btn-restart:active{transform:translateY(0);}
+  .btn-restart:disabled{opacity:.4;cursor:not-allowed;}
+  .create-tasks{margin-top:16px;border-top:1px solid var(--border-soft);padding-top:14px;}
+  .create-tasks h5{font-size:13px;font-weight:600;margin:0 0 10px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;}
+  .create-tasks h5 span{color:var(--accent);font-weight:600;}
+  .create-tasks .ct-row{display:flex;align-items:center;gap:10px;padding:9px 12px;margin-bottom:8px;background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:10px;}
+  .create-tasks .ct-name{font-size:13px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .create-tasks .ct-sub{font-size:11px;color:var(--text-secondary);margin-top:2px;}
+  .create-tasks .ct-badge{font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px;flex:none;}
+  .ct-badge.rendering{background:rgba(79,216,255,0.16);color:#9fe9ff;}
+  .ct-badge.queued{background:rgba(255,190,92,0.16);color:#ffce8a;}
+  .ct-badge.done{background:rgba(52,211,153,0.16);color:#7be0b0;}
+
+  /* ============ 本次提交的任务（图+脚本整包，切页不丢，直到开新任务） ============ */
+  .current-task{
+    background:linear-gradient(180deg,rgba(124,92,255,0.10),rgba(124,92,255,0.03));
+    border:1px solid rgba(124,92,255,0.35);border-radius:14px;padding:16px 18px;margin:0 0 18px;
+  }
+  .current-task .ct-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;}
+  .current-task .ct-title{font-size:14px;font-weight:600;color:var(--text-primary);}
+  .current-task .ct-meta{font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;}
+  .current-task .ct-meta a{color:var(--accent);text-decoration:none;}
+  .current-task .ct-meta a:hover{text-decoration:underline;}
+  .current-task .ct-badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;flex:none;}
+  .ct-badge.failed{background:rgba(255,90,90,0.16);color:#ff9b9b;}
+  .create-tasks .ct-empty{font-size:12px;color:var(--text-tertiary);padding:4px 2px;}
+  .create-tasks .ct-viewall{font-size:12px;color:var(--primary);cursor:pointer;margin-top:4px;display:inline-block;}
+  .create-tasks .ct-viewall:hover{text-decoration:underline;}
+
   /* ============ QUEUE TABLE ============ */
   .qsub{font-size:13px;color:var(--text-secondary);margin-bottom:18px;}
   .filter-bar{display:flex;gap:8px;margin-bottom:20px;}
@@ -255,10 +375,13 @@
   .pill{height:24px;padding:0 10px;border-radius:12px;display:flex;align-items:center;font-size:11px;font-weight:500;flex:none;}
   .qrow .qtrack{width:180px;height:8px;border-radius:4px;background:rgba(255,255,255,0.1);overflow:hidden;flex:none;}
   .qrow .qfill{height:100%;border-radius:4px;}
+  .qrow .qpct{width:52px;text-align:right;font-size:13px;font-weight:500;flex:none;}
   .qrow .qres{width:90px;font-size:13px;}
   .qrow .quser{display:flex;align-items:center;gap:10px;width:200px;}
   .qrow .qs{width:28px;height:28px;border-radius:14px;flex:none;}
   .qrow .qtime{margin-left:auto;font-size:12px;}
+  .qrow .qdownload{flex:none;display:inline-flex;align-items:center;height:26px;padding:0 8px;border:1px solid rgba(52,211,153,.45);border-radius:6px;color:var(--success);font-size:11px;line-height:1;text-decoration:none;white-space:nowrap;}
+  .qrow .qdownload:hover{background:rgba(52,211,153,.12);border-color:var(--success);}
 
   /* ============ GALLERY ============ */
   .gsub{font-size:13px;color:var(--text-secondary);margin-bottom:18px;}
@@ -334,9 +457,25 @@
   .ctab:hover{background:rgba(255,255,255,0.1);}
   .ctab.active{background:rgba(124,92,255,0.2);color:var(--text-primary);border-color:rgba(124,92,255,0.4);font-weight:600;}
 
+  /* ============ CREATE: SESSION UPLOADED ASSETS ============ */
+  .sess-assets{background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-card);padding:18px 20px;margin-bottom:22px;}
+  .sess-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .sess-title{font-size:15px;font-weight:600;color:var(--text-primary);}
+  .sess-actions{display:flex;align-items:center;gap:10px;}
+  .sess-count{font-size:12px;color:var(--text-secondary);}
+  .sess-hint{font-size:12px;color:var(--text-secondary);margin:10px 0 12px;}
+  .sess-grid{display:flex;flex-wrap:wrap;gap:12px;}
+  .sess-empty{font-size:13px;color:var(--text-tertiary);padding:8px 0;}
+  .sess-cell{position:relative;width:92px;height:92px;border-radius:10px;overflow:hidden;border:1px solid var(--border-soft);background:#1e1e1e;cursor:pointer;}
+  .sess-cell img{width:100%;height:100%;object-fit:cover;display:block;}
+  .sess-cell .cb{position:absolute;top:6px;left:6px;width:18px;height:18px;accent-color:var(--primary);cursor:pointer;z-index:2;background:rgba(0,0,0,.4);border-radius:4px;}
+  .sess-cell .nm{position:absolute;left:0;right:0;bottom:0;font-size:10px;line-height:1.3;padding:3px 5px;background:linear-gradient(transparent,rgba(0,0,0,.72));color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .sess-cell.off{opacity:.45;}
+
   /* ============ CREATE: SCRIPT MODE ============ */
   .script-row{display:flex;gap:24px;align-items:flex-start;}
   .editor-col{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .script-row .panel{position:static;width:360px;flex-shrink:0;top:auto;right:auto;}
   .script-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
   .comp-name{height:34px;flex:0 0 220px;background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:8px;color:var(--text-primary);font-size:13px;padding:0 12px;outline:none;}
   .comp-name:focus{border-color:var(--primary);}
@@ -351,6 +490,32 @@
   #script-progress .track{height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden;}
   #script-progress .fill{height:100%;width:0%;background:var(--grad-primary);}
   #script-progress .st{font-size:12px;color:var(--text-secondary);margin-top:8px;}
+
+  /* ============ 定义视频脚本 ============ */
+  .nav-item.nav-logout{color:var(--text-secondary);}
+  .nav-item.nav-logout:hover{background:rgba(255,77,79,0.12);color:#ff6b6b;}
+  .ds-head h3{font-size:20px;font-weight:600;margin-bottom:8px;}
+  .ds-desc{font-size:13px;color:var(--text-secondary);line-height:1.7;max-width:760px;}
+  .ds-note{margin:18px 0 6px;padding:16px 18px;border-radius:var(--radius-sm);background:rgba(124,92,255,0.08);border:1px solid rgba(124,92,255,0.22);max-width:760px;}
+  .ds-note-title{font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:6px;}
+  .ds-note-body{font-size:13px;color:var(--text-secondary);line-height:1.7;margin-bottom:12px;}
+  .ds-section{font-size:13px;font-weight:600;color:var(--primary);margin:26px 0 12px;letter-spacing:.04em;}
+  .ds-prompt{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.7;color:var(--text-secondary);background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:16px 18px;max-width:760px;cursor:pointer;}
+  .ds-prompt:hover{border-color:var(--accent);}
+  .ds-form{max-width:760px;display:flex;flex-direction:column;gap:8px;}
+  .ds-label{font-size:13px;font-weight:600;color:var(--text-primary);margin-top:6px;}
+  .ds-input,.ds-textarea{width:100%;box-sizing:border-box;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;font-family:inherit;}
+  .ds-textarea{min-height:220px;resize:vertical;line-height:1.6;}
+  .ds-actions{display:flex;align-items:center;gap:12px;margin-top:10px;}
+  .ds-msg{font-size:13px;}
+  .ds-msg.ok{color:var(--success);}
+  .ds-msg.err{color:var(--error);}
+  .ds-list{display:flex;flex-direction:column;gap:8px;max-width:760px;}
+  .ds-empty{font-size:13px;color:var(--text-tertiary);padding:8px 0;}
+  .ds-item{padding:10px 14px;border-radius:var(--radius-sm);background:var(--bg-surface);border:1px solid var(--border-soft);cursor:pointer;transition:border-color .15s ease;}
+  .ds-item:hover{border-color:var(--accent);}
+  .ds-item-name{font-size:14px;font-weight:600;color:var(--text-primary);}
+  .ds-item-time{font-size:12px;color:var(--text-tertiary);margin-top:2px;}
 </style>
 </head>
 <body>
@@ -366,17 +531,33 @@
     </div>
     <h1>欢迎回来</h1>
     <div class="sub">使用微信服务号授权，安全登录你的视频创作空间</div>
+    <div id="login-expired-banner" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:12px;background:rgba(255,77,79,.12);border:1px solid rgba(255,77,79,.4);color:#ff6b6b;font-size:13px;text-align:center">登录状态已失效，请重新扫码登录</div>
     <button class="btn-wechat" id="wechat-login-btn">
       <svg class="wx-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <rect x="2.5" y="7" width="13" height="11" rx="5.5"/>
         <rect x="8.5" y="3" width="13" height="11" rx="5.5"/>
       </svg>
-      微信服务号登录
+      微信扫码登录
     </button>
     <div class="divider"><span>或</span></div>
     <button class="btn-ghost">使用 Google 账号继续</button>
     <div class="demo-mode">配置未完成？<b id="demo-link">体验演示模式 ›</b></div>
     <div class="signup">还没有账号？ <b>注册</b></div>
+  </div>
+</div>
+
+<!-- 桌面扫码登录弹窗 -->
+<div id="qr-login-modal" class="qr-modal">
+  <div class="qr-card" id="qr-card">
+    <div class="qr-title">微信扫码登录</div>
+    <div class="qr-sub">使用手机微信扫描二维码</div>
+    <div class="qr-canvas-wrap" id="qr-canvas-wrap"></div>
+    <div class="qr-hint">扫码后请在手机上确认授权，电脑端将自动进入</div>
+    <div class="qr-expired">二维码已过期，请点击下方按钮刷新</div>
+    <div class="qr-btns">
+      <button id="qr-refresh">刷新</button>
+      <button class="qr-primary" id="qr-close">取消</button>
+    </div>
   </div>
 </div>
 
@@ -414,15 +595,27 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="10.5" r="2.5"/><circle cx="8.5" cy="7.5" r="2.5"/><circle cx="6.5" cy="12.5" r="2.5"/><path d="M12 22a10 10 0 1 1 0-20c4 0 7 2 7 6 0 3-2 4-4 4h-3a2 2 0 0 0 0 4h5"/></svg>
       设计系统
     </div>
-    <div class="nav-item" data-view="settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14.1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-      设置
-    </div>
+      <div class="nav-item" data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14.1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        设置
+      </div>
+      <div class="nav-item" data-view="script-def">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13l-2 2 2 2"/><path d="M15 13l2 2-2 2"/></svg>
+        定义视频脚本
+      </div>
+      <div class="nav-item" data-view="subtitles">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 11h10M7 15h6"/></svg>
+        字幕
+      </div>
+      <div class="nav-item nav-logout" data-view="logout">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+        退出系统
+      </div>
     <div class="sidebar-user">
       <div class="avatar"></div>
       <div>
-        <div class="n">晓明</div>
-        <div class="r">Pro 会员</div>
+        <div class="n" id="sidebar-user-name">晓明</div>
+        <div class="r" id="sidebar-user-role">Pro 会员</div>
       </div>
     </div>
   </aside>
@@ -433,35 +626,31 @@
       <h2 id="topbar-title">工作台</h2>
       <div class="search">搜索视频、模板、任务…</div>
       <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg></div>
-      <div class="avatar"></div>
+      <div class="avatar-menu" id="avatar-menu">
+        <div class="avatar" id="topbar-avatar" title="账号"></div>
+        <div class="avatar-dropdown" id="avatar-dropdown">
+          <div class="ad-head">
+            <div class="ad-name" id="ad-name">未登录</div>
+            <div class="ad-sub" id="ad-sub"></div>
+          </div>
+          <button class="ad-item" id="avatar-logout" type="button">退出登录</button>
+        </div>
+      </div>
     </header>
 
     <div class="content">
       <!-- DASHBOARD -->
       <section class="view active" id="view-dashboard">
-        <div class="greet">下午好，晓明</div>
-        <div class="greet-sub" id="greet-sub">今天是 2026年8月13日 · 你还有 3 个渲染任务正在进行中</div>
+        <div class="greet" id="greet">下午好，晓明</div>
+        <div class="greet-sub" id="greet-sub">正在加载任务概况…</div>
         <div class="kpi-grid">
-          <div class="kpi"><div class="l">总视频数</div><div class="v">128</div><div class="s" style="color:var(--success)">+12 本月</div></div>
-          <div class="kpi"><div class="l">本月渲染</div><div class="v">46</div><div class="s" style="color:var(--text-secondary)">总时长 3h12m</div></div>
-          <div class="kpi"><div class="l">渲染中</div><div class="v" style="color:var(--accent)">3</div><div class="s" style="color:var(--text-secondary)">队列任务进行中</div></div>
-          <div class="kpi"><div class="l">配额用量</div><div class="v" style="color:var(--warning)">68%</div><div class="s" style="color:var(--text-secondary)">本月已用额度</div></div>
+          <div class="kpi"><div class="l">总视频数</div><div class="v" id="kpi-total-videos">0</div><div class="s" style="color:var(--success)">当前会话任务</div></div>
+          <div class="kpi"><div class="l">本月渲染</div><div class="v">—</div><div class="s" style="color:var(--text-secondary)">月度统计暂未接入</div></div>
+          <div class="kpi"><div class="l">渲染中</div><div class="v" id="kpi-rendering" style="color:var(--accent)">0</div><div class="s" style="color:var(--text-secondary)">当前会话任务</div></div>
+          <div class="kpi"><div class="l">配额用量</div><div class="v" style="color:var(--warning)">—</div><div class="s" style="color:var(--text-secondary)">用量统计暂未接入</div></div>
         </div>
         <div class="section-head"><h3>最近视频</h3><span class="more">查看全部 ›</span></div>
-        <div class="video-grid">
-          <div class="vcard">
-            <div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div>
-            <div class="meta"><div class="t">夏日旅行混剪</div><div class="m">0:45 · 2天前</div></div>
-          </div>
-          <div class="vcard">
-            <div class="thumb" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div>
-            <div class="meta"><div class="t">产品发布会开场</div><div class="m">1:30 · 昨天</div></div>
-          </div>
-          <div class="vcard">
-            <div class="thumb" style="background:linear-gradient(135deg,#F87171,#7C5CFF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(248,113,113,0.2);color:var(--error)">渲染失败</span></div>
-            <div class="meta"><div class="t">城市夜景延时</div><div class="m">0:20 · 3天前</div></div>
-          </div>
-        </div>
+        <div class="video-grid" id="dash-recent-videos"><div style="color:var(--text-tertiary);font-size:13px;padding:8px 0">正在加载最近视频…</div></div>
         <div class="section-head"><h3>渲染队列</h3><span class="more">管理 ›</span></div>
         <div id="dash-queue"></div>
       </section>
@@ -474,6 +663,31 @@
           <div class="ctab" data-mode="voice">字幕 / 克隆配音</div>
         </div>
 
+        <!-- 本次提交的任务：图 + 脚本整包，切页不丢，直到「再来一组」开新任务 -->
+        <div class="current-task" id="current-task-card" style="display:none">
+          <div class="ct-head">
+            <span class="ct-title">📦 本次提交的任务</span>
+            <span class="ct-badge" id="current-task-badge"></span>
+          </div>
+          <div class="ct-meta" id="current-task-meta"></div>
+          <div class="thumb-grid" id="current-task-thumbs"></div>
+        </div>
+
+        <!-- 当前会话已上传图片：可勾选，避免上传失败后重复上传 -->
+        <div class="sess-assets" id="sess-assets-box">
+          <div class="sess-head">
+            <div class="sess-title">本会话已上传图片</div>
+            <div class="sess-actions">
+              <span class="sess-count" id="sess-count">—</span>
+              <button type="button" class="btn-ghost" id="sess-toggle">全选</button>
+              <button type="button" class="btn-ghost" id="sess-refresh">刷新</button>
+              <button type="button" class="btn-primary" id="sess-merge" style="height:34px;padding:0 14px">将所选加入本次预览</button>
+            </div>
+          </div>
+          <div class="sess-hint">以下图片已在服务器（当前会话）中，无需重复上传。勾选后点击「将所选加入本次预览」即可继续渲染。</div>
+          <div class="sess-grid" id="sess-grid"><div class="sess-empty">尚未上传图片</div></div>
+        </div>
+
         <!-- 模板模式：图生视频（黑盒预设） -->
         <div class="create-mode" id="mode-template">
           <div class="create-row">
@@ -482,7 +696,7 @@
               <div class="drop" id="upload-drop">
                 <div class="up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V6M5 12l7-7 7 7"/></svg></div>
                 <div class="d1">拖拽图片到此处，或 点击上传</div>
-                <div class="d2" id="upload-hint">支持 JPG / PNG / WEBP · 单次最多 10 张</div>
+                <div class="d2" id="upload-hint">支持 JPG / PNG / WEBP · 每次 5–10 张 · 成片固定 60 秒</div>
                 <input type="file" id="upload-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
               </div>
               <div class="upload-preview" id="upload-preview" style="display:none">
@@ -495,25 +709,30 @@
                 <div class="tmpl" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><span class="tn">产品宣传</span></div>
                 <div class="tmpl" style="background:linear-gradient(135deg,#7C5CFF,#F87171)"><span class="tn">节日祝福</span></div>
               </div>
-              <div class="pl" style="margin-top:14px">Remotion 渲染脚本</div>
-              <select id="image-script-select" class="opt" style="width:100%;box-sizing:border-box;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-soft)">
-                <option value="photo-ken-burns">照片运镜</option>
-                <option value="cinematic-montage">电影混剪</option>
-                <option value="ecommerce-product-demo">电商产品演示</option>
-              </select>
+              <div class="pl" style="margin-top:14px">渲染脚本（系统脚本 + 我的脚本）</div>
+              <div id="image-script-list" class="script-list"></div>
+              <div id="image-script-hint" class="script-hint"></div>
+              <button class="btn-ghost" id="open-in-script-mode" type="button" style="display:none;margin-top:10px">在脚本模式打开此脚本 →</button>
+              <div id="image-script-pager" class="script-pager"></div>
             </div>
             <div class="panel">
               <h4>渲染设置</h4>
               <div class="pl">分辨率</div>
               <div class="opt">1080p</div>
               <div class="pl">时长</div>
-              <div class="opt">0:30</div>
+              <div class="opt">固定 60 秒</div>
               <button class="btn-primary" id="render-btn" style="margin-top:18px">开始渲染</button>
               <div id="create-progress" style="display:none;margin-top:14px">
                 <div class="track" style="height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden">
                   <div id="create-fill" class="fill" style="width:0%;height:100%;background:var(--grad-primary)"></div>
                 </div>
                 <div id="create-status" style="font-size:12px;color:var(--text-secondary);margin-top:8px">准备中…</div>
+              </div>
+              <button type="button" class="btn-restart" id="restart-btn" style="display:none">🔄 再来一组 · 新建渲染任务</button>
+              <div class="create-tasks" id="create-tasks" style="display:none">
+                <h5>🎬 我的渲染任务 <span id="create-tasks-count"></span></h5>
+                <div id="create-tasks-body"><div class="ct-empty">提交渲染后将在此实时显示任务进度</div></div>
+                <span class="ct-viewall" data-view="queue">查看完整队列 ›</span>
               </div>
               <div style="font-size:12px;color:var(--text-secondary);margin-top:14px">本视频预计消耗 12 分钟渲染额度</div>
             </div>
@@ -530,6 +749,12 @@
                 <button class="btn-ghost" id="comp-reset">重置为模板</button>
                 <span id="comp-msg" class="comp-msg"></span>
               </div>
+              <div class="script-load-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+                <span class="pl" style="margin:0">从我的脚本载入：</span>
+                <select id="script-load-select" class="opt" style="flex:1;min-width:140px"><option value="">— 选择已保存脚本 —</option></select>
+                <button class="btn-ghost" id="script-load-btn" type="button">载入编辑器</button>
+                <button class="btn-ghost" id="script-load-refresh" type="button">刷新</button>
+              </div>
               <div id="monaco" class="monaco-host"><div class="loading">编辑器加载中…</div></div>
             </div>
             <div class="panel">
@@ -540,6 +765,10 @@
                 <div class="d1">拖拽 / 点击上传素材</div>
                 <div class="d2">JPG / PNG / WEBP</div>
                 <input type="file" id="upload-input-script" accept="image/jpeg,image/png,image/webp" multiple hidden>
+              </div>
+              <div class="upload-preview" id="script-upload-preview" style="display:none;margin-top:12px">
+                <div class="script-tag">当前任务已上传 <b id="script-preview-count">0</b> 张图片</div>
+                <div class="thumb-grid" id="script-thumb-grid"></div>
               </div>
               <div class="pl">分辨率</div>
               <div class="opt">1080p</div>
@@ -597,25 +826,16 @@
       <!-- GALLERY -->
       <section class="view" id="view-gallery">
         <div class="gsub">管理你生成的所有视频，按状态筛选</div>
-        <div class="filter-bar">
+        <div class="filter-bar" id="gallery-filters">
           <div class="chip active">全部</div>
-          <div class="chip">草稿</div>
           <div class="chip">已发布</div>
-          <div class="chip">归档</div>
         </div>
-        <div class="video-grid">
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div><div class="meta"><div class="t">夏日旅行混剪</div><div class="m">0:45 · 2天前</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#4FD8FF,#3366E6)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div><div class="meta"><div class="t">产品发布会开场</div><div class="m">1:30 · 昨天</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#F87171,#7C5CFF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(248,113,113,0.2);color:var(--error)">渲染失败</span></div><div class="meta"><div class="t">城市夜景延时</div><div class="m">0:20 · 3天前</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#34D399,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(79,216,255,0.2);color:var(--accent)">渲染中</span></div><div class="meta"><div class="t">团队年度合集</div><div class="m">2:10 · 4天前</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#34D399)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(52,211,153,0.2);color:var(--success)">已完成</span></div><div class="meta"><div class="t">节日祝福卡片</div><div class="m">0:15 · 5天前</div></div></div>
-          <div class="vcard"><div class="thumb" style="background:linear-gradient(135deg,#FBBD23,#F87171)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="background:rgba(251,189,35,0.2);color:var(--warning)">草稿</span></div><div class="meta"><div class="t">产品功能演示</div><div class="m">0:45 · 6天前</div></div></div>
-        </div>
+        <div class="video-grid" id="gallery-body"><div style="color:var(--text-tertiary);font-size:13px;padding:16px 0">正在加载我的视频…</div></div>
       </section>
 
       <!-- QUEUE -->
       <section class="view" id="view-queue">
-        <div class="qsub" id="queue-summary">共 12 个任务 · 3 渲染中 · 1 排队 · 7 已完成 · 1 失败</div>
+        <div class="qsub" id="queue-summary">正在加载渲染队列…</div>
         <div class="filter-bar">
           <div class="chip active">全部</div>
           <div class="chip">渲染中</div>
@@ -638,6 +858,51 @@
           <div class="vcard" data-tmpl="tech"><div class="thumb" style="background:linear-gradient(135deg,#34D399,#4FD8FF)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">科技发布会</div><div class="m">5 个变体</div></div></div>
           <div class="vcard" data-tmpl="food"><div class="thumb" style="background:linear-gradient(135deg,#FBBD23,#F87171)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">美食记录</div><div class="m">9 个变体</div></div></div>
           <div class="vcard" data-tmpl="city"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#34D399)"><span class="open-hint"><svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M8 5v14l11-7z"/></svg>打开</span></div><div class="meta"><div class="t">城市延时</div><div class="m">4 个变体</div></div></div>
+        </div>
+      </section>
+
+      <!-- SUBTITLES -->
+      <section class="view" id="view-subtitles">
+        <div class="gsub">上传音视频 → 自动转写 → 翻译 → 生成双语字幕 → 烧录到视频</div>
+
+        <div class="sub-toolbar">
+          <input type="file" id="sub-file" accept="audio/*,video/*" style="display:none">
+          <button class="btn-primary" id="sub-pick-file">① 选择音视频</button>
+          <button class="btn-ghost" id="sub-transcribe" disabled>② 转写</button>
+          <button class="btn-ghost" id="sub-translate" disabled>③ 翻译为中文</button>
+          <button class="btn-ghost" id="sub-srt" disabled>④ 生成双语字幕</button>
+          <button class="btn-ghost" id="sub-burn" disabled>⑤ 烧录到视频</button>
+          <span class="sub-status" id="sub-status">就绪</span>
+        </div>
+
+        <div class="sub-card" id="sub-card-file">
+          <h4>① 选择源文件</h4>
+          <div id="sub-file-name" style="color:var(--text-tertiary);font-size:13px">尚未选择文件</div>
+          <div id="sub-file-meta" style="color:var(--text-tertiary);font-size:12px;margin-top:4px"></div>
+        </div>
+
+        <div class="sub-card" id="sub-card-transcript">
+          <h4>② 转写结果</h4>
+          <div id="sub-transcript" style="font-size:13px;color:var(--text-secondary);max-height:280px;overflow:auto;white-space:pre-wrap">点击「② 转写」开始识别(本地 faster-whisper,默认 base 模型;长视频请耐心等待)</div>
+        </div>
+
+        <div class="sub-card" id="sub-card-translation">
+          <h4>③ 中文翻译</h4>
+          <div id="sub-translation" style="font-size:13px;color:var(--text-secondary);max-height:240px;overflow:auto;white-space:pre-wrap">点击「③ 翻译为中文」(Argos 离线模型,已自动禁用 stanza 网络下载)</div>
+        </div>
+
+        <div class="sub-card" id="sub-card-srt">
+          <h4>④ 双语字幕</h4>
+          <div id="sub-srt-preview" style="font-family:monospace;font-size:12px;color:var(--text-secondary);max-height:240px;overflow:auto;white-space:pre-wrap">点击「④ 生成双语字幕」生成 .srt 文件</div>
+          <div id="sub-srt-actions" style="margin-top:8px;display:none">
+            <a id="sub-srt-download" class="btn-ghost" download>下载 SRT</a>
+          </div>
+        </div>
+
+        <div class="sub-card" id="sub-card-burn">
+          <h4>⑤ 烧录结果</h4>
+          <div id="sub-burn-result" style="font-size:13px;color:var(--text-secondary)">点击「⑤ 烧录到视频」生成中英文字幕烧录的 mp4(英文上,中文下)</div>
+          <video id="sub-burn-video" controls style="display:none;margin-top:12px;max-width:100%;border-radius:8px"></video>
         </div>
       </section>
 
@@ -667,11 +932,52 @@
       <section class="view" id="view-settings">
         <div class="gsub">账号与渲染配额管理</div>
         <div class="settings-grid">
-          <div class="settings-card"><h4>账号信息</h4><div style="font-size:14px;font-weight:600">晓明</div><div style="font-size:13px;color:var(--text-secondary);margin-top:4px">you@company.com · Pro 会员</div></div>
+          <div class="settings-card"><h4>账号信息</h4><div style="font-size:14px;font-weight:600" id="settings-user-name">晓明</div><div style="font-size:13px;color:var(--text-secondary);margin-top:4px" id="settings-user-desc">you@company.com · Pro 会员</div></div>
           <div class="settings-card"><h4>渲染配额</h4><div style="font-size:30px;font-weight:700;color:var(--warning)">68%</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">本月已用 204 / 300 分钟</div></div>
           <div class="settings-card"><h4>通知偏好</h4><div style="font-size:13px;color:var(--text-secondary)">渲染完成、渲染失败、配额预警</div></div>
           <div class="settings-card"><h4>团队成员</h4><div style="font-size:13px;color:var(--text-secondary)">晓明、李雷、韩梅梅 等 3 人</div></div>
         </div>
+      </section>
+
+      <!-- 定义视频脚本 -->
+      <section class="view" id="view-script-def">
+        <div class="ds-head">
+          <h3>定义视频脚本</h3>
+          <p class="ds-desc">在该页面编写并保存你自己的视频生成脚本。你可以先用 DeepSeek 页面生成 Remotion 脚本，再把结果粘贴到下方「脚本内容」中。脚本保存在服务器上，供后端渲染使用。</p>
+        </div>
+
+        <div class="ds-note">
+          <div class="ds-note-title">如何获取 Remotion 脚本？</div>
+          <div class="ds-note-body">点击右侧按钮前往 DeepSeek，使用下面的「典型提示词」生成 Remotion 视频脚本，复制结果后粘贴到本页「脚本内容」输入框即可。</div>
+          <button class="btn-ghost" id="ds-open-deepseek" type="button">前往 DeepSeek 生成脚本 ↗</button>
+        </div>
+
+        <div class="ds-section">典型 DeepSeek 提示词（点击复制）</div>
+        <pre class="ds-prompt" id="ds-prompt" title="点击复制">请帮我用 Remotion（React + TypeScript）编写一个竖屏 9:16、时长约 60 秒的产品宣传视频脚本。
+
+要求：
+1. 使用图片素材数组 props.images，每张图片展示 3 秒，配合缓慢的缩放/平移运镜（Ken Burns）。
+2. 视频开头用标题文字卡片点明主题，结尾用总结卡片收束。
+3. 加入底部进度条、品牌水印占位与背景音乐占位（通过 props.music 引用）。
+4. 使用弹簧入场动画，文字与图片错落出现，整体节奏明快。
+
+请只输出可直接用于 Remotion 的 Composition 组件代码（含 &lt;Composition&gt; 默认导出），并附不超过 3 句的参数说明。</pre>
+
+        <div class="ds-section">保存你的脚本</div>
+        <div class="ds-form">
+          <label class="ds-label" for="ds-name">脚本名称</label>
+          <input id="ds-name" class="ds-input" placeholder="例如：夏日新品宣传片" maxlength="60">
+          <label class="ds-label" for="ds-content">脚本内容（真实脚本，保存到服务器）</label>
+          <textarea id="ds-content" class="ds-textarea" placeholder="在此粘贴或修改你的视频生成脚本（Remotion 代码 / 提示词 / 任意脚本内容）"></textarea>
+          <div class="ds-actions">
+            <button class="btn-primary" id="ds-save" type="button">保存到服务器</button>
+            <span id="ds-msg" class="ds-msg"></span>
+          </div>
+        </div>
+
+        <div class="ds-section">已保存脚本</div>
+        <div class="ds-list" id="ds-list"><div class="ds-empty">暂无已保存脚本</div></div>
+        <div class="script-pager" id="ds-pager"></div>
       </section>
     </div>
   </div>
@@ -712,8 +1018,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
-<script src="config.js"></script>
-<script src="mcp-client.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="config.js?v=68779b6"></script>
+<script src="mcp-client.js?v=queue-sse-1"></script>
 <script>
   // ---- 登录：微信服务号授权 / 演示模式 ----
   function enterApp(){
@@ -726,8 +1033,151 @@
     clearTimeout(window.__ffToast);
     window.__ffToast = setTimeout(function(){ t.classList.remove('show'); }, 2800);
   }
+  // 退出登录：清空本地登录态并退回登录视图。右上角头像下拉与侧边栏「退出系统」共用。
+  function doLogout(){
+    fetch(bffBase() + '/api/logout', {method:'POST', credentials:'include'})
+      .catch(function(){})
+      .then(function(){
+        // 走 setCurrentUser 单一入口：会自动 reset 上一个用户的本地状态。
+        setCurrentUser(null);
+        clearLoginExpired();
+        var lv = document.getElementById('login-view'); if(lv) lv.style.display = '';
+        var app = document.getElementById('app-shell'); if(app) app.classList.remove('active');
+        showToast('已退出登录，请重新登录');
+      });
+  }
+  // 登录失效提示：曾登录但会话已失效时，显示横幅并退回登录视图。
+  function clearLoginExpired(){
+    var b = document.getElementById('login-expired-banner');
+    if(b) b.style.display = 'none';
+  }
+  function onSessionLost(){
+    // 走 setCurrentUser 单一入口：会自动 reset 上一个用户的本地状态（防止同 tab 切换
+    // 用户后旧 currentTask / uploadedImages 泄漏给新用户）。
+    setCurrentUser(null);
+    var b = document.getElementById('login-expired-banner');
+    if(b) b.style.display = 'block';
+    var lv = document.getElementById('login-view');
+    if(lv) lv.style.display = '';
+    var app = document.getElementById('app-shell');
+    if(app) app.classList.remove('active');
+  }
+  // 清空「上一个用户」在浏览器标签内残留的本地状态，避免新用户在同 tab 看到旧用户的
+  // 图片/任务/脚本。幂等。可在登出、登录失效、同 tab 切换账号时调用。
+  // 注意：uploadedImages / scriptUploadedImages 仍通过 clearUploadedImages /
+  // clearScriptUploadedImages 走 URL.revokeObjectURL，避免内存泄漏。
+  function resetClientStateForAuthChange(){
+    // 1) 已上传图片 blob：释放 object URL 并清空数组。
+    try { clearUploadedImages(); } catch(e){}
+    try { clearScriptUploadedImages(); } catch(e){}
+    // 2) 模块作用域的 per-user 变量全部回到默认值。
+    submittedTasks = [];
+    currentTask = null;
+    batchSubmitted = false;
+    currentImageBatch = null;
+    lastBatchId = null;
+    uploadedCount = 0;
+    currentProgressJobId = null;
+    sessionAssets = [];
+    savedScriptContent = {};
+    pendingScriptContent = null;
+    selectedScript = { id: '', name: '', kind: 'system' };
+    // 3) 渲染队列：清空数据 + 关闭所有 SSE/poll 订阅。
+    QUEUE_JOBS = [];
+    Object.keys(queueSubs).forEach(function(k){
+      try { if (queueSubs[k]) queueSubs[k](); } catch(e){}
+      queueSubs[k] = null;
+    });
+    queueSubs = {};
+    // 4) 关闭三个计时器（queue/createTasks 由视图进入再次启动；心跳由 setCurrentUser
+    //    在登录后再次启动）。
+    if (queueTimer)       { clearInterval(queueTimer);       queueTimer = null; }
+    if (createTasksTimer) { clearInterval(createTasksTimer); createTasksTimer = null; }
+    if (window.__ffSessionCheckTimer){
+      clearInterval(window.__ffSessionCheckTimer);
+      window.__ffSessionCheckTimer = null;
+    }
+    if (window.__qrPoll){ clearInterval(window.__qrPoll); window.__qrPoll = null; }
+    // 5) UI 立即隐藏：当前任务卡片、两个进度面板、上传预览。
+    var card = document.getElementById('current-task-card');
+    if (card) card.style.display = 'none';
+    var prog = document.getElementById('create-progress'); if (prog) prog.style.display = 'none';
+    var sb = document.getElementById('script-progress');   if (sb)  sb.style.display  = 'none';
+    if (previewBox) previewBox.style.display = 'none';
+    var sBox = document.getElementById('script-upload-preview');
+    if (sBox) sBox.style.display = 'none';
+    var sGrid = document.getElementById('script-thumb-grid');
+    if (sGrid) sGrid.innerHTML = '';
+    if (thumbGrid) thumbGrid.innerHTML = '';
+    // 6) Monaco 编辑器：恢复到默认模板，并清空暂存待灌入的内容。
+    if (typeof ffMonaco !== 'undefined' && ffMonaco && typeof DEFAULT_COMP !== 'undefined'){
+      try { ffMonaco.setValue(DEFAULT_COMP); } catch(e){}
+    }
+    pendingScriptContent = null;
+    // 7) 清掉跨请求的合成 ID（独立 fetch，无 server-of-truth 兜底）。
+    window.__ffCompId = null;
+  }
+  // 单一入口修改 window.__ffUser。openid 变化时自动 reset 旧用户本地状态；
+  // 同用户仅刷新视图，避免破坏「切页不丢」语义。heartbeat timer 在登录后启动、
+  // resetClientStateForAuthChange 中关闭。
+  function setCurrentUser(user){
+    var prevOpenid = (window.__ffUser && window.__ffUser.openid) || null;
+    var nextOpenid = (user && user.openid) || null;
+    if (prevOpenid === nextOpenid){
+      window.__ffUser = user;
+      renderUserInfo();
+      return;
+    }
+    // 真切换（含登出 → null）：先清旧状态再切新。
+    if (prevOpenid !== null){ resetClientStateForAuthChange(); }
+    window.__ffUser = user;
+    renderUserInfo();
+    if (user){
+      if (!window.__ffSessionCheckTimer){
+        window.__ffSessionCheckTimer = setInterval(checkSessionAlive, 60000);
+      }
+    }
+  }
+  // 右上角头像下拉：点击头像弹出菜单，选择「退出登录」使登录状态失效。
+  (function(){
+    var menu = document.getElementById('avatar-menu');
+    var avatar = document.getElementById('topbar-avatar');
+    var logoutBtn = document.getElementById('avatar-logout');
+    if(!menu || !avatar) return;
+    avatar.addEventListener('click', function(e){
+      e.stopPropagation();
+      if(menu.classList.contains('guest')) return; // 未登录不弹菜单
+      menu.classList.toggle('open');
+    });
+    document.addEventListener('click', function(e){
+      if(menu.classList.contains('open') && !menu.contains(e.target)){
+        menu.classList.remove('open');
+      }
+    });
+    if(logoutBtn){
+      logoutBtn.addEventListener('click', function(e){
+        e.stopPropagation();
+        menu.classList.remove('open');
+        doLogout();
+      });
+    }
+  })();
+  // 应用运行中定时探测会话存活：已登录(__ffUser 已置)但 /api/me 返回未登录，
+  // 说明会话在服务端过期/丢失（如 BFF 重启或实例漂移），主动提示并退回登录。
+  function checkSessionAlive(){
+    if(!window.__ffUser) return; // 未登录则无需判定
+    fetch(bffBase() + '/api/me', {credentials:'include'})
+      .then(function(r){ return r.json(); })
+      .then(function(u){
+        if(!u || !u.authenticated){
+          onSessionLost();
+          showToast('登录已失效，请重新扫码登录');
+        }
+      }).catch(function(){});
+  }
+  // 心跳 timer 已在页面加载时通过 setCurrentUser/守卫启动，避免重复创建。
   function startWechatLogin(){
-    // 正式登录统一走 BFF：BFF 持有 appSecret，负责拼微信授权地址与回调换票。
+    // 微信内置浏览器：直接跳转服务号网页授权；桌面浏览器：弹窗扫码登录。
     var remo = (window.FF_CONFIG && window.FF_CONFIG.remotion) || {};
     var bff = (remo.bffBaseUrl || '').replace(/\/+$/, '');
     if(!bff){
@@ -735,8 +1185,72 @@
       enterApp();
       return;
     }
-    window.location.href = bff + '/api/wechat/login';
+    if(/micromessenger/i.test(navigator.userAgent)){
+      window.location.href = bff + '/api/wechat/login';
+    }else{
+      showQrLogin(bff);
+    }
   }
+  // 桌面扫码登录：向 BFF 取 ticket + 授权地址，渲染二维码并轮询扫码结果。
+  function showQrLogin(bff){
+    var modal = document.getElementById('qr-login-modal');
+    var card  = document.getElementById('qr-card');
+    var wrap  = document.getElementById('qr-canvas-wrap');
+    card.classList.remove('expired');
+    fetch(bff + '/api/wechat/qrlogin').then(function(r){ return r.json(); }).then(function(d){
+      if(!d || !d.auth_url){
+        showToast('获取二维码失败：' + ((d && d.error) || '微信未配置'));
+        return;
+      }
+      modal.classList.add('show');
+      try{
+        // qrcodejs（davidshimjs）API：new QRCode(容器元素, {text,width,height,...})，
+        // 它会向容器里 append 一个 canvas。刷新前先清空，避免重复叠加。
+        wrap.innerHTML = '';
+        new QRCode(wrap, {text: d.auth_url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.H});
+      }catch(e){ showToast('二维码渲染失败'); return; }
+      pollQrStatus(bff, d.ticket);
+    }).catch(function(){ showToast('获取二维码失败，请稍后重试'); });
+  }
+  function pollQrStatus(bff, ticket){
+    var card = document.getElementById('qr-card');
+    var iv = setInterval(function(){
+      fetch(bff + '/api/wechat/qrlogin/status?ticket=' + encodeURIComponent(ticket))
+        .then(function(r){ return r.json(); })
+        .then(function(s){
+          if(s.status === 'authorized'){
+            clearInterval(iv);
+            document.getElementById('qr-login-modal').classList.remove('show');
+            fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
+              if(u && u.authenticated && u.user){
+                clearLoginExpired();
+                // 单一入口：若 openid 变化，自动 reset 前一个用户的本地状态。
+                setCurrentUser(u.user);
+                loadQueue(); // 用真实登录身份刷新渲染队列（与微信回调路径一致）
+                showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
+              }
+              enterApp();
+            }).catch(enterApp);
+          }else if(s.status === 'expired' || s.status === 'invalid'){
+            clearInterval(iv);
+            card.classList.add('expired');
+          }
+        }).catch(function(){});
+    }, 2000);
+    window.__qrPoll = iv;
+  }
+  document.getElementById('qr-refresh').addEventListener('click', function(){
+    var modal = document.getElementById('qr-login-modal');
+    var bff = ((window.FF_CONFIG && window.FF_CONFIG.remotion) || {}).bffBaseUrl || '';
+    bff = bff.replace(/\/+$/, '');
+    if(window.__qrPoll){ clearInterval(window.__qrPoll); }
+    modal.classList.remove('show');
+    showQrLogin(bff);
+  });
+  document.getElementById('qr-close').addEventListener('click', function(){
+    if(window.__qrPoll){ clearInterval(window.__qrPoll); }
+    document.getElementById('qr-login-modal').classList.remove('show');
+  });
   document.getElementById('wechat-login-btn').addEventListener('click', startWechatLogin);
   document.getElementById('demo-link').addEventListener('click', function(){
     var hasBff = !!(window.FFMCP && window.FFMCP.bffBaseUrl);
@@ -748,10 +1262,12 @@
   (function(){
     try{
       var params = new URLSearchParams(location.search);
-      if(params.get('login') === 'wechat'){
-        fetch('/api/me').then(function(r){ return r.json(); }).then(function(u){
-          if(u && u.authenticated && u.user){
-            window.__ffUser = u.user;
+          if(params.get('login') === 'wechat'){
+            fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
+              if(u && u.authenticated && u.user){
+                clearLoginExpired();
+                // 单一入口：若 openid 变化，自动 reset 前一个用户的本地状态。
+                setCurrentUser(u.user);
             loadQueue(); // 用真实登录身份重新过滤渲染队列
             showToast('微信登录成功：' + (u.user.nickname || u.user.openid || ''));
           }
@@ -760,25 +1276,146 @@
         return;
       }
       if(params.get('code')){ showToast('已收到微信授权回调（应走 BFF），演示模式直接进入'); enterApp(); }
+      else{
+        // 已登录用户（会话 cookie 持久）刷新页面时直接进入；曾登录但失效则提示重新扫码
+        fetch(bffBase() + '/api/me', {credentials:'include'}).then(function(r){ return r.json(); }).then(function(u){
+          if(u && u.authenticated && u.user){
+            clearLoginExpired();
+            // 单一入口：若 openid 变化，自动 reset 前一个用户的本地状态。
+            setCurrentUser(u.user);
+            enterApp();
+          } else if(/(\b|^)ff_sid=/.test(document.cookie || '')){
+            // 浏览器仍带 ff_sid，但后端已无该会话（过期 / 实例漂移 / BFF 重启）→ 提示失效
+            var b = document.getElementById('login-expired-banner');
+            if(b) b.style.display = 'block';
+          }
+        }).catch(function(){});
+      }
     }catch(e){}
   })();
   // ---- 侧边栏路由 ----
   var titles = {
     'dashboard':'工作台','create':'创建视频','gallery':'我的视频',
-    'queue':'渲染队列','templates':'模板市场','design-system':'设计系统','settings':'设置'
+    'queue':'渲染队列','templates':'模板市场','design-system':'设计系统','settings':'设置',
+    'script-def':'定义视频脚本','subtitles':'字幕','logout':'退出系统'
   };
   var navItems = document.querySelectorAll('.nav-item');
   navItems.forEach(function(item){
     item.addEventListener('click', function(){
       var view = item.getAttribute('data-view');
+      // 退出系统：复用右上角头像下拉的退出登录逻辑，不切换视图。
+      if (view === 'logout') { doLogout(); return; }
       navItems.forEach(function(n){ n.classList.remove('active'); });
       item.classList.add('active');
       document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
       document.getElementById('view-' + view).classList.add('active');
       document.getElementById('topbar-title').textContent = titles[view];
       document.querySelector('.content').scrollTop = 0;
-      if (view === 'create') refreshQuota();
+      if (view === 'create') {
+        refreshQuota(); loadScriptPicker(); refreshSessionAssets();
+        paintCurrentTask(); // 进入创建页即恢复「本次提交的任务」卡片（切页不丢）
+        reconcileCurrentTask(); // 兜底：本地 jobId 不再被服务器认识则清掉，防跨用户残留
+        loadCreateTasks(); // 进入创建页即刷新「我的渲染任务」
+        if (createTasksTimer) clearInterval(createTasksTimer);
+        createTasksTimer = setInterval(loadCreateTasks, 5000); // 多任务实时可见
+      } else if (createTasksTimer) {
+        clearInterval(createTasksTimer); createTasksTimer = null;
+      }
+      if (view === 'gallery') { loadGallery(); }
+      if (view === 'script-def') { loadScriptDefList(); }
+      if (view === 'subtitles') { initSubtitlesView(); }
     });
+  });
+
+  // ---- 定义视频脚本 ----
+  var dsMsg = document.getElementById('ds-msg');
+  function setDsMsg(text, kind){ dsMsg.textContent = text; dsMsg.className = 'ds-msg ' + (kind || ''); }
+  var dsOpenDeepseek = document.getElementById('ds-open-deepseek');
+  if (dsOpenDeepseek) dsOpenDeepseek.addEventListener('click', function(){
+    window.open('https://chat.deepseek.com', '_blank', 'noopener');
+  });
+  var dsPrompt = document.getElementById('ds-prompt');
+  if (dsPrompt) dsPrompt.addEventListener('click', function(){
+    var txt = this.innerText;
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(function(){ showToast('提示词已复制'); }).catch(function(){});
+    }
+  });
+  // 定义视频脚本页：已保存脚本分页状态（与创建页脚本选择器共用同一后端分页接口）。
+  var dsPage = 0;
+  var dsPageSize = 8;
+  var dsTotal = 0;
+  // 拉取当前会话已保存的脚本列表（分页）。
+  async function loadScriptDefList(){
+    var box = document.getElementById('ds-list');
+    if (!box) return;
+    try {
+      var r = await fetch(bffBase() + '/api/scripts?limit=' + dsPageSize + '&offset=' + (dsPage * dsPageSize), { credentials: 'include' });
+      var j = await r.json();
+      var list = (j && j.scripts) || [];
+      dsTotal = (j && typeof j.total === 'number') ? j.total : list.length;
+      if (!list.length){ box.innerHTML = '<div class="ds-empty">暂无已保存脚本</div>'; renderDsPager(); return; }
+      box.innerHTML = '';
+      list.forEach(function(s){
+        var el = document.createElement('div');
+        el.className = 'ds-item';
+        var time = s.updated_at ? new Date(s.updated_at).toLocaleString() : '';
+        var nameEl = document.createElement('div');
+        nameEl.className = 'ds-item-name';
+        nameEl.textContent = s.name;
+        var timeEl = document.createElement('div');
+        timeEl.className = 'ds-item-time';
+        timeEl.textContent = time;
+        el.appendChild(nameEl);
+        el.appendChild(timeEl);
+        el.addEventListener('click', function(){
+          document.getElementById('ds-name').value = s.name;
+          document.getElementById('ds-content').value = s.content;
+          showToast('已载入：' + s.name);
+          document.querySelector('.content').scrollTop = 0;
+        });
+        box.appendChild(el);
+      });
+    } catch (e){ box.innerHTML = '<div class="ds-empty">加载失败，请稍后重试</div>'; }
+    renderDsPager();
+  }
+  function renderDsPager(){
+    var pager = document.getElementById('ds-pager');
+    if (!pager) return;
+    if (dsTotal <= dsPageSize){ pager.innerHTML = ''; return; }
+    var totalPages = Math.ceil(dsTotal / dsPageSize);
+    var cur = dsPage + 1;
+    pager.innerHTML =
+      '<button type="button" class="pager-btn" id="ds-prev"'+(dsPage<=0?' disabled':'')+'>上一页</button>'+
+      '<span class="pager-info">'+cur+' / '+totalPages+'</span>'+
+      '<button type="button" class="pager-btn" id="ds-next"'+(dsPage>=totalPages-1?' disabled':'')+'>下一页</button>';
+    var prev = document.getElementById('ds-prev');
+    var next = document.getElementById('ds-next');
+    if (prev) prev.addEventListener('click', function(){ if (dsPage>0){ dsPage--; loadScriptDefList(); } });
+    if (next) next.addEventListener('click', function(){ if ((dsPage+1)*dsPageSize < dsTotal){ dsPage++; loadScriptDefList(); } });
+  }
+  var dsSave = document.getElementById('ds-save');
+  if (dsSave) dsSave.addEventListener('click', async function(){
+    var name = (document.getElementById('ds-name').value || '').trim();
+    var content = document.getElementById('ds-content').value || '';
+    if (!name){ setDsMsg('请填写脚本名称', 'err'); return; }
+    if (!content.trim()){ setDsMsg('脚本内容不能为空', 'err'); return; }
+    try {
+      var r = await fetch(bffBase() + '/api/scripts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name: name, content: content })
+      });
+      var j = await r.json();
+      if (!r.ok){ setDsMsg('保存失败：' + (j.error || r.status), 'err'); return; }
+      setDsMsg('已保存：' + name, 'ok');
+      showToast('脚本已保存到服务器');
+      document.getElementById('ds-name').value = '';
+      document.getElementById('ds-content').value = '';
+      dsPage = 0;
+      loadScriptDefList();
+    } catch (e){ setDsMsg('保存失败：' + e.message, 'err'); }
   });
 
   // ---- 创建页模板选中态 ----
@@ -796,6 +1433,7 @@
       chip.addEventListener('click', function(){
         bar.querySelectorAll('.chip').forEach(function(c){ c.classList.remove('active'); });
         chip.classList.add('active');
+        if (bar.id === 'gallery-filters') { GALLERY_FILTER = chip.textContent.trim(); renderGallery(); }
       });
     });
   });
@@ -1028,7 +1666,7 @@
       var pill = row.querySelector('.pill');
       if(pill && status) pill.textContent = status;
       if(pill && status) pill.setAttribute('style', pillStyle(status));
-      var pctEl = row.querySelector('.pct');
+      var pctEl = row.querySelector('.pct, .qpct');
       if(pctEl && typeof pct === 'number') pctEl.textContent = pct + '%';
     });
   }
@@ -1046,8 +1684,16 @@
         var st = mapStatus(ev && ev.status);
         applyProgress(job.job_id, pct, st);
         if(st === '已完成' || st === '失败'){
+          var current = QUEUE_JOBS.find(function(item){ return item.job_id === job.job_id; });
+          if(current){
+            current.status = st;
+            if(st === '已完成') current.pct = 100;
+            if(ev && safeDownloadURL(ev.share_url)) current.share_url = ev.share_url;
+            renderGallery(); renderRecent();
+          }
           queueSubs[job.job_id] = null;
           if(unsub) unsub();
+          setTimeout(loadQueue, 750);
         }
       }, function(){ queueSubs[job.job_id] = null; });
       queueSubs[job.job_id] = unsub;
@@ -1057,6 +1703,7 @@
   // 把任务数组渲染到工作台预览 + 完整队列页 + 统计摘要
   function paintQueue(jobs){
     QUEUE_JOBS = jobs || [];
+    renderGallery(); renderRecent();
     // 清理旧的订阅
     Object.keys(queueSubs).forEach(function(k){ if(queueSubs[k]) try{ queueSubs[k](); }catch(e){} queueSubs[k] = null; });
 
@@ -1068,9 +1715,9 @@
       else dash.innerHTML = active.map(function(j){
         var dot = j.status === '排队' ? 'var(--warning)' : 'var(--accent)';
         var pct = j.status === '排队' ? '<span style="color:var(--warning)">排队</span>' : (j.pct != null ? j.pct + '%' : '0%');
-        return '<div class="queue-row" data-job="' + j.job_id + '"><span class="dot" style="background:' + dot + '"></span>' +
+        return '<div class="queue-row" data-job="' + esc(j.job_id) + '"><span class="dot" style="background:' + dot + '"></span>' +
           '<div style="flex:1"><div class="name">' + esc(j.name) + ' · ' + esc(j.res) + '</div>' +
-          '<div class="sub mono">' + esc(j.job_id) + ' · ' + j.status + '</div></div>' +
+          '<div class="sub mono">' + esc(j.job_id) + ' · ' + esc(j.status) + '</div></div>' +
           '<div class="track"><div class="fill" style="width:' + (j.status === '排队' ? '0' : (j.pct != null ? j.pct : 0) + '%') + '"></div></div>' +
           '<div class="pct">' + pct + '</div></div>';
       }).join('');
@@ -1083,12 +1730,13 @@
       else body.innerHTML = QUEUE_JOBS.map(function(j){
         var grad = (j.status === '已完成') ? 'linear-gradient(90deg,#34D399,#4FD8FF)' : 'var(--grad-primary)';
         var fillW = j.status === '已完成' ? '100%' : (j.pct != null ? j.pct + '%' : '0%');
-        return '<div class="qrow" data-job="' + j.job_id + '"><div class="qname">' + esc(j.name) + '</div>' +
-          '<div class="pill" style="' + pillStyle(j.status) + '">' + j.status + '</div>' +
+        return '<div class="qrow" data-job="' + esc(j.job_id) + '"><div class="qname">' + esc(j.name) + '</div>' +
+          '<div class="pill" style="' + pillStyle(j.status) + '">' + esc(j.status) + '</div>' +
           '<div class="qtrack"><div class="qfill" style="width:' + fillW + ';background:' + grad + '"></div></div>' +
+          '<div class="qpct">' + (j.status === '排队' ? '排队' : ((j.pct != null ? j.pct : 0) + '%')) + '</div>' +
           '<div class="qres mono">' + esc(j.res) + '</div>' +
           '<div class="quser"><div class="qs" style="background:' + grad + '"></div><span>' + esc(ownerName()) + '</span></div>' +
-          '<div class="qtime mono">' + (j.created_at ? fmtTime(j.created_at) : '') + '</div></div>';
+          '<div class="qtime mono">' + (j.created_at ? fmtTime(j.created_at) : '') + '</div>' + (j.status === '已完成' && safeDownloadURL(j.share_url) ? '<a class="qdownload" href="' + esc(safeDownloadURL(j.share_url)) + '" target="_blank" rel="noopener noreferrer">打开微云 / 下载</a>' : '') + '</div>';
       }).join('');
     }
 
@@ -1097,46 +1745,190 @@
     var cQueue = QUEUE_JOBS.filter(function(j){ return j.status === '排队'; }).length;
     var cDone  = QUEUE_JOBS.filter(function(j){ return j.status === '已完成'; }).length;
     var cFail  = QUEUE_JOBS.filter(function(j){ return j.status === '失败'; }).length;
+    var totalKpi = document.getElementById('kpi-total-videos');
+    var renderingKpi = document.getElementById('kpi-rendering');
+    if(totalKpi) totalKpi.textContent = cDone;
+    if(renderingKpi) renderingKpi.textContent = cRender;
     var sum = document.getElementById('queue-summary');
     if(sum) sum.textContent = '共 ' + QUEUE_JOBS.length + ' 个任务 · ' + cRender + ' 渲染中 · ' + cQueue + ' 排队 · ' + cDone + ' 已完成 · ' + cFail + ' 失败';
 
     var greet = document.getElementById('greet-sub');
-    if(greet) greet.textContent = '今天是 2026年8月13日 · 你还有 ' + cRender + ' 个渲染任务正在进行中';
+    if(greet){
+      var today = new Date();
+      var dateText = today.getFullYear() + '年' + (today.getMonth() + 1) + '月' + today.getDate() + '日';
+      var activeCount = cRender + cQueue;
+      greet.textContent = '今天是 ' + dateText + ' · 你还有 ' + activeCount + ' 个渲染任务正在进行中';
+    }
 
     // 为进行中任务订阅实时进度
     QUEUE_JOBS.forEach(subscribeJob);
+  }
+
+  function loadGallery(){
+    loadQueue();
   }
 
   function ownerName(){
     // 队列数据已是本人会话的，提交人展示当前登录身份（无登录则侧边栏默认「晓明」）
     return (window.__ffUser && (window.__ffUser.nickname || window.__ffUser.openid)) || '晓明';
   }
+  // 将微信登录返回的用户信息同步到 UI：工作台问候语、左下角账号、设置页账号信息。
+  // 未登录（演示模式）时保持原有占位「晓明」不变。
+  function renderUserInfo(){
+    var u = window.__ffUser;
+    var name = (u && (u.nickname || u.openid)) || '晓明';
+    var greet = document.getElementById('greet');
+    if(greet){
+      var h = new Date().getHours();
+      var sal = h < 6 ? '凌晨好' : h < 9 ? '早上好' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+      greet.textContent = sal + '，' + name;
+    }
+    var nn = document.getElementById('sidebar-user-name');
+    var rr = document.getElementById('sidebar-user-role');
+    if(nn) nn.textContent = name;
+    if(rr) rr.textContent = (u && u.openid) ? '微信用户' : 'Pro 会员';
+    var sn = document.getElementById('settings-user-name');
+    var sd = document.getElementById('settings-user-desc');
+    if(sn) sn.textContent = name;
+    if(sd) sd.textContent = (u && u.openid) ? ('微信登录 · ' + name) : 'you@company.com · Pro 会员';
+    // 头像：微信返回 headimgurl 时显示真实头像（升 https 避免混合内容被拦），否则保留默认渐变
+    var img = u && u.headimgurl;
+    if(img) img = String(img).replace(/^http:\/\//i, 'https://');
+    var avs = document.querySelectorAll('.avatar');
+    for(var i = 0; i < avs.length; i++){
+      var a = avs[i];
+      if(img){
+        a.style.backgroundImage = 'url("' + img + '")';
+        a.style.backgroundSize = 'cover';
+        a.style.backgroundPosition = 'center';
+      }else{
+        a.style.backgroundImage = '';
+        a.style.backgroundSize = '';
+        a.style.backgroundPosition = '';
+      }
+    }
+    var menu = document.getElementById('avatar-menu');
+    if(menu) menu.classList.toggle('guest', !u);
+    var adn = document.getElementById('ad-name');
+    var ads = document.getElementById('ad-sub');
+    if(adn) adn.textContent = u ? name : '未登录';
+    if(ads) ads.textContent = (u && u.openid) ? '微信登录' : (u ? '已登录' : '');
+  }
+  function safeDownloadURL(value){
+    var raw = String(value || '').trim();
+    if(!raw || !/^https?:\/\//i.test(raw)) return '';
+    try { var u = new URL(raw); return (u.hostname && (u.protocol === 'http:' || u.protocol === 'https:')) ? u.href : ''; } catch(e){ return ''; }
+  }
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   function fmtTime(iso){
     try { var d = new Date(iso); if(isNaN(d)) return '';
       var p = function(n){ return (n<10?'0':'')+n; };
-      return p(d.getHours()) + ':' + p(d.getMinutes());
+      return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
     } catch(e){ return ''; }
+  }
+
+  var GALLERY_FILTER = '全部';
+  function galleryCard(j){
+    var url = safeDownloadURL(j.share_url);
+    var interactive = j.status === '已完成' && !!url;
+    var link = interactive ? '<a class="qdownload" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">打开微云 / 播放下载</a>' : '';
+    var republish = (j.status === '已完成' || j.status === '失败') && !url ? '<button type="button" class="qrepublish" data-republish-job="' + esc(j.job_id || '') + '">' + (j.status === '失败' ? '尝试恢复微云链接' : '生成微云链接') + '</button>' : '';
+    var jobID = j.job_id || 'unknown-job', name = j.name || '未命名视频', status = j.status || '未知';
+    var attrs = interactive ? ' class="vcard video-link" role="button" tabindex="0" aria-label="打开视频：' + esc(name) + '"' : ' class="vcard"';
+    return '<div' + attrs + ' data-job="' + esc(jobID) + '" data-share-url="' + (interactive ? esc(url) : '') + '"><div class="thumb" style="background:linear-gradient(135deg,#7C5CFF,#4FD8FF)"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><span class="pill" style="' + pillStyle(status) + '">' + esc(status) + '</span></div><div class="meta"><div class="t">' + esc(name) + '</div><div class="m">' + esc(fmtTime(j.created_at) || '日期未知') + ' · ' + esc(jobID) + '</div>' + link + republish + '<span class="qerror" aria-live="polite"></span></div></div>';
+  }
+  function renderGallery(){
+    var body = document.getElementById('gallery-body'); if(!body) return;
+    var jobs = QUEUE_JOBS.filter(function(j){
+      if(GALLERY_FILTER === '已发布') return j.status === '已完成' && !!safeDownloadURL(j.share_url);
+      return true;
+    });
+    body.innerHTML = jobs.length ? jobs.map(galleryCard).join('') : '<div style="color:var(--text-tertiary);font-size:13px;padding:16px 0">暂无符合条件的视频。</div>';
+  }
+  function renderRecent(){
+    var body = document.getElementById('dash-recent-videos'); if(!body) return;
+    var jobs = QUEUE_JOBS.filter(function(j){ return j.status === '已完成'; }).slice(0, 3);
+    body.innerHTML = jobs.length ? jobs.map(galleryCard).join('') : '<div style="color:var(--text-tertiary);font-size:13px;padding:8px 0">暂无已完成视频。</div>';
+  }
+  function openGalleryCard(card){
+    var url = safeDownloadURL(card && card.getAttribute('data-share-url'));
+    if(!url || !card.classList.contains('video-link')) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+  ['gallery-body', 'dash-recent-videos'].forEach(function(id){
+    var host = document.getElementById(id); if(!host) return;
+    host.addEventListener('click', function(e){
+      if(e.target.closest('.qdownload')) return;
+      var republish = e.target.closest('.qrepublish');
+      if(republish){ e.preventDefault(); e.stopPropagation(); republishRender(republish); return; }
+      var card = e.target.closest('.vcard.video-link');
+      if(card) openGalleryCard(card);
+    });
+    host.addEventListener('keydown', function(e){
+      if(e.key !== 'Enter' && e.key !== ' ') return;
+      var card = e.target.closest('.vcard.video-link');
+      if(card && e.target === card){ e.preventDefault(); openGalleryCard(card); }
+    });
+  });
+  async function republishRender(button){
+    if(!button || button.disabled) return;
+    var jobID = button.getAttribute('data-republish-job');
+    if(!jobID) return;
+    var card = button.closest('.vcard'), error = card && card.querySelector('.qerror');
+    var originalLabel = button.textContent;
+    button.disabled = true; button.textContent = '正在生成…';
+    if(error) error.textContent = '';
+    try {
+      var r = await fetch(queueBase() + '/api/render-queue/' + encodeURIComponent(jobID) + '/republish', {method:'POST', credentials:'include', headers:{'Accept':'application/json'}});
+      var contentType = r.headers.get('content-type') || '';
+      if(!/application\/json/i.test(contentType)) throw new Error('服务端恢复接口未部署或未返回有效链接');
+      var data = await r.json().catch(function(){ return {}; });
+      if(!r.ok) throw new Error(data.error || '生成微云链接失败');
+      if(!safeDownloadURL(data.share_url)) throw new Error('服务端恢复接口未部署或未返回有效链接');
+      await loadQueue();
+    } catch(e) {
+      button.disabled = false; button.textContent = originalLabel;
+      if(error) error.textContent = e.message || '生成失败，请稍后重试';
+    }
+  }
+  function galleryError(){ var body = document.getElementById('gallery-body'); if(body) body.innerHTML = '<div style="color:var(--error);font-size:13px;padding:16px 0">加载失败，请稍后重试。</div>'; }
+  function paintLoadError(){
+    galleryError();
+    var recent = document.getElementById('dash-recent-videos');
+    var dash = document.getElementById('dash-queue');
+    var queue = document.getElementById('queue-body');
+    var summary = document.getElementById('queue-summary');
+    var greet = document.getElementById('greet-sub');
+    var totalKpi = document.getElementById('kpi-total-videos');
+    var renderingKpi = document.getElementById('kpi-rendering');
+    var message = '<div style="color:var(--error);font-size:13px;padding:8px 0">任务数据加载失败，请稍后重试。</div>';
+    if(recent) recent.innerHTML = message;
+    if(dash) dash.innerHTML = message;
+    if(queue) queue.innerHTML = message;
+    if(summary) summary.textContent = '渲染队列加载失败';
+    if(greet) greet.textContent = '任务概况加载失败，请稍后重试';
+    if(totalKpi) totalKpi.textContent = '—';
+    if(renderingKpi) renderingKpi.textContent = '—';
   }
 
   // 拉取真实队列（会话隔离，只返回本人任务）
   async function loadQueue(){
     var base = queueBase();
-    if(!base || (window.FFMCP && window.FFMCP.demo)){ // 演示模式：无 BFF 或手动进入演示骨架，展示占位，演示「只看到自己」
-      paintQueue([
-        { job_id:'JOB-DEMO1', name:'产品发布会开场', res:'1080p', status:'渲染中', pct:87, created_at:new Date().toISOString() },
-        { job_id:'JOB-DEMO2', name:'夏日旅行混剪', res:'1080p', status:'已完成', pct:100, created_at:new Date().toISOString() }
-      ]);
+    if(!base || (window.FFMCP && window.FFMCP.demo)){
+      paintQueue([]);
       return;
     }
     try {
       var r = await fetch(base + '/api/render-queue', { credentials: 'include' });
-      if(!r.ok){ paintQueue([]); return; }
+      // 未登录（401）是登录前的正常状态：登录视图盖着应用，不绘制失败态；
+      // 登录成功后会重新 loadQueue() 拉取真实队列（见扫码登录回调路径）。
+      if(r.status === 401){ return; }
+      if(!r.ok){ paintLoadError(); return; }
       var data = await r.json();
       (data.jobs || []).forEach(function(j){ if(j.pct == null && j.status === '渲染中') j.pct = 0; });
       paintQueue(data.jobs || []);
-    } catch(e){ paintQueue([]); }
+    } catch(e){ paintLoadError(); }
   }
   loadQueue();
 
@@ -1169,23 +1961,67 @@
   var thumbGrid     = document.getElementById('thumb-grid');
   var previewCount  = document.getElementById('preview-count');
   var previewScript = document.getElementById('preview-script');
-  var imageScriptSelect = document.getElementById('image-script-select');
+  // 当前选中的渲染脚本：{id, name, kind:'system'|'user'}。create 页用它替代原 <select>。
+  var selectedScript = { id: '', name: '', kind: 'system' };
+  var savedScriptPage = 0;
+  var savedScriptPageSize = 8;
+  var savedScriptTotal = 0;
+  // 已保存脚本的 id -> {name, content}，供模板模式桥接到脚本模式时载入编辑器。
+  var savedScriptContent = {};
+  // 切换脚本模式时若编辑器尚未就绪，先暂存待灌入的脚本内容。
+  var pendingScriptContent = null;
   var currentImageBatch = null;
+  // 当前「创建页进度面板」正在展示的渲染任务 jobId。仅最新提交的任务可写本面板，
+  // 旧任务的实时进度交由「我的渲染任务」列表（轮询队列）呈现，避免两个订阅互相覆盖。
+  var currentProgressJobId = null;
+  // 多任务控件引用与轮询计时器。
+  var restartBtn = document.getElementById('restart-btn');
+  var createTasksBox = document.getElementById('create-tasks');
+  var createTasksBody = document.getElementById('create-tasks-body');
+  var createTasksCount = document.getElementById('create-tasks-count');
+  var createTasksTimer = null;
   // Per-submission image cap. Default matches the free tier; refreshed from
   // /api/quota so the hint and the guard stay aligned with the user's tier.
   var maxFilesPerSubmission = 10;
+  var minFilesPerSubmission = 5;
+  // 本次会话已提交任务（含图片快照）。切页不丢：只有「再来一组」开新任务时才从展示中替换。
+  // 每个元素：{jobId, mode:'template'|'script', images:[{url,name}], templateName, scriptName, status, statusClass, progress, shareUrl, submittedAt}
+  var submittedTasks = [];
+  var currentTask = null;     // 最近一次提交的任务（持久化展示在创建页顶部卡片）
+  var batchSubmitted = false; // 当前批次是否已提交（防止重复提交同一消耗批次）
 
   async function ensureImageBatch(){
     if (currentImageBatch) return currentImageBatch;
     if (window.FFMCP && window.FFMCP.demo) return null;
+    // 自定义脚本在模板模式无法渲染：提前给出明确提示，避免上传完成才遇到 422。
+    if (selectedScript.kind === 'user'){
+      throw new Error('当前选中的是自定义脚本，模板模式仅支持系统脚本渲染，请切换到「脚本模式」');
+    }
     var base = bffBase();
     if (!base) throw new Error('未配置 BFF 地址');
+    var scriptId = selectedScript.id || 'ecommerce-product-demo';
     currentImageBatch = await jsonRequest(base + '/api/image-batches', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({script_id: imageScriptSelect ? imageScriptSelect.value : 'photo-ken-burns'})
+      body:JSON.stringify({script_id: scriptId})
     });
-    if (previewScript && imageScriptSelect) previewScript.textContent = imageScriptSelect.options[imageScriptSelect.selectedIndex].text;
     return currentImageBatch;
+  }
+
+  // Reconcile the local upload count with the server's authoritative batch
+  // asset_count. The BFF enforces the per-submission cap and the "at least 5
+  // images" minimum against the batch, not the browser's local counter — so
+  // after partial failures, duplicate re-uploads, or a page refresh the local
+  // number can drift. Reading the real count back keeps the guard and the
+  // render gate honest and stops the browser from over-allowing uploads the
+  // server would reject. Returns null when unavailable (e.g. demo mode).
+  async function fetchBatchAssetCount(){
+    if (!currentImageBatch || window.FFMCP.demo) return null;
+    try {
+      var r = await fetch(bffBase() + '/api/image-batches/' + encodeURIComponent(currentImageBatch.id), { credentials: 'include' });
+      if (!r.ok) return null;
+      var b = await r.json();
+      return (b && typeof b.asset_count === 'number') ? b.asset_count : null;
+    } catch (e){ return null; }
   }
 
   // Pull the real per-submission cap from the BFF quota endpoint and keep the
@@ -1198,11 +2034,11 @@
       if (!r.ok) return;
       var q = await r.json();
       if (q && typeof q.max_files_per_submission === 'number' && q.max_files_per_submission > 0){
-        maxFilesPerSubmission = q.max_files_per_submission;
+        maxFilesPerSubmission = Math.min(10, q.max_files_per_submission);
       }
     } catch (e){ /* keep default */ }
     var hint = document.getElementById('upload-hint');
-    if (hint) hint.textContent = '支持 JPG / PNG / WEBP · 单次最多 ' + maxFilesPerSubmission + ' 张';
+    if (hint) hint.textContent = '支持 JPG / PNG / WEBP · 每次 ' + minFilesPerSubmission + '–' + maxFilesPerSubmission + ' 张 · 成片固定 60 秒';
   }
 
   function setCreateProgress(show, pct, text){
@@ -1217,7 +2053,10 @@
       uploadDrop.style.pointerEvents = loading ? 'none' : '';
       uploadDrop.style.opacity = loading ? '0.6' : '';
     }
-    if (renderBtn) renderBtn.disabled = loading;
+    if (renderBtn){
+      // 上传中禁用；上传结束是否恢复取决于当前是否选中自定义脚本（自定义脚本不可在模板模式渲染）。
+      renderBtn.disabled = loading ? true : (selectedScript.kind === 'user');
+    }
   }
 
   // 把已上传图片渲染为缩略图网格，并标注本批将使用的渲染脚本（当前选中的模板）。
@@ -1245,12 +2084,136 @@
     updatePreviewScript();
   }
 
-  // 渲染脚本 = 当前选中的模板名（模板模式下整批图片共用一个预设）。
+  // 渲染脚本 = 当前选中的脚本（模板模式下整批图片共用一个预设）。
   function updatePreviewScript(){
     if (!previewScript) return;
-    var scriptSelect = document.getElementById('image-script-select');
-    var selected = scriptSelect && scriptSelect.options[scriptSelect.selectedIndex];
-    previewScript.textContent = selected ? selected.textContent : '—';
+    var sel = document.querySelector('input[name="ff-script"]:checked');
+    previewScript.textContent = sel ? (sel.getAttribute('data-name') || sel.value) : '—';
+  }
+
+  function escAttr(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  // 选中某个脚本单选框后，更新预览标注，并按类型决定「开始渲染」是否可用。
+  function applySelectedScript(inp){
+    selectedScript = { id: inp.value, name: inp.getAttribute('data-name') || '', kind: inp.getAttribute('data-kind') || 'system' };
+    updatePreviewScript();
+    var hint = document.getElementById('image-script-hint');
+    var bridge = document.getElementById('open-in-script-mode');
+    if (selectedScript.kind === 'user'){
+      if (renderBtn) renderBtn.disabled = true;
+      if (hint) hint.textContent = '自定义脚本需在「脚本模式」中渲染：上传图片后由脚本读取使用。';
+      if (bridge) bridge.style.display = '';
+    } else {
+      if (renderBtn && !isUploading) renderBtn.disabled = false;
+      if (hint) hint.textContent = '';
+      if (bridge) bridge.style.display = 'none';
+    }
+  }
+
+  // 从模板模式选中自定义脚本后，一键跳到脚本模式并把脚本内容灌进 Monaco 编辑器；
+  // 用户在脚本模式上传图片即可让该自定义脚本读取使用（走 compositions 管线）。
+  function openScriptInEditor(name, content){
+    var tab = document.querySelector('.ctab[data-mode="script"]');
+    if (tab) tab.click(); // 触发脚本模式显隐 + initMonaco
+    var cn = document.getElementById('comp-name');
+    if (cn && name) cn.value = name;
+    if (content != null){
+      if (ffMonaco) ffMonaco.setValue(content);
+      else pendingScriptContent = content; // 编辑器异步就绪后再灌入
+    }
+  }
+  (function bindOpenInScriptMode(){
+    var btn = document.getElementById('open-in-script-mode');
+    if (!btn) return;
+    btn.addEventListener('click', function(){
+      if (selectedScript.kind !== 'user') return;
+      var entry = savedScriptContent[selectedScript.id];
+      if (!entry){ showToast('未找到该脚本内容，请刷新列表'); return; }
+      openScriptInEditor(entry.name, entry.content);
+      showToast('已打开「' + entry.name + '」，请在右侧上传图片后渲染');
+    });
+  })();
+
+  // 渲染翻页 + 单选的脚本选择器：系统脚本常驻，已保存脚本分页加载。
+  async function loadScriptPicker(){
+    var listEl = document.getElementById('image-script-list');
+    if (!listEl) return;
+    savedScriptContent = {}; // 重新拉取前清空，避免分页残留旧条目
+    var base = bffBase();
+    var systemScripts = [];
+    try {
+      if (base){
+        var r1 = await fetch(base + '/api/image-scripts', { credentials:'include' });
+        var j1 = await r1.json();
+        systemScripts = (j1 && j1.scripts) || [];
+      }
+    } catch(e){ systemScripts = []; }
+    var savedScripts = [];
+    try {
+      if (base){
+        var r2 = await fetch(base + '/api/scripts?limit=' + savedScriptPageSize + '&offset=' + (savedScriptPage * savedScriptPageSize), { credentials:'include' });
+        var j2 = await r2.json();
+        savedScripts = (j2 && j2.scripts) || [];
+        savedScriptTotal = (j2 && typeof j2.total === 'number') ? j2.total : savedScripts.length;
+      }
+    } catch(e){ savedScripts = []; savedScriptTotal = 0; }
+
+    var html = '';
+    html += '<div class="script-group-title">系统脚本</div>';
+    if (!systemScripts.length){ html += '<div class="script-empty">暂无</div>'; }
+    systemScripts.forEach(function(s){
+      html += '<label class="script-opt"><input type="radio" name="ff-script" value="'+escAttr(s.id)+'" data-kind="system" data-name="'+escAttr(s.name)+'"><span>'+escAttr(s.name)+'</span></label>';
+    });
+    html += '<div class="script-group-title">我的脚本（已保存）</div>';
+    if (!savedScripts.length){ html += '<div class="script-empty">尚未保存脚本 · 可在「定义视频脚本」页保存</div>'; }
+    savedScripts.forEach(function(s){
+      savedScriptContent[s.id] = { name: s.name, content: s.content };
+      html += '<label class="script-opt script-opt-user"><input type="radio" name="ff-script" value="'+escAttr(s.id)+'" data-kind="user" data-name="'+escAttr(s.name)+'"><span>'+escAttr(s.name)+'</span><em class="script-key">'+escAttr(s.key || '')+'</em></label>';
+    });
+    listEl.innerHTML = html;
+
+    listEl.querySelectorAll('input[name="ff-script"]').forEach(function(r){
+      r.addEventListener('change', function(e){ applySelectedScript(e.target); });
+    });
+
+    // 还原当前选择（分页切换后保持选中态），无选中则默认第一项系统脚本。
+    var radios = listEl.querySelectorAll('input[name="ff-script"]');
+    var matched = false;
+    radios.forEach(function(r){
+      var ok = (r.value === selectedScript.id) && (r.getAttribute('data-kind') === selectedScript.kind);
+      r.checked = ok;
+      if (ok) matched = true;
+    });
+    if (!matched && radios.length){
+      var firstSys = listEl.querySelector('input[name="ff-script"][data-kind="system"]') || radios[0];
+      firstSys.checked = true;
+      applySelectedScript(firstSys);
+    } else if (matched){
+      var sel = listEl.querySelector('input[name="ff-script"]:checked');
+      if (sel) applySelectedScript(sel);
+    }
+    renderScriptPager();
+    updatePreviewScript();
+  }
+
+  function renderScriptPager(){
+    var pager = document.getElementById('image-script-pager');
+    if (!pager) return;
+    if (savedScriptTotal <= savedScriptPageSize){ pager.innerHTML = ''; return; }
+    var totalPages = Math.ceil(savedScriptTotal / savedScriptPageSize);
+    var cur = savedScriptPage + 1;
+    pager.innerHTML =
+      '<button type="button" class="pager-btn" id="script-prev"'+(savedScriptPage<=0?' disabled':'')+'>上一页</button>'+
+      '<span class="pager-info">'+cur+' / '+totalPages+'</span>'+
+      '<button type="button" class="pager-btn" id="script-next"'+(savedScriptPage>=totalPages-1?' disabled':'')+'>下一页</button>';
+    var prev = document.getElementById('script-prev');
+    var next = document.getElementById('script-next');
+    if (prev) prev.addEventListener('click', function(){ if (savedScriptPage>0){ savedScriptPage--; loadScriptPicker(); } });
+    if (next) next.addEventListener('click', function(){ if ((savedScriptPage+1)*savedScriptPageSize < savedScriptTotal){ savedScriptPage++; loadScriptPicker(); } });
   }
 
   // 清空预览并释放 object URL，避免内存泄漏。
@@ -1268,10 +2231,19 @@
       return;
     }
     var list = Array.prototype.slice.call(files);
-    if (list.length > maxFilesPerSubmission){
-      var extra = list.length - maxFilesPerSubmission;
-      list = list.slice(0, maxFilesPerSubmission);
-      showToast('单次最多 ' + maxFilesPerSubmission + ' 张，已忽略多余的 ' + extra + ' 张');
+    // 用服务端真实的批次 asset_count 计算可上传余量，避免本地计数因失败/
+    // 刷新漂移后误判上限，或放任本应被配额拦截的上传打到服务端再吃 422。
+    var serverCount = await fetchBatchAssetCount();
+    var baseCount = (serverCount != null) ? serverCount : uploadedCount;
+    var available = maxFilesPerSubmission - baseCount;
+    if (available <= 0){
+      showToast('本批次已达到 ' + maxFilesPerSubmission + ' 张上限，请先开始渲染');
+      return;
+    }
+    if (list.length > available){
+      var extra = list.length - available;
+      list = list.slice(0, available);
+      showToast('本批次最多 ' + maxFilesPerSubmission + ' 张，已忽略多余的 ' + extra + ' 张');
     }
     setUploading(true);
     var failedCount = 0;
@@ -1284,8 +2256,12 @@
           projectId: imageBatch ? imageBatch.project_id : undefined,
           onProgress: function(p){ if (createFill) createFill.style.width = p + '%'; }
         });
-        uploadedCount++;
-        uploadedImages.push({ file: list[i], url: URL.createObjectURL(list[i]), name: list[i].name, size: list[i].size });
+        var serverAssetCount = res && (typeof res.asset_count === 'number' ? res.asset_count : (res.data && typeof res.data.asset_count === 'number' ? res.data.asset_count : null));
+        if (serverAssetCount != null) uploadedCount = serverAssetCount;
+        else if (!(res && (res.deduplicated === true || (res.data && res.data.deduplicated === true)))) uploadedCount++;
+        if (!(res && (res.deduplicated === true || (res.data && res.data.deduplicated === true)))) {
+          uploadedImages.push({ file: list[i], url: URL.createObjectURL(list[i]), name: list[i].name, size: list[i].size });
+        }
         lastBatchId = (res && res.batch_id) || (res && res.data && res.data.batch_id) || lastBatchId;
         lastMsg = (res && res.message) || '';
       } catch (err){
@@ -1296,7 +2272,12 @@
     }
     setUploading(false);
     renderUploadPreview(); // 上传完成后刷新缩略图与渲染脚本标注
+    refreshSessionAssets(); // 同步刷新「本会话已上传图片」面板
     if (uploadInput) uploadInput.value = ''; // 重置，允许再次选择相同文件继续上传
+    // 一轮结束后用服务端真实数量回写计数，保证「至少 5 张」渲染门槛以真实
+    // 数量为准（已存在的图片被重新上传现在计为成功，通常已对齐；此为兜底）。
+    var sc = await fetchBatchAssetCount();
+    if (sc != null) uploadedCount = sc;
     if (failedCount > 0){
       setCreateProgress(true, null, '上传结束：成功 ' + uploadedCount + ' 张，失败 ' + failedCount + ' 张。失败文件可重新选择上传。');
     } else {
@@ -1316,11 +2297,19 @@
     uploadInput.addEventListener('change', function(){ if (uploadInput.files) handleFiles(uploadInput.files); });
   }
 
+  // 初次加载即填充创建页的脚本选择器（系统 + 我的脚本）。
+  loadScriptPicker();
+
   if (renderBtn){
     renderBtn.addEventListener('click', async function(){
-      if (uploadedCount === 0){
-        setCreateProgress(true, null, '请先上传至少 1 张图片');
-        showToast('请先上传至少 1 张图片');
+      if (batchSubmitted){ showToast('当前批次已提交，请点「再来一组」开始新任务'); return; }
+      if (!(window.FFMCP && window.FFMCP.demo)) {
+        var freshCount = await fetchBatchAssetCount();
+        if (freshCount != null) uploadedCount = freshCount;
+      }
+      if (uploadedCount < minFilesPerSubmission){
+        setCreateProgress(true, null, '请先上传至少 ' + minFilesPerSubmission + ' 张图片（当前 ' + uploadedCount + ' 张）');
+        showToast('请先上传至少 ' + minFilesPerSubmission + ' 张图片');
         return;
       }
       renderBtn.disabled = true;
@@ -1334,24 +2323,51 @@
           v = await jsonRequest(bffBase() + '/api/image-batches/' + encodeURIComponent(currentImageBatch.id) + '/render', {method:'POST'});
         }
         var jobId = v && (v.render_job_id || (v.data && v.data.render_job_id));
-        setCreateProgress(true, 0, '已提交，任务号 ' + jobId + ' · 渲染中…');
+        var submittedQueued = v && v.status === 'queued';
+        currentProgressJobId = jobId; // 仅本任务写「创建页进度面板」，旧任务交由任务列表
+        setCreateProgress(true, 0, '已提交，任务号 ' + jobId + (submittedQueued ? ' · 排队中…' : ' · 渲染中…'));
         showToast('已提交渲染任务 ' + jobId);
         loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
-        // 本轮提交已结束：后端会话计数已被 ResetAsset 清零，前端同步重置展示态，
-        // 使「已上传 N 张」与后端「本轮提交」语义对齐，便于用户开始下一轮上传。
-        uploadedCount = 0;
-        lastBatchId = null;
-        currentImageBatch = null;
-        clearUploadedImages(); // 本轮提交结束：清掉缩略图预览并释放 object URL
+        // —— A：任务持久化（切页不丢，直到「再来一组」开新任务）——
+        // 不再立即清空已上传图片/批次，而是把本次提交快照成「本次任务」整包（图+脚本）
+        // 保留在创建页；当前批次已提交，禁止重复提交同一批次。
+        batchSubmitted = true;
+        currentTask = {
+          jobId: jobId,
+          mode: 'template',
+          images: uploadedImages.map(function(im){ return { url: im.url, name: im.name }; }),
+          templateName: (function(){ var t = document.querySelector('.tmpl.sel .tn'); return t ? t.textContent : '—'; })(),
+          scriptName: (previewScript ? previewScript.textContent : '') || '',
+          status: submittedQueued ? '排队中' : '渲染中',
+          statusClass: submittedQueued ? 'queued' : 'rendering',
+          progress: 0,
+          shareUrl: null,
+          submittedAt: Date.now()
+        };
+        submittedTasks.unshift(currentTask);
+        paintCurrentTask();
+        if (previewBox) previewBox.style.display = 'none'; // 原始上传缩略图交给「本次任务」卡片展示，避免重复
         refreshQuota();
+        if (restartBtn){ restartBtn.style.display = ''; restartBtn.disabled = false; }
+        if (createTasksBox) createTasksBox.style.display = '';
+        renderBtn.disabled = true; // 当前批次已提交，需「再来一组」开新任务
+        renderBtn.textContent = '已提交 · 点「再来一组」开始新任务';
+        loadCreateTasks(); // 把刚提交的任务刷进创建页「我的渲染任务」
+        var subJobId = jobId;
         window.FFMCP.subscribeProgress(jobId, function(ev){
+          if (subJobId !== currentProgressJobId) return; // 只展示最新任务的进度
           var pct = ev && (ev.percent || ev.progress || 0);
           if (ev && ev.status === 'published'){
             setCreateProgress(true, 100, '渲染完成 · 分享链接：' + (ev.share_url || '(见控制台)'));
             showToast('渲染完成！');
-            renderBtn.disabled = false;
+            if (currentTask){ currentTask.status = '已完成'; currentTask.statusClass = 'done'; currentTask.progress = 100; currentTask.shareUrl = ev.share_url || null; paintCurrentTask(); }
+          } else if (ev && ev.status === 'queued') {
+            var queuePosition = ev.position || ev.queue_position;
+            setCreateProgress(true, pct, '排队中' + (queuePosition ? ' · 第 ' + queuePosition + ' 位' : '') + '…');
+            if (currentTask){ currentTask.status = '排队中'; currentTask.statusClass = 'queued'; currentTask.progress = pct; paintCurrentTask(); }
           } else {
             setCreateProgress(true, pct, '渲染中 ' + pct + '%');
+            if (currentTask){ currentTask.status = '渲染中'; currentTask.statusClass = 'rendering'; currentTask.progress = pct; paintCurrentTask(); }
           }
         }, function(){
           setCreateProgress(true, null, '进度订阅异常，将改用轮询');
@@ -1364,6 +2380,132 @@
     });
   }
 
+  // ---- 创建页：再来一组（多任务开关）----
+  // 提交一轮渲染后，用户可点「再来一组」开始新一轮：仅重置本次上传状态，
+  // 不动队列里已有的历史任务。新一轮图片会通过 ensureImageBatch() 开一条新的
+  // 上游 MCP 会话（新 batch_id / project_id），从而连接到渲染机器作为独立任务。
+  function restartForNewGroup(){
+    if (isUploading){ showToast('图片上传中，请稍候再开始新的一组'); return; }
+    if (!restartBtn || restartBtn.style.display === 'none') return; // 尚未提交过任务
+    uploadedCount = 0;
+    currentImageBatch = null;
+    lastBatchId = null;
+    batchSubmitted = false;
+    currentProgressJobId = null; // 旧任务进度交给「我的渲染任务」列表，不再占用本面板
+    clearUploadedImages();
+    setCreateProgress(false);
+    renderBtn.disabled = false;
+    renderBtn.textContent = '开始渲染';
+    if (restartBtn) restartBtn.disabled = false;
+    // 上一次提交的任务不清除：继续保留在「本次提交的任务」卡片中，直到新任务提交才替换。
+    showToast('已开始新的一组：上传新图片后可再次点「开始渲染」。上一次任务仍保留在上方卡片。');
+    loadCreateTasks();
+  }
+  if (restartBtn) restartBtn.addEventListener('click', restartForNewGroup);
+
+  // 创建页内联「我的渲染任务」列表：直接复用 /api/render-queue（按会话隔离，仅本人任务）。
+  // 多任务并发时，这里能看到每一个已提交任务的实时状态，保证「渲染任务用户可见」。
+  async function loadCreateTasks(){
+    var base = queueBase();
+    if (!base || (window.FFMCP && window.FFMCP.demo)) return;
+    try {
+      var r = await fetch(base + '/api/render-queue', { credentials: 'include' });
+      if (!r.ok) return;
+      var data = await r.json();
+      paintCreateTasks((data && data.jobs) || []);
+    } catch (e){ /* 轮询失败静默，下一次周期自动重试 */ }
+  }
+  function createTaskBadgeClass(status){
+    switch (String(status)){
+      case '渲染中': return 'rendering';
+      case '排队':   return 'queued';
+      case '已完成': return 'done';
+      case '失败':   return 'failed';
+      default:       return 'queued';
+    }
+  }
+  function paintCreateTasks(jobs){
+    if (!createTasksBody) return;
+    if (!jobs || !jobs.length){
+      createTasksBody.innerHTML = '<div class="ct-empty">暂无进行中的任务</div>';
+      if (createTasksCount) createTasksCount.textContent = '';
+      return;
+    }
+    if (createTasksCount) createTasksCount.textContent = '（' + jobs.length + '）';
+    var html = jobs.slice(0, 6).map(function(j){
+      var cls = createTaskBadgeClass(j.status);
+      var sub = (j.res ? j.res + ' · ' : '') + (j.created_at ? j.created_at : '');
+      var link = (j.status === '已完成' && safeDownloadURL(j.share_url))
+        ? '<a class="qdownload" href="' + esc(safeDownloadURL(j.share_url)) + '" target="_blank" rel="noopener noreferrer" style="margin-left:8px">下载/分享</a>'
+        : '';
+      return '<div class="ct-row" data-job="' + esc(j.job_id) + '">'
+        + '<div style="flex:1;min-width:0"><div class="ct-name">' + esc(j.name || '帧流作品') + '</div>'
+        + '<div class="ct-sub">' + esc(sub) + '</div></div>'
+        + '<span class="ct-badge ' + cls + '">' + esc(j.status || '排队') + '</span>' + link + '</div>';
+    }).join('');
+    createTasksBody.innerHTML = html;
+  }
+
+  // 服务端反查：若本地 currentTask.jobId 已不在当前用户的渲染队列里，说明它属于上一个
+  // 用户，必须清空。这是 resetClientStateForAuthChange 漏掉状态时的兜底，正常路径下
+  // 同一用户的 jobId 始终在服务端列表中，本函数 no-op。
+  async function reconcileCurrentTask(){
+    if (!window.__ffUser || !currentTask || !currentTask.jobId) return;
+    if (window.FFMCP && window.FFMCP.demo) return;
+    try {
+      var r = await fetch(queueBase() + '/api/render-queue', { credentials: 'include' });
+      if (!r.ok) return;
+      var data = await r.json();
+      var jobs = (data && (data.jobs || data.QUEUE_JOBS)) || [];
+      var found = jobs.some(function(j){ return (j && (j.job_id || j.id)) === currentTask.jobId; });
+      if (!found){
+        currentTask = null;
+        submittedTasks = [];
+        paintCurrentTask();
+      }
+    } catch(e){ /* 下一次进入创建页或 5s 轮询会再次尝试 */ }
+  }
+  // 把最近一次提交的任务渲染成「本次提交的任务」卡片（图 + 脚本/模板 + 状态 + 进度）。
+  // 卡片在创建页 DOM 中常驻，切页不丢；只有「再来一组」开新任务提交后才会被替换。
+  function paintCurrentTask(){
+    var card = document.getElementById('current-task-card');
+    var badge = document.getElementById('current-task-badge');
+    var meta = document.getElementById('current-task-meta');
+    var grid = document.getElementById('current-task-thumbs');
+    if (!card) return;
+    // 守门：未登录用户不能看到「当前任务」卡片。这是跨用户泄漏的最后一道闸口
+    // ——即使 reset 漏掉了某个变量，也不会把上一个用户的 currentTask 渲染到新用户。
+    if (!window.__ffUser || !currentTask){ card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    if (badge){ badge.textContent = currentTask.status || ''; badge.className = 'ct-badge ' + (currentTask.statusClass || ''); }
+    if (meta){
+      var scriptLine = currentTask.mode === 'script'
+        ? '脚本：' + esc(currentTask.scriptName || '未命名')
+        : ('模板：' + esc(currentTask.templateName || '—') + (currentTask.scriptName ? ' · 脚本：' + esc(currentTask.scriptName) : ''));
+      var prog = (currentTask.progress != null) ? ' · 进度 ' + currentTask.progress + '%' : '';
+      var link = currentTask.shareUrl
+        ? ' · <a href="' + escAttr(currentTask.shareUrl) + '" target="_blank" rel="noopener noreferrer">查看成片</a>'
+        : '';
+      meta.innerHTML = '任务号 <b>' + esc(currentTask.jobId || '') + '</b> · ' + scriptLine + prog + link;
+    }
+    if (grid){
+      grid.innerHTML = '';
+      (currentTask.images || []).forEach(function(im, idx){
+        var cell = document.createElement('div'); cell.className = 'thumb';
+        var img = document.createElement('img'); img.src = im.url; img.alt = im.name || '';
+        var ix = document.createElement('span'); ix.className = 'idx'; ix.textContent = String(idx + 1);
+        var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = im.name || '';
+        cell.appendChild(img); cell.appendChild(ix); cell.appendChild(nm);
+        grid.appendChild(cell);
+      });
+    }
+  }
+  // 「我的渲染任务」→ 完整队列 跳转
+  var ctViewAll = document.querySelector('#create-tasks .ct-viewall');
+  if (ctViewAll) ctViewAll.addEventListener('click', function(){
+    var q = document.querySelector('.nav-item[data-view="queue"]');
+    if (q) q.click();
+  });
   // ===== 字幕 / 声音克隆 MVP =====
   var mediaProjectId = 'frameflow-media-' + Date.now();
   var mediaVideoAsset = null;
@@ -1459,26 +2601,39 @@
   // ===== 创建页：脚本模式（Monaco 编辑器 + 自定义 Remotion 合成）=====
   var ffMonaco = null;
   var scriptUploaded = 0;
+  // 脚本模式已上传图片预览数据：{file, url, name, size}。仅记录上传成功的素材，
+  // 用于在当前任务下展示已上传图片缩略图（与模板模式 uploadedImages 相互独立）。
+  var scriptUploadedImages = [];
   var DEFAULT_COMP =
-'import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing} from "remotion";\n' +
+'import {AbsoluteFill, useCurrentFrame, interpolate, Sequence, Easing, staticFile} from "remotion";\n' +
 '\n' +
-'export const MyComposition: React.FC<{images: string[]; durationPerImage?: number}> = (\n' +
-'  {images, durationPerImage = 30}\n' +
-') => {\n' +
+'// 自定义脚本契约（DeepSeek 生成脚本请遵循）：运行时注入以下 props\n' +
+'//   images: string[]            上传图片的相对路径，必须用 staticFile(src) 引用\n' +
+'//   durationPerImage: number    每张图时长（秒），默认 3\n' +
+'//   fps: number                 合成帧率，固定 30\n' +
+'//   width / height: number      画布尺寸（如 9:16 为 1080 x 1920）\n' +
+'export const MyComposition: React.FC<{\n' +
+'  images: string[];\n' +
+'  durationPerImage?: number;\n' +
+'  fps?: number;\n' +
+'  width?: number;\n' +
+'  height?: number;\n' +
+'}> = ({images, durationPerImage = 3, fps = 30, width = 1080, height = 1920}) => {\n' +
 '  const frame = useCurrentFrame();\n' +
+'  const framesPerImage = Math.round(durationPerImage * fps);\n' +
 '  const n = Math.max(images.length, 1);\n' +
-'  const idx = Math.min(Math.floor(frame / durationPerImage), n - 1);\n' +
-'  const progress = (frame % durationPerImage) / durationPerImage;\n' +
+'  const idx = Math.min(Math.floor(frame / framesPerImage), n - 1);\n' +
+'  const progress = (frame % framesPerImage) / framesPerImage;\n' +
 '  const scale = interpolate(progress, [0, 1], [1.05, 1], {\n' +
 '    easing: Easing.inOut(Easing.cubic),\n' +
 '  });\n' +
 '  return (\n' +
 '    <AbsoluteFill style={{backgroundColor: "#05010F"}}>\n' +
 '      {images.map((src, i) => (\n' +
-'        <Sequence key={i} from={i * durationPerImage} durationInFrames={durationPerImage}>\n' +
+'        <Sequence key={i} from={i * framesPerImage} durationInFrames={framesPerImage}>\n' +
 '          <AbsoluteFill>\n' +
 '            <img\n' +
-'              src={src}\n' +
+'              src={staticFile(src)}\n' +
 '              style={{width: "100%", height: "100%", objectFit: "cover", transform: `scale(${i === idx ? scale : 1})`}}\n' +
 '            />\n' +
 '          </AbsoluteFill>\n' +
@@ -1505,6 +2660,8 @@
         scrollBeyondLastLine: false,
         tabSize: 2
       });
+      // 若从模板模式桥接进来时编辑器尚未就绪，此刻把待灌入的脚本内容写入。
+      if (pendingScriptContent != null){ ffMonaco.setValue(pendingScriptContent); pendingScriptContent = null; }
     });
   }
 
@@ -1519,9 +2676,50 @@
       document.getElementById('mode-template').style.display = mode === 'template' ? 'block' : 'none';
       document.getElementById('mode-script').style.display = mode === 'script' ? 'block' : 'none';
       document.getElementById('mode-voice').style.display = mode === 'voice' ? 'block' : 'none';
-      if (mode === 'script') initMonaco();
+      if (mode === 'script'){ initMonaco(); loadScriptLoadSelect(); }
+      refreshSessionAssets(); // 切换模式后刷新本会话已上传图片（模板=批次会话 / 脚本=用户级会话）
     });
   });
+
+  // 脚本模式：从「我的脚本」载入已保存的自定义脚本到编辑器。
+  function loadScriptLoadSelect(){
+    var sel = document.getElementById('script-load-select');
+    if (!sel) return;
+    var base = bffBase();
+    if (!base) return;
+    fetch(base + '/api/scripts?limit=200', { credentials: 'include' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var items = (j && j.scripts) || [];
+        sel.innerHTML = '<option value="">— 选择已保存脚本 —</option>' +
+          items.map(function(s){ return '<option value="'+escAttr(s.id)+'">'+escAttr(s.name)+'</option>'; }).join('');
+      })
+      .catch(function(){ /* 保持默认选项 */ });
+  }
+  (function bindScriptLoader(){
+    var btn = document.getElementById('script-load-btn');
+    var refresh = document.getElementById('script-load-refresh');
+    var sel = document.getElementById('script-load-select');
+    if (!btn || !sel) return;
+    function doLoad(){
+      var id = sel.value;
+      if (!id){ showToast('请先选择一个已保存脚本'); return; }
+      fetch(bffBase() + '/api/scripts?limit=200', { credentials: 'include' })
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          var items = (j && j.scripts) || [];
+          var found = null;
+          for (var i = 0; i < items.length; i++){ if (items[i].id === id){ found = items[i]; break; } }
+          if (!found){ showToast('未找到该脚本，请刷新'); return; }
+          if (ffMonaco) ffMonaco.setValue(found.content || '');
+          var cn = document.getElementById('comp-name'); if (cn && found.name) cn.value = found.name;
+          setCompMsg('已载入：' + found.name, 'ok');
+        })
+        .catch(function(e){ setCompMsg('载入失败：' + e.message, 'err'); });
+    }
+    btn.addEventListener('click', doLoad);
+    if (refresh) refresh.addEventListener('click', loadScriptLoadSelect);
+  })();
 
   // 保存合成
   document.getElementById('comp-save').addEventListener('click', async function(){
@@ -1529,8 +2727,9 @@
     var name = (document.getElementById('comp-name').value || '未命名').trim();
     var code = ffMonaco.getValue();
     try {
-      var r = await fetch('/api/compositions', {
+      var r = await fetch(bffBase() + '/api/compositions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ name: name, code: code })
       });
       var j = await r.json();
@@ -1560,15 +2759,161 @@
     });
     input.addEventListener('change', function(){ if (input.files) scriptHandleFiles(input.files); });
   })();
+  // 把脚本模式已上传图片渲染为缩略图网格（与模板模式共用 .thumb-grid/.thumb 样式）。
+  function renderScriptUploadPreview(){
+    var box = document.getElementById('script-upload-preview');
+    var grid = document.getElementById('script-thumb-grid');
+    var cnt = document.getElementById('script-preview-count');
+    if (!grid) return;
+    if (!scriptUploadedImages.length){
+      if (box) box.style.display = 'none';
+      return;
+    }
+    grid.innerHTML = '';
+    scriptUploadedImages.forEach(function(im, idx){
+      var cell = document.createElement('div');
+      cell.className = 'thumb';
+      var img = document.createElement('img');
+      img.src = im.url; img.alt = im.name;
+      var ix = document.createElement('span');
+      ix.className = 'idx'; ix.textContent = String(idx + 1);
+      var nm = document.createElement('span');
+      nm.className = 'nm'; nm.textContent = im.name;
+      cell.appendChild(img); cell.appendChild(ix); cell.appendChild(nm);
+      grid.appendChild(cell);
+    });
+    if (cnt) cnt.textContent = String(scriptUploadedImages.length);
+    if (box) box.style.display = 'block';
+  }
+
+  // 清空脚本模式已上传图片预览并释放 object URL，避免内存泄漏。
+  function clearScriptUploadedImages(){
+    scriptUploadedImages.forEach(function(im){ if (im.url) URL.revokeObjectURL(im.url); });
+    scriptUploadedImages = [];
+    var grid = document.getElementById('script-thumb-grid');
+    if (grid) grid.innerHTML = '';
+    var box = document.getElementById('script-upload-preview');
+    if (box) box.style.display = 'none';
+  }
+
+  // ===== 当前会话已上传图片：复选框选择，避免上传失败后重复上传 =====
+  var sessionAssets = [];           // [{relative_path, original_filename, sha256, bytes, type}]
+  var sessAllChecked = true;
+  function assetThumbURL(rel){ return bffBase() + '/api/assets?rel=' + encodeURIComponent(rel); }
+  function fmtBytes(n){ n = Number(n) || 0; if (n < 1024) return n + ' B'; if (n < 1024*1024) return (n/1024).toFixed(0) + ' KB'; return (n/1024/1024).toFixed(1) + ' MB'; }
+
+  async function refreshSessionAssets(){
+    var grid = document.getElementById('sess-grid');
+    var count = document.getElementById('sess-count');
+    if (!grid) return;
+    try {
+      var r = await fetch(bffBase() + '/api/session/assets', { credentials: 'include' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var j = await r.json();
+      sessionAssets = (j && j.assets) || [];
+    } catch (e){
+      sessionAssets = [];
+      if (count) count.textContent = '加载失败';
+      return;
+    }
+    if (count) count.textContent = '已上传 ' + sessionAssets.length + ' 张（无需重复上传）';
+    if (!sessionAssets.length){
+      grid.innerHTML = '<div class="sess-empty">尚未上传图片</div>';
+      return;
+    }
+    grid.innerHTML = '';
+    sessionAssets.forEach(function(a, idx){
+      var rel = a.relative_path || '';
+      var name = a.original_filename || a.filename || ('asset-' + idx);
+      var cell = document.createElement('label');
+      cell.className = 'sess-cell' + (sessAllChecked ? '' : ' off');
+      cell.title = name + ' · ' + fmtBytes(a.bytes);
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'cb'; cb.checked = sessAllChecked; cb.value = rel;
+      cb.setAttribute('data-idx', String(idx));
+      cb.addEventListener('change', function(){ cell.classList.toggle('off', !cb.checked); });
+      var img = document.createElement('img');
+      img.src = assetThumbURL(rel); img.alt = name; img.loading = 'lazy';
+      var nm = document.createElement('span');
+      nm.className = 'nm'; nm.textContent = name;
+      cell.appendChild(cb); cell.appendChild(img); cell.appendChild(nm);
+      grid.appendChild(cell);
+    });
+  }
+
+  function activeCreateMode(){
+    var t = document.querySelector('.ctab.active');
+    return t ? t.getAttribute('data-mode') : 'template';
+  }
+
+  // 将勾选的已上传图片并入当前模式的预览，使渲染门槛（≥5 张）基于服务器已有
+  // 素材，无需因失败/刷新而重新上传。
+  function mergeSelectedToPreview(){
+    var selected = sessionAssets.filter(function(a){
+      return sessionAssets.indexOf(a) >= 0 && selectedRels().indexOf(a.relative_path) >= 0;
+    });
+    if (!selected.length){ showToast('请先勾选要加入预览的图片'); return; }
+    var mode = activeCreateMode();
+    if (mode === 'script'){
+      selected.forEach(function(a){
+        if (scriptUploadedImages.some(function(im){ return im.rel === a.relative_path; })) return;
+        scriptUploadedImages.push({ url: assetThumbURL(a.relative_path), name: a.original_filename || a.filename || '', size: a.bytes, rel: a.relative_path });
+      });
+      scriptUploaded = scriptUploadedImages.length;
+      renderScriptUploadPreview();
+      showToast('已将 ' + selected.length + ' 张已上传图片加入脚本模式预览');
+    } else {
+      selected.forEach(function(a){
+        if (uploadedImages.some(function(im){ return im.rel === a.relative_path; })) return;
+        uploadedImages.push({ url: assetThumbURL(a.relative_path), name: a.original_filename || a.filename || '', size: a.bytes, rel: a.relative_path });
+      });
+      uploadedCount = uploadedImages.length;
+      renderUploadPreview();
+      showToast('已将 ' + selected.length + ' 张已上传图片加入预览');
+    }
+  }
+
+  function selectedRels(){
+    var grid = document.getElementById('sess-grid');
+    var out = [];
+    if (!grid) return out;
+    grid.querySelectorAll('input.cb').forEach(function(cb){ if (cb.checked) out.push(cb.value); });
+    return out;
+  }
+
+  (function bindSessionAssets(){
+    var toggle = document.getElementById('sess-toggle');
+    var refresh = document.getElementById('sess-refresh');
+    var merge = document.getElementById('sess-merge');
+    if (toggle) toggle.addEventListener('click', function(){
+      sessAllChecked = !sessAllChecked;
+      var grid = document.getElementById('sess-grid');
+      if (grid) grid.querySelectorAll('input.cb').forEach(function(cb){ cb.checked = sessAllChecked; var c = cb.closest('.sess-cell'); if (c) c.classList.toggle('off', !sessAllChecked); });
+      toggle.textContent = sessAllChecked ? '全不选' : '全选';
+    });
+    if (refresh) refresh.addEventListener('click', refreshSessionAssets);
+    if (merge) merge.addEventListener('click', mergeSelectedToPreview);
+  })();
+
   async function scriptHandleFiles(files){
     var prog = document.getElementById('script-progress');
     var st = document.getElementById('script-status');
     prog.style.display = 'block';
-    for (var i = 0; i < files.length; i++){
+    var list = Array.prototype.slice.call(files);
+    var available = maxFilesPerSubmission - scriptUploaded;
+    if (available <= 0){ showToast('脚本模式本批次已达到 ' + maxFilesPerSubmission + ' 张上限'); return; }
+    if (list.length > available){
+      showToast('脚本模式每批最多 ' + maxFilesPerSubmission + ' 张，已忽略多余图片');
+      list = list.slice(0, available);
+    }
+    for (var i = 0; i < list.length; i++){
       try {
-        await window.FFMCP.chunkUpload(files[i], {});
+        await window.FFMCP.chunkUpload(list[i], {});
         scriptUploaded++;
+        scriptUploadedImages.push({ file: list[i], url: URL.createObjectURL(list[i]), name: list[i].name, size: list[i].size });
         st.textContent = '已上传 ' + scriptUploaded + ' 张素材';
+        renderScriptUploadPreview();
+        refreshSessionAssets();
       } catch (e){ st.textContent = '上传失败：' + e.message; showToast('上传失败：' + e.message); return; }
     }
   }
@@ -1576,7 +2921,7 @@
   // 脚本模式渲染（先保存再提交；上游未支持自定义代码时返回明确提示）
   document.getElementById('render-btn-script').addEventListener('click', async function(){
     if (!ffMonaco){ showToast('编辑器未就绪'); return; }
-    if (scriptUploaded === 0){ showToast('请先上传至少 1 张素材'); return; }
+    if (scriptUploaded < minFilesPerSubmission){ showToast('请先上传至少 ' + minFilesPerSubmission + ' 张素材'); return; }
     var code = ffMonaco.getValue();
     var name = (document.getElementById('comp-name').value || '帧流作品').trim();
     var btn = this; btn.disabled = true;
@@ -1585,17 +2930,19 @@
     var st = document.getElementById('script-status');
     prog.style.display = 'block';
     try {
-      var saveR = await fetch('/api/compositions', {
+      var saveR = await fetch(bffBase() + '/api/compositions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ name: name, code: code })
       });
       var saveJ = await saveR.json();
       if (!saveR.ok){ st.textContent = '保存失败：' + (saveJ.error || saveR.status); btn.disabled = false; return; }
       window.__ffCompId = saveJ.id;
       st.textContent = '已保存，正在提交渲染…';
-      var rR = await fetch('/api/compositions/' + saveJ.id + '/render', {
+      var rR = await fetch(bffBase() + '/api/compositions/' + saveJ.id + '/render', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: name, aspect_ratio: '9:16', duration_per_image: 30 })
+        credentials: 'include',
+        body: JSON.stringify({ title: name, aspect_ratio: '9:16', duration_per_image: 3 })
       });
       var rJ = await rR.json();
       if (!rR.ok){ st.textContent = '提交未成功：' + (rJ.error || rR.status); showToast('渲染提交：' + (rJ.note || rJ.error || rR.status)); btn.disabled = false; return; }
@@ -1603,13 +2950,299 @@
       st.textContent = '已提交，任务号 ' + jobId + ' · 渲染中…';
       showToast('已提交渲染任务 ' + jobId);
       loadQueue(); // 提交成功后立即把新任务刷进「我的渲染队列」
+      // —— A：任务持久化（切页不丢，直到开新任务）——
+      currentProgressJobId = jobId;
+      currentTask = {
+        jobId: jobId, mode: 'script',
+        images: scriptUploadedImages.map(function(im){ return { url: im.url, name: im.name }; }),
+        scriptName: name, templateName: '',
+        status: '渲染中', statusClass: 'rendering', progress: 0, shareUrl: null, submittedAt: Date.now()
+      };
+      submittedTasks.unshift(currentTask);
+      paintCurrentTask();
+      var spv = document.getElementById('script-upload-preview'); if (spv) spv.style.display = 'none'; // 原始缩略图交给「本次任务」卡片展示
       window.FFMCP.subscribeProgress(jobId, function(ev){
         var pct = ev && (ev.percent || ev.progress || 0);
-        if (ev && ev.status === 'published'){ fill.style.width = '100%'; st.textContent = '渲染完成 · 链接：' + (ev.share_url || '(见控制台)'); showToast('渲染完成！'); btn.disabled = false; }
-        else { fill.style.width = pct + '%'; st.textContent = '渲染中 ' + pct + '%'; }
+        if (ev && ev.status === 'published'){
+          fill.style.width = '100%'; st.textContent = '渲染完成 · 链接：' + (ev.share_url || '(见控制台)'); showToast('渲染完成！'); btn.disabled = false;
+          if (currentTask){ currentTask.status = '已完成'; currentTask.statusClass = 'done'; currentTask.progress = 100; currentTask.shareUrl = ev.share_url || null; paintCurrentTask(); }
+          // 保留已上传图片，不立即清空（A：切页不丢，直到开新任务）
+        }
+        else { fill.style.width = pct + '%'; st.textContent = '渲染中 ' + pct + '%';
+          if (currentTask){ currentTask.status = '渲染中'; currentTask.statusClass = 'rendering'; currentTask.progress = pct; paintCurrentTask(); } }
       }, function(){ st.textContent = '进度订阅异常，将改用轮询'; });
     } catch (e){ st.textContent = '提交失败：' + e.message; btn.disabled = false; }
   });
+
+  // ---- 字幕视图 ----
+  // 工作流由浏览器编排：选文件 → 转写 → 翻译 → 生成双语字幕 → 烧录。
+  // 每一步通过 /api/mcp 调用上游 MCP 的 execute_tool,工具名作为
+  // tool_name 入参。MCP 在 8900 端口,字幕能力(transcriber/translator/
+  // subtitle_gen/remotion_caption_burn)已在 mcp_server.py 中注册。
+  var subState = {
+    file: null,
+    fileAbsPath: null,   // 由后端 /api/upload 等路径回传(当前流程用 data URL 直传)
+    transcriptSegments: null,
+    translatedSegments: null,
+    srtText: null,
+    srtPath: null,
+    burnedVideoPath: null,
+  };
+
+  function setSubStatus(text) {
+    var el = document.getElementById('sub-status');
+    if (el) el.textContent = text;
+  }
+  function setSubBtn(id, enabled) {
+    var el = document.getElementById(id);
+    if (el) el.disabled = !enabled;
+  }
+
+  // 通用 MCP 调用代理。BFF 已在 allowedMCPTools 增加 execute_tool。
+  function callMCP(toolName, args) {
+    var payload = { tool: 'execute_tool', args: { tool_name: toolName, inputs: args || {} } };
+    return fetch('/api/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
+      return r.json();
+    });
+  }
+
+  function initSubtitlesView() {
+    var fileInput = document.getElementById('sub-file');
+    var pickBtn = document.getElementById('sub-pick-file');
+    if (pickBtn && !pickBtn._wired) {
+      pickBtn._wired = true;
+      pickBtn.addEventListener('click', function () { fileInput.click(); });
+      fileInput.addEventListener('change', function (e) {
+        var f = e.target.files && e.target.files[0];
+        if (!f) return;
+        subState.file = f;
+        document.getElementById('sub-file-name').textContent = f.name + '  (' + Math.round(f.size / 1024) + ' KB)';
+        document.getElementById('sub-file-meta').textContent = '上传到 MCP 后即可开始转写';
+        setSubBtn('sub-transcribe', true);
+        setSubStatus('已选择: ' + f.name);
+      });
+    }
+    wireSubtitleHandlers();
+  }
+
+  function wireSubtitleHandlers() {
+    var t = document.getElementById('sub-transcribe');
+    var tr = document.getElementById('sub-translate');
+    var sg = document.getElementById('sub-srt');
+    var br = document.getElementById('sub-burn');
+    if (t && !t._wired) {
+      t._wired = true;
+      t.addEventListener('click', function () {
+        if (!subState.file) return;
+        runTranscribe(subState.file);
+      });
+    }
+    if (tr && !tr._wired) {
+      tr._wired = true;
+      tr.addEventListener('click', function () {
+        if (!subState.transcriptSegments) return;
+        runTranslate(subState.transcriptSegments);
+      });
+    }
+    if (sg && !sg._wired) {
+      sg._wired = true;
+      sg.addEventListener('click', function () {
+        if (!subState.translatedSegments) return;
+        runSubtitleGen();
+      });
+    }
+    if (br && !br._wired) {
+      br._wired = true;
+      br.addEventListener('click', function () {
+        if (!subState.srtText || !subState.file) return;
+        runBurn();
+      });
+    }
+  }
+
+  // 1. 把选中的文件上传到 MCP 会话(走 BFF 转发),得到上游 asset 路径
+  function uploadFileToMCP(file) {
+    return new Promise(function (resolve, reject) {
+      callMCP('upload_asset_chunk', {
+        operation: 'start',
+        filename: 'subtitle_input_' + Date.now() + '_' + file.name,
+        total_bytes: file.size,
+        project_id: 'subtitle-viewer',
+      }).then(function (start) {
+        // Chunked upload — split into 1 MiB chunks
+        var chunkSize = 1024 * 1024;
+        var uploaded = 0;
+        var uploadId = (start && (start.upload_id || start.asset_id)) || ('unknown-' + Date.now());
+        function uploadNext() {
+          if (uploaded >= file.size) {
+            callMCP('upload_asset_chunk', {
+              operation: 'complete',
+              upload_id: uploadId,
+            }).then(resolve).catch(reject);
+            return;
+          }
+          var slice = file.slice(uploaded, Math.min(uploaded + chunkSize, file.size));
+          var sliceReader = new FileReader();
+          sliceReader.onload = function () {
+            var chunkB64 = sliceReader.result.split(',')[1];
+            callMCP('upload_asset_chunk', {
+              operation: 'append',
+              upload_id: uploadId,
+              offset: uploaded,
+              chunk_base64: chunkB64,
+            }).then(function () {
+              uploaded += slice.size;
+              uploadNext();
+            }).catch(reject);
+          };
+          sliceReader.onerror = reject;
+          sliceReader.readAsDataURL(slice);
+        }
+        uploadNext();
+      }).catch(reject);
+    });
+  }
+
+  // 直接读 file 为 ArrayBuffer → base64,用 execute_tool('transcriber',...)
+  // 这里的简化方案：转写工具通常接受 input_path,而不是 base64。
+  // 但前端没有持久化路径。我们用 upload_asset_chunk 替代:
+  // 上传完后用返回的 path 调 transcriber。
+  function runTranscribe(file) {
+    setSubStatus('上传文件到 MCP...');
+    uploadFileToMCP(file).then(function (finishResult) {
+      var path = finishResult && (finishResult.path || finishResult.asset_path || finishResult.url);
+      if (!path) {
+        // fallback: try to read finishResult.data.path
+        path = finishResult && finishResult.data && (finishResult.data.path || finishResult.data.asset_path);
+      }
+      if (!path) throw new Error('上传完成但未返回文件路径: ' + JSON.stringify(finishResult));
+      subState.fileAbsPath = path;
+      setSubStatus('转写中(本地 faster-whisper)...');
+      return callMCP('transcriber', {
+        input_path: path,
+        model_size: 'base',
+        language: 'en',
+        output_dir: 'projects/subtitle-viewer',
+      });
+    }).then(function (r) {
+      var data = (r && r.data) || r;
+      var segs = data.segments || (data.data && data.data.segments);
+      if (!segs || !segs.length) throw new Error('转写返回为空');
+      subState.transcriptSegments = segs;
+      renderTranscriptPreview(segs);
+      setSubBtn('sub-translate', true);
+      setSubStatus('转写完成 · 共 ' + segs.length + ' 段');
+    }).catch(function (e) {
+      setSubStatus('转写失败: ' + e.message);
+      document.getElementById('sub-transcript').textContent = '错误: ' + e.message;
+    });
+  }
+
+  function renderTranscriptPreview(segs) {
+    var html = segs.slice(0, 20).map(function (s) {
+      var t = formatTime(s.start) + ' → ' + formatTime(s.end);
+      return '[' + t + ']  ' + (s.text || '');
+    }).join('\n');
+    if (segs.length > 20) html += '\n... 共 ' + segs.length + ' 段';
+    document.getElementById('sub-transcript').textContent = html;
+  }
+
+  function formatTime(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    var m = Math.floor(sec / 60);
+    var s = sec % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function runTranslate(segs) {
+    setSubStatus('翻译中(Argos 离线模型)...');
+    callMCP('translator', {
+      segments: segs,
+      source_lang: 'en',
+      target_lang: 'zh',
+    }).then(function (r) {
+      var data = (r && r.data) || r;
+      var out = data.segments || (data.data && data.data.segments);
+      if (!out || !out.length) throw new Error('翻译返回为空');
+      subState.translatedSegments = out;
+      var html = out.slice(0, 20).map(function (s) {
+        return '[' + formatTime(s.start) + ' → ' + formatTime(s.end) + ']  ' + (s.text || '');
+      }).join('\n');
+      if (out.length > 20) html += '\n... 共 ' + out.length + ' 段';
+      document.getElementById('sub-translation').textContent = html;
+      setSubBtn('sub-srt', true);
+      setSubStatus('翻译完成 · provider=' + (data.provider || 'argos'));
+    }).catch(function (e) {
+      setSubStatus('翻译失败: ' + e.message);
+      document.getElementById('sub-translation').textContent = '错误: ' + e.message;
+    });
+  }
+
+  function runSubtitleGen() {
+    setSubStatus('生成双语 SRT...');
+    callMCP('subtitle_gen', {
+      segments: subState.transcriptSegments,
+      target_segments: subState.translatedSegments,
+      format: 'dual_srt',
+      output_path: 'projects/subtitle-viewer/subtitles_' + Date.now() + '.srt',
+    }).then(function (r) {
+      var data = (r && r.data) || r;
+      // subtitle_gen 返回 artifacts: [output_path],但前端需要 srt 文本。
+      // 通过 fetch 下载该文件,或者让 BFF 再加一个 /api/assets 代理。
+      var srtPath = (data.output) || (data.artifacts && data.artifacts[0]);
+      if (!srtPath) throw new Error('SRT 路径缺失: ' + JSON.stringify(data));
+      subState.srtPath = srtPath;
+      // 直接拉 SRT 文本(走 BFF 静态资源代理或 MCP artifacts)
+      return fetch(bffBase() + '/api/assets?rel=' + encodeURIComponent(srtPath))
+        .then(function (resp) { return resp.text(); })
+        .then(function (txt) {
+          subState.srtText = txt;
+          document.getElementById('sub-srt-preview').textContent = txt.slice(0, 2000);
+          document.getElementById('sub-srt-actions').style.display = 'block';
+          var dl = document.getElementById('sub-srt-download');
+          dl.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(txt);
+          dl.download = 'subtitles_zh_en.srt';
+          setSubBtn('sub-burn', true);
+          setSubStatus('双语字幕已生成: ' + srtPath);
+        });
+    }).catch(function (e) {
+      setSubStatus('生成失败: ' + e.message);
+      document.getElementById('sub-srt-preview').textContent = '错误: ' + e.message;
+    });
+  }
+
+  function runBurn() {
+    setSubStatus('烧录字幕到视频(FFmpeg,耗时数十秒)...');
+    callMCP('remotion_caption_burn', {
+      input_path: subState.fileAbsPath,
+      output_path: 'projects/subtitle-viewer/burned_' + Date.now() + '.mp4',
+      srt_path: subState.srtPath,
+      words_per_page: 4,
+      font_size: 52,
+      highlight_color: '#22D3EE',
+      // 触发双语烧录(由 subtitle_gen 生成的 dual_srt 决定)
+    }).then(function (r) {
+      var data = (r && r.data) || r;
+      var out = (data.output) || (data.artifacts && data.artifacts[0]);
+      if (!out) throw new Error('烧录返回缺失 output: ' + JSON.stringify(data));
+      subState.burnedVideoPath = out;
+      var videoUrl = bffBase() + '/api/assets?rel=' + encodeURIComponent(out);
+      var v = document.getElementById('sub-burn-video');
+      v.src = videoUrl;
+      v.style.display = 'block';
+      document.getElementById('sub-burn-result').innerHTML =
+        '✓ 烧录完成 · <a href="' + videoUrl + '" download style="color:var(--accent)">下载视频</a>';
+      setSubStatus('烧录完成');
+    }).catch(function (e) {
+      setSubStatus('烧录失败: ' + e.message);
+      document.getElementById('sub-burn-result').textContent = '错误: ' + e.message;
+    });
+  }
 </script>
 </body>
 </html>

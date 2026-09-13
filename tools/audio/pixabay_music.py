@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -140,40 +141,99 @@ class PixabayMusic(BaseTool):
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         start = time.time()
 
+        # Step 1: Search Pixabay Music
+        tracks, search_error = self._search(inputs)
+        if search_error:
+            return ToolResult(
+                success=False,
+                error=search_error,
+                data={"query": inputs["query"]},
+                duration_seconds=round(time.time() - start, 2),
+            )
+        if not tracks:
+            return ToolResult(
+                success=False,
+                error=(
+                    "No music found on Pixabay for query: {inputs['query']}. "
+                    "The page structure may have changed, or no tracks match this query. "
+                    "Try a more common search term (e.g., 'ambient piano', 'upbeat corporate'), "
+                    "or use music_gen / suno_music as fallback."
+                ).format(**inputs),
+                data={"query": inputs["query"]},
+                duration_seconds=round(time.time() - start, 2),
+            )
+
+        # Step 2: Filter by duration
+        min_dur = inputs.get("min_duration", 30)
+        max_dur = inputs.get("max_duration", 120)
+        filtered = [
+            t for t in tracks
+            if t.get("duration") is not None
+            and min_dur <= t["duration"] <= max_dur
+        ]
+
+        # Fall back to unfiltered if no matches within duration range
+        if not filtered:
+            filtered = tracks
+
+        # Step 3: Pick the first matching track
+        track = filtered[0]
+
+        # Step 4: Download the audio
         try:
-            # Step 1: Search Pixabay Music
-            tracks = self._search(inputs)
-            if not tracks:
-                return ToolResult(
-                    success=False,
-                    error=f"No music found on Pixabay for query: {inputs['query']}",
-                    data={"query": inputs["query"]},
-                    duration_seconds=round(time.time() - start, 2),
-                )
-
-            # Step 2: Filter by duration
-            min_dur = inputs.get("min_duration", 30)
-            max_dur = inputs.get("max_duration", 120)
-            filtered = [
-                t for t in tracks
-                if t.get("duration") is not None
-                and min_dur <= t["duration"] <= max_dur
-            ]
-
-            # Fall back to unfiltered if no matches within duration range
-            if not filtered:
-                filtered = tracks
-
-            # Step 3: Pick the first matching track
-            track = filtered[0]
-
-            # Step 4: Download the audio
             output_path = self._download(track, inputs)
-
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                hint = (
+                    "Download blocked by Pixabay (HTTP 403 / Cloudflare). "
+                    "Try a different query, or use music_gen / suno_music as fallback."
+                )
+            elif e.code == 429:
+                hint = "Rate limited by Pixabay. Try again later."
+            else:
+                hint = f"Download HTTP error {e.code}: {e.reason}."
+            return ToolResult(
+                success=False,
+                error=hint,
+                data={"query": inputs["query"], "track": track.get("title")},
+                duration_seconds=round(time.time() - start, 2),
+            )
+        except urllib.error.URLError as e:
+            reason = getattr(e.reason, "strerror", str(e.reason))
+            if "timed out" in str(e.reason).lower():
+                hint = (
+                    "Download timed out. The CDN may be slow or blocked. "
+                    "Try again, or use music_gen / suno_music as fallback."
+                )
+            else:
+                hint = (
+                    f"Download failed: {reason}. "
+                    "Check network, or use music_gen / suno_music as fallback."
+                )
+            return ToolResult(
+                success=False,
+                error=hint,
+                data={"query": inputs["query"], "track": track.get("title")},
+                duration_seconds=round(time.time() - start, 2),
+            )
+        except OSError as e:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Download failed (OS error): {e}. "
+                    "Disk full or permission issue? "
+                    "Or use music_gen / suno_music as fallback."
+                ),
+                data={"query": inputs["query"], "track": track.get("title")},
+                duration_seconds=round(time.time() - start, 2),
+            )
         except Exception as e:
             return ToolResult(
                 success=False,
-                error=f"Pixabay music search failed: {e}",
+                error=(
+                    f"Pixabay music download failed: {e}. "
+                    "Use music_gen / suno_music as fallback."
+                ),
                 duration_seconds=round(time.time() - start, 2),
             )
 
@@ -205,8 +265,11 @@ class PixabayMusic(BaseTool):
             urllib.request.HTTPCookieProcessor(cj)
         )
 
-    def _search(self, inputs: dict[str, Any]) -> list[dict]:
+    def _search(self, inputs: dict[str, Any]) -> tuple[list[dict], str | None]:
         """Search Pixabay Music via the bootstrap JSON API.
+
+        Returns (tracks, error_hint). If error_hint is not None, the caller should
+        return a ToolResult with that hint as the error message.
 
         Pixabay's music page loads track data from a bootstrap JSON endpoint
         whose URL is embedded in the HTML. We:
@@ -222,23 +285,105 @@ class PixabayMusic(BaseTool):
         search_url = f"https://pixabay.com/music/search/{slug}/"
 
         opener = self._build_opener()
-
-        # Step 1: Fetch search page HTML (sets cookies)
         request = urllib.request.Request(search_url)
         request.add_header("User-Agent", self._USER_AGENT)
         for key, val in self._BROWSER_HEADERS.items():
             request.add_header(key, val)
 
-        with opener.open(request, timeout=30) as response:
-            html = response.read().decode("utf-8", errors="replace")
+        try:
+            with opener.open(request, timeout=30) as response:
+                status_code = response.status
+                if status_code == 403:
+                    return [], (
+                        "Pixabay blocked this request (HTTP 403). "
+                        "Likely cause: Cloudflare bot protection or IP blocked. "
+                        "Try: (1) access pixabay.com/music in a browser to confirm the site is reachable, "
+                        "(2) check if a proxy is needed for this network, "
+                        "(3) use music_gen or suno_music as fallback."
+                    )
+                if status_code == 429:
+                    return [], (
+                        "Pixabay rate-limited this IP (HTTP 429). "
+                        "Try again later, or use music_gen / suno_music as fallback."
+                    )
+                if status_code >= 500:
+                    return [], (
+                        f"Pixabay server error (HTTP {status_code}). "
+                        "Try again later, or use music_gen / suno_music as fallback."
+                    )
+                html = response.read().decode("utf-8", errors="replace")
+
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                return [], (
+                    "Pixabay blocked this request (HTTP 403). "
+                    "Likely cause: Cloudflare bot protection or IP blocked. "
+                    "Try: (1) open pixabay.com/music in a browser to confirm, "
+                    "(2) check proxy settings, "
+                    "(3) use music_gen / suno_music as fallback."
+                )
+            if e.code == 429:
+                return [], (
+                    "Pixabay rate-limited this IP (HTTP 429). "
+                    "Try again later, or use music_gen / suno_music as fallback."
+                )
+            return [], (
+                f"Pixabay HTTP error {e.code}: {e.reason}. "
+                "Try again later, or use music_gen / suno_music as fallback."
+            )
+
+        except urllib.error.URLError as e:
+            reason = getattr(e.reason, "strerror", str(e.reason))
+            # Classify common network errors
+            if "Connection refused" in str(e.reason):
+                return [], (
+                    "Cannot reach Pixabay (connection refused). "
+                    "Network issue or Pixabay is down. "
+                    "Check internet connectivity, or use music_gen / suno_music as fallback."
+                )
+            if "Name or service not known" in str(e.reason) or "nodename nor servname" in str(e.reason):
+                return [], (
+                    "Cannot resolve pixabay.com (DNS failure). "
+                    "Check internet connectivity, or use music_gen / suno_music as fallback."
+                )
+            if "timed out" in str(e.reason).lower():
+                return [], (
+                    "Pixabay request timed out (30s). "
+                    "Slow network or Pixabay is slow to respond. "
+                    "Try again, or use music_gen / suno_music as fallback."
+                )
+            return [], (
+                f"Network error reaching Pixabay: {reason}. "
+                "Check internet/proxy settings, or use music_gen / suno_music as fallback."
+            )
+
+        except OSError as e:
+            return [], (
+                f"OS error reaching Pixabay: {e}. "
+                "Check network/proxy, or use music_gen / suno_music as fallback."
+            )
+
+        except Exception as e:
+            return [], (
+                f"Unexpected error fetching Pixabay: {e}. "
+                "Try music_gen or suno_music as fallback."
+            )
 
         # Step 2: Extract bootstrap URL and fetch track data
         tracks = self._parse_bootstrap(html, search_url, opener)
         if tracks:
-            return tracks
+            return tracks, None
 
         # Step 3: Fallback — scrape HTML directly (legacy strategies)
-        return self._parse_tracks_html(html)
+        html_tracks = self._parse_tracks_html(html)
+        if not html_tracks:
+            return [], (
+                "Pixabay returned no music results for this query. "
+                "The page may have changed structure, or no tracks match. "
+                "Try a simpler/more common query, "
+                "or use music_gen / suno_music as fallback."
+            )
+        return html_tracks, None
 
     def _parse_bootstrap(
         self,

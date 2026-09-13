@@ -1,3 +1,4 @@
+import { DISPLAY, SANS } from "../fonts";
 import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 
 /**
@@ -70,7 +71,7 @@ export const ProviderChip: React.FC<ProviderChipProps> = ({
           style={{
             fontSize: 16,
             color: "rgba(255,255,255,0.6)",
-            fontFamily: "Inter, sans-serif",
+            fontFamily: SANS,
             fontWeight: 500,
             letterSpacing: 1.5,
             textTransform: "uppercase",
@@ -85,7 +86,7 @@ export const ProviderChip: React.FC<ProviderChipProps> = ({
             border: `2px solid ${accentColor}`,
             borderRadius: 999,
             color: accentColor,
-            fontFamily: "'Space Grotesk', Inter, sans-serif",
+            fontFamily: DISPLAY,
             fontWeight: 700,
             fontSize: 28,
             letterSpacing: 0.3,

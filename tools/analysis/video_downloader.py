@@ -3,10 +3,25 @@
 Downloads video, audio, or subtitles from YouTube, Shorts, Instagram Reels,
 TikTok, and 1000+ other sites. Designed for reference video analysis — downloads
 at analysis quality (720p), not production quality.
+
+Per-user isolation mirrors the ``upload_asset`` pattern: the caller supplies
+``project_id`` (default ``"_scratch"``) and the tool resolves the per-user
+workspace root via ``ProjectWorkspace.for_current_principal(project_id)``.
+The user-id is auto-injected from the MCP session — set up the
+``X-VClaw-User-Id`` header (which originates from WeChat via the vclaw auth
+chain) and the ``_user_id_ctx`` ContextVar carries it into every tool call.
+For non-MCP callers (tests, scripts), passing ``userid`` explicitly falls
+back to ``ProjectWorkspace.for_principal(Principal(...), project_id)``.
+
+The workspace always lands under ``projects/users/<namespace_key>/<project_id>/``
+— ``ProjectWorkspace.resolve()`` enforces the boundary (no symlink escapes,
+no path traversal), so a malicious caller can never write outside the
+authenticated user's namespace.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -28,7 +43,7 @@ from tools.base_tool import (
 
 class VideoDownloader(BaseTool):
     name = "video_downloader"
-    version = "0.1.0"
+    version = "0.2.0"
     tier = ToolTier.SOURCE
     capability = "source_ingest"
     provider = "yt-dlp"
@@ -67,10 +82,40 @@ class VideoDownloader(BaseTool):
 
     input_schema = {
         "type": "object",
-        "required": ["url", "output_dir"],
+        "required": ["url"],
         "properties": {
             "url": {"type": "string", "description": "Video URL to download"},
-            "output_dir": {"type": "string", "description": "Directory for downloaded files"},
+            "project_id": {
+                "type": "string",
+                "default": "references",
+                "pattern": "^[a-zA-Z0-9._-]{1,64}$",
+                "description": "Project-scoped subdirectory under the "
+                               "caller's principal namespace. The download "
+                               "lands at projects/users/<userid>/<project_id>/. "
+                               "Auto-injected from the MCP session via "
+                               "ProjectWorkspace.for_current_principal() — "
+                               "the same pattern as upload_asset. Defaults "
+                               "to 'references' for ad-hoc reference fetches.",
+            },
+            "userid": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+                "description": "OPTIONAL fallback for non-MCP callers "
+                               "(tests, scripts). When the MCP session's "
+                               "X-VClaw-User-Id is set, the workspace is "
+                               "auto-resolved and this input is ignored. "
+                               "Path-traversal characters are rejected.",
+            },
+            "output_dir": {
+                "type": "string",
+                "description": "OPTIONAL sub-path relative to the "
+                               "resolved workspace root. Default = the "
+                               "workspace root itself (URL becomes the "
+                               "filename via the URL hash). Forwarded "
+                               "through ProjectWorkspace.resolve() which "
+                               "rejects any path that escapes the user's "
+                               "namespace.",
+            },
             "format": {
                 "type": "string",
                 "enum": ["video", "audio_only", "subtitles_only", "metadata_only"],
@@ -110,6 +155,13 @@ class VideoDownloader(BaseTool):
                 },
             },
             "platform": {"type": "string"},
+            "workspace_root": {
+                "type": "string",
+                "description": "Resolved per-user workspace root "
+                               "(projects/users/<namespace_key>/<project_id>/). "
+                               "Echoed back so callers can navigate to "
+                               "downstream artifacts without re-resolving.",
+            },
         },
     }
 
@@ -118,7 +170,7 @@ class VideoDownloader(BaseTool):
         network_required=True,
     )
     idempotency_key_fields = ["url", "format", "max_resolution"]
-    side_effects = ["downloads media files to output_dir"]
+    side_effects = ["downloads media files under projects/users/<userid>/<project_id>/"]
     resume_support_value = "from_start"
     user_visible_verification = [
         "Check downloaded file plays correctly",
@@ -132,6 +184,126 @@ class VideoDownloader(BaseTool):
         "720p": 720,
         "1080p": 1080,
     }
+
+    # userid charset: alphanumeric + dash/underscore, 1-64 chars. Stricter than
+    # a typical UUID regex on purpose — anything fancier (dots, slashes,
+    # whitespace, NUL, unicode) is rejected to prevent path injection.
+    _USERID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+    @classmethod
+    def _validate_userid(cls, userid: Any) -> str:
+        """Reject path-traversal / NUL / non-ASCII userids."""
+        if not isinstance(userid, str) or not cls._USERID_RE.match(userid):
+            raise ValueError(
+                f"userid must match {cls._USERID_RE.pattern!r} "
+                f"(got {type(userid).__name__}: {userid!r})"
+            )
+        return userid
+
+    @staticmethod
+    def _url_hash(url: str) -> str:
+        """Stable short hash of the URL — used in outtmpl to keep two
+        different URLs in the same output_dir from clobbering each other.
+
+        Same URL → same hash → yt-dlp overwrites the same file (idempotent).
+        Different URLs → different hashes → no collision.
+        """
+        return hashlib.sha1(url.encode("utf-8")).hexdigest()[:8]
+
+    # ------------------------------------------------------------------ #
+    # Workspace resolution — mirrors upload_asset's pattern.             #
+    # ------------------------------------------------------------------ #
+
+    @classmethod
+    def _resolve_workspace(
+        cls, inputs: dict[str, Any]
+    ) -> tuple[Any, Path]:
+        """Resolve (workspace, output_dir) for the current call.
+
+        Mirrors ``upload_asset``'s pattern exactly:
+
+        1. MCP path — ``ProjectWorkspace.for_current_principal(project_id)``
+           reads the authenticated principal from the session ContextVar
+           (populated by ``BearerTokenAuthMiddleware`` from the
+           ``X-VClaw-User-Id`` header, which originates in the WeChat
+           OAuth chain). User-id is auto-injected — the caller doesn't
+           supply it.
+
+        2. Fallback — when there's no MCP session (tests, scripts), the
+           caller may pass ``userid`` explicitly. We construct a
+           ``Principal`` and call ``ProjectWorkspace.for_principal(...)``.
+
+        3. ``output_dir`` (optional) — when supplied, it's a sub-path
+           relative to the resolved workspace root. We forward it through
+           ``workspace.resolve(output_dir)`` which enforces the boundary
+           (no path traversal, no symlink escapes). If omitted, the
+           output lands directly at the workspace root.
+
+        Returns ``(workspace, output_dir)`` on success or ``(ToolResult,
+        None)`` carrying the failure. Two return shapes avoid an import
+        cycle with ``mcp_server`` for the success case.
+        """
+        project_id = inputs.get("project_id") or "references"
+        # Lazy imports — ``lib.project_workspace`` triggers a deferred
+        # ``mcp_server`` import at call time, which would crash tools
+        # loaded outside a FastMCP context (tests, scripts). Loading them
+        # here keeps module import side-effect-free.
+        from lib.project_workspace import ProjectWorkspace, WorkspaceErrorError
+        from lib.principal_registry import (
+            Principal,
+            PrincipalNotFound,
+        )
+
+        try:
+            explicit_userid = inputs.get("userid")
+            if explicit_userid:
+                cls._validate_userid(explicit_userid)
+                principal = Principal(kind="user", principal_id=explicit_userid)
+                workspace = ProjectWorkspace.for_principal(principal, project_id)
+            else:
+                # MCP path — auto-inject from session ContextVar.
+                workspace = ProjectWorkspace.for_current_principal(project_id)
+        except PrincipalNotFound as e:
+            return (
+                ToolResult(
+                    success=False,
+                    error=(
+                        "no authenticated principal bound to this call. "
+                        "Either send X-VClaw-User-Id on the MCP request, "
+                        f"or pass userid explicitly. ({e})"
+                    ),
+                ),
+                None,
+            )
+        except ValueError as e:
+            return (
+                ToolResult(success=False, error=f"workspace resolution failed: {e}"),
+                None,
+            )
+
+        sub = inputs.get("output_dir")
+        if sub:
+            try:
+                output_dir = workspace.resolve(sub)
+            except (WorkspaceErrorError, ValueError) as e:
+                return (
+                    ToolResult(
+                        success=False,
+                        error=(
+                            f"output_dir {sub!r} escapes the workspace root "
+                            f"({workspace.root}): {e}"
+                        ),
+                    ),
+                    None,
+                )
+        else:
+            output_dir = workspace.root
+
+        return workspace, output_dir
+
+    # ------------------------------------------------------------------ #
+    # Detection + metadata (unchanged)                                   #
+    # ------------------------------------------------------------------ #
 
     def _detect_platform(self, url: str) -> str:
         """Detect platform from URL."""
@@ -178,9 +350,20 @@ class VideoDownloader(BaseTool):
         except Exception as e:
             return {"error": str(e), "title": "", "duration": 0}
 
+    # ------------------------------------------------------------------ #
+    # Execute                                                            #
+    # ------------------------------------------------------------------ #
+
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         url = inputs["url"]
-        output_dir = Path(inputs["output_dir"])
+        # --- Per-user isolation: resolve the workspace BEFORE any filesystem
+        # side effect. The MCP session's X-VClaw-User-Id (WeChat-derived) is
+        # auto-injected here via ProjectWorkspace — caller doesn't need to
+        # think about it. Non-MCP callers can pass userid explicitly.
+        workspace, output_dir = self._resolve_workspace(inputs)
+        if isinstance(workspace, ToolResult):
+            return workspace  # failure already wrapped
+
         dl_format = inputs.get("format", "video")
         max_res = inputs.get("max_resolution", "720p")
         max_duration = inputs.get("max_duration_seconds", 600)
@@ -201,7 +384,11 @@ class VideoDownloader(BaseTool):
                     f"Video is {duration}s, exceeds max_duration_seconds={max_duration}. "
                     f"Increase the limit or use a shorter video."
                 ),
-                data={"metadata": metadata, "platform": platform},
+                data={
+                    "metadata": metadata,
+                    "platform": platform,
+                    "workspace_root": str(workspace.root),
+                },
             )
 
         if dl_format == "metadata_only":
@@ -213,6 +400,7 @@ class VideoDownloader(BaseTool):
                     "subtitle_path": None,
                     "metadata": metadata,
                     "platform": platform,
+                    "workspace_root": str(workspace.root),
                 },
                 duration_seconds=round(time.time() - start, 2),
             )
@@ -235,7 +423,11 @@ class VideoDownloader(BaseTool):
             return ToolResult(
                 success=False,
                 error=f"Download failed: {e}",
-                data={"metadata": metadata, "platform": platform},
+                data={
+                    "metadata": metadata,
+                    "platform": platform,
+                    "workspace_root": str(workspace.root),
+                },
                 duration_seconds=round(elapsed, 2),
             )
 
@@ -250,10 +442,15 @@ class VideoDownloader(BaseTool):
                 "subtitle_path": subtitle_path,
                 "metadata": metadata,
                 "platform": platform,
+                "workspace_root": str(workspace.root),
             },
             artifacts=artifacts,
             duration_seconds=round(elapsed, 2),
         )
+
+    # ------------------------------------------------------------------ #
+    # yt-dlp subroutines                                                 #
+    # ------------------------------------------------------------------ #
 
     def _download_video(
         self, url: str, output_dir: Path, max_res: str
@@ -262,7 +459,12 @@ class VideoDownloader(BaseTool):
         import yt_dlp
 
         height = self._RES_MAP.get(max_res, 720)
-        video_out = str(output_dir / "reference_video.%(ext)s")
+        # URL hash → distinct filenames per URL in the same output_dir, so
+        # two concurrent downloads (different URLs, same dir) don't clobber
+        # each other. Same URL twice → same hash → yt-dlp overwrites
+        # idempotently.
+        url_hash = self._url_hash(url)
+        video_out = str(output_dir / f"reference_video_{url_hash}.%(ext)s")
 
         ydl_opts = {
             "format": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",

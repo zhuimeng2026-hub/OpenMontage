@@ -106,3 +106,41 @@ When using the `scene_detect` tool:
 5. **Set min_scene_length to 2.0s** for educational content to avoid micro-scenes
 6. **Use detected scenes to inform the edit stage** — map scenes to script sections
 7. **For AI-generated video clips**, use `content` not `threshold` — AI video rarely uses fade-to-black
+
+## Backend Selection (auto-tier, since 2026-09-10)
+
+`scene_detect` ships three backends and picks the best one available at
+runtime. Routing priority: **TransNetV2 > PySceneDetect > FFmpeg `scene` filter**.
+
+| Backend | When it runs | Strengths | Weaknesses |
+|---|---|---|---|
+| **TransNetV2** | `transnetv2_pytorch` importable (default on this host since 2026-09-10) | Best — handles fades/dissolves, low-contrast hard cuts, flash/strobe, fast-motion whip-pans. CPU-friendly. | ~0.3-1× realtime on CPU; first call loads ~30MB weights |
+| **PySceneDetect** | `scenedetect` importable (mid-tier fallback) | Good for pure hard cuts; reliable on screen recordings | 2-frame heuristic misses fades; flag flood under flash |
+| **FFmpeg `scene` filter** | Always available (last resort) | Zero extra deps; ships in ffmpeg | Hard cuts only; misses fades; floods false positives under flash |
+
+**How to invoke each backend:**
+
+- Default (recommended): omit `method`, or pass `method="auto"` — picks the best available
+- Force TransNetV2: `method="transnetv2"` — falls through to PySceneDetect if the package is missing
+- Force PySceneDetect: `method="content"` / `"threshold"` / `"adaptive"` — falls through to TransNetV2 if PySceneDetect is missing
+- (The FFmpeg fallback is not user-selectable; it runs only when no upgraded backend is importable)
+
+**`downgraded` contract:**
+
+| `result.data["method"]` | `result.data["downgraded"]` | Meaning |
+|---|---|---|
+| `"transnetv2"` | `False` | Highest accuracy; full detector |
+| `"pyscenedetect"` | `True` | Mid-tier; misses fades; see `capability_loss` |
+| `"ffmpeg"` | `True` | Last-resort; misses fades + low-contrast cuts + flash; see `capability_loss` |
+
+Consumers (e.g. `video_analyzer`, `video-reference-analyst`) should branch
+on `downgraded` and either warn the user or re-prompt for
+`pip install transnetv2_pytorch` when `True`.
+
+**Tuning note:** TransNetV2's `threshold` arg is in [0, 1] (sigmoid
+output, default 0.5). Lower = more sensitive. PySceneDetect's threshold
+is the legacy 0-255 content-value scale (default 27). The FFmpeg
+fallback uses 0-1 (`scene` filter, default 0.3). Don't cross-tune.
+
+See `docs/transnetv2-vs-pyscenedetect-2026-09-10.md` for the full
+failure-mode analysis that motivates the three-tier design.

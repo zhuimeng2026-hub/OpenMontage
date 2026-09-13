@@ -1,0 +1,23 @@
+[Unit]
+Description=FrameFlow authenticated read-only observer
+After=network.target frameflow-perf-monitor.service
+Requires=frameflow-perf-monitor.service
+
+[Service]
+Type=simple
+User=frameflow-observer
+Group=frameflow-observer
+SupplementaryGroups=systemd-journal adm
+EnvironmentFile=/etc/frameflow-observer/observer.env
+WorkingDirectory=/opt/OpenMontage_Voicebox
+ExecStart=/usr/bin/python3 /opt/OpenMontage_Voicebox/scripts/frameflow_observer.py --host 0.0.0.0 --port 9910 --allow-cidr 127.0.0.1/32 --allow-cidr 192.168.20.246/32 --metrics-file /var/log/frameflow-observer/metrics.jsonl --monitor-log /var/log/frameflow-observer/monitor.log --bff-unit frameflow-bff.service --mcp-unit openmontage-mcp.service
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/log/nginx /var/log/journal /run/log/journal
+
+[Install]
+WantedBy=multi-user.target

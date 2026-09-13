@@ -1,0 +1,33 @@
+# docs/ — Index
+
+> Pointer file. Every entry below lives under `docs/`.
+
+## Core references (read first)
+
+- [`om-concepts-pipeline-playbook-template.md`](om-concepts-pipeline-playbook-template.md) — **新人第一站：管道 / 流水线 / 模板的概念科普**。管道==流水线（同一个 pipeline）；"模板"在 OM 里是歧义词，对应 style playbook、`video-template-remix` 管道、Remotion TSX 三个不同的东西。含三层分工对照表、`compatible_playbooks` 接口、视频号带货参考组合与安全区、"为什么不直接用 Remotion"、常见误区速查、自定义 playbook 最小流程。
+- [`PIPELINES-AND-OFFLINE-CAPABILITIES.md`](PIPELINES-AND-OFFLINE-CAPABILITIES.md) — **All 14 production pipelines with usage + decision tree; OM's full capability matrix split into "needs external paid API" vs "fully offline-capable on this host"**. Start here when picking a pipeline or planning offline work.
+- [`when-to-use-external-t2v-2026-09-10.md`](when-to-use-external-t2v-2026-09-10.md) — **Decision framework for when to call external T2V/I2V vs native composition**. Per-shot checklist, native coverage matrix, "don't use T2V when…" failure modes (Hailuo quota cap 4/cycle, destruction-prompt safety softening), provider selection on this host.
+- [`video-decomposition-stack-2026-09-10.md`](video-decomposition-stack-2026-09-10.md) — **Strongest open-source video decomposition stack by capability dimension** (TransNetV2 / WhisperX / pyannote / SAM2 / Qwen2.5-VL or InternVideo2.5 / SigLIP+DINOv2 / PaddleOCR). Service-vs-software taxonomy, OM-stack gap analysis (highest ROI upgrades: scene_detect→TransNetV2, video_understand→Qwen2.5-VL-72B).
+- [`transnetv2-vs-pyscenedetect-2026-09-10.md`](transnetv2-vs-pyscenedetect-2026-09-10.md) — **TransNetV2 vs PySceneDetect specific failure modes** (fades/dissolves, low-contrast hard cuts, flash/strobe, fast motion); **why VLM substitution doesn't work** (frame-precise vs narrative-coarse); **current-host runnability check 2026-09-10** (no GPU; PySceneDetect import broken; 41GB HF cache incl. BLIP-2).
+- [`MUSIC-ISSUES-AND-FIXES.md`](MUSIC-ISSUES-AND-FIXES.md) — **Audio production gotchas**: Kokoro 40s warm-up per call, MusicGen critical slowness on CPU + offline-mode fix, WhisperX base model homophone errors, license traps for commercial获客 videos, plus the recipe to reuse the already-generated `/tmp/musicgen_test.wav`.
+- [`RESOURCES.md`](RESOURCES.md) — **Canonical handoff index of all available assets on 2026-09-10** (4 Pixabay BGM candidates with hashes, MusicGen outputs, TTS tests, final mp4, recipe to build the office-demo version with `pixabay_happy.mp3` as primary BGM pick). Point another LLM at this file when scripting a new获客 video.
+- [`PROMPT-FOR-SCRIPT-LLM.md`](PROMPT-FOR-SCRIPT-LLM.md) — **Copy-paste prompt template to send to the script LLM** + complete output JSON schema + hard constraints + failure-mode pre-avoidance + worked example. Pair with `RESOURCES.md` for the canonical "generate a获客 video script" workflow.
+- [`VIDEO-GEN-SMOKE-CHECKLIST.md`](VIDEO-GEN-SMOKE-CHECKLIST.md) — **6-probe pre-flight checklist for kapon.cloud OneHub I2V** (`minimax_h3_video` BaseTool). Verifies token alive, model allowlist (H3 + H3-Max), all 3 I2V format variants, anti-bot URL source (ocbot mirror vs imgbb vs data URI). Run before any new I2V session. Verified against live kapon 2026-09-10.
+- [`SUBTITLE-VOICEOVER-ALIGNMENT.md`](SUBTITLE-VOICEOVER-ALIGNMENT.md) — **How to align SRT subtitles to actual TTS voiceover timing** (Kokoro + WhisperX). Includes why section-boundary-aligned subtitles drift ~25s, complete code template, hand-split heuristics for merged ASR segments, libass vs drawtext comparison.
+- [`SUBTITLE-ALIGNMENT-TOOLING.md`](SUBTITLE-ALIGNMENT-TOOLING.md) — Companion to the above: `utils/calibrate_subtitle_alignment.py` (environment fingerprint) + `utils/align_subtitles.py` (ASR-based aligner) + `utils/run_alignment_pipeline.py` (E2E wrapper). When to calibrate, how to interpret output, common failure modes.
+- [`PROVIDERS.md`](PROVIDERS.md) — every paid provider with setup, pricing, free-tier notes.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — full technical reference (decision log, schema internals).
+- [`PR_REVIEW_GUIDE.md`](PR_REVIEW_GUIDE.md) — review checklist for landing changes.
+
+## Operational guides
+
+- [`tweak-server.md`](tweak-server.md) — end-user render-tweak sidecar protocol.
+- [`single-port-arch.md`](single-port-arch.md) — `:8900` vclaw-fronted topology, SSE streaming fix, auth split.
+
+## Project / production logs
+
+- `projects/`-specific notes live in each project's `events.jsonl`, `decision_log.json`, and per-session handoff files. See also `../HANDOFF-2026-09-10.md` for the most recent cross-session handoff.
+
+## Test plans / QA
+
+- `../QA_PLAN.md` — QA plan referenced from project CLAUDE.md; consult before adding tests under `tests/qa/`.

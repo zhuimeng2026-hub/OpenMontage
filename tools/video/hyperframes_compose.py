@@ -37,6 +37,7 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+from lib import paths as lib_paths
 
 
 log = logging.getLogger("hyperframes_compose")
@@ -226,24 +227,38 @@ class HyperFramesCompose(BaseTool):
     # We cache per-process so the first call pays ~2-5s and subsequent calls
     # (get_info spam from the registry) are free.
     _npm_resolve_cache: Optional[dict[str, str]] = None
+    # Cache node --version result for the life of the process (subprocess + regex
+    # is cheap but not free, and list_tools calls get_status() for every tool).
+    _node_version_cache: Optional[int] = None
 
     @classmethod
     def _node_major_version(cls) -> Optional[int]:
-        """Return Node.js major version, or None if node isn't installed."""
+        """Return Node.js major version, or None if node isn't installed.
+
+        Result is cached per-process since node --version is slow enough to matter
+        when list_tools iterates all tools without a status filter.
+        """
+        if cls._node_version_cache is not None:
+            return cls._node_version_cache
         node = shutil.which("node")
         if not node:
+            cls._node_version_cache = None
             return None
         try:
             out = subprocess.run(
                 [node, "--version"], capture_output=True, text=True, timeout=5
             )
             if out.returncode != 0:
+                cls._node_version_cache = None
                 return None
             match = re.match(r"v?(\d+)\.", out.stdout.strip())
             if not match:
+                cls._node_version_cache = None
                 return None
-            return int(match.group(1))
+            cls._node_version_cache = int(match.group(1))
+            return cls._node_version_cache
         except (OSError, subprocess.SubprocessError):
+            cls._node_version_cache = None
             return None
 
     @classmethod
@@ -781,6 +796,25 @@ class HyperFramesCompose(BaseTool):
             return 0.0
         return max(float(c.get("out_seconds", 0) or 0) for c in cuts)
 
+    @staticmethod
+    def _asset_abs_path(asset: dict, default: str = "") -> Path:
+        """Resolve an asset record to an on-disk absolute path.
+
+        Session-uploaded assets carry an OS-portable ``relative_path`` (posix,
+        relative to the repo root); template/workspace assets may still carry an
+        absolute ``path``. Prefer ``relative_path`` so the same record resolves
+        correctly on a different OS than the one that performed the upload.
+        """
+        rel = asset.get("relative_path")
+        if rel:
+            p = Path(rel)
+            repo_root = Path(lib_paths.PROJECTS_DIR).resolve().parent
+            return p if p.is_absolute() else (repo_root / rel)
+        ap = asset.get("path")
+        if ap:
+            return Path(ap)
+        return Path(default) if default else Path()
+
     def _resolve_and_stage_assets(
         self,
         cuts: list[dict],
@@ -802,7 +836,7 @@ class HyperFramesCompose(BaseTool):
             source = cut.get("source", "")
             resolved_cut = dict(cut)
             if source in asset_lookup:
-                resolved_cut["source"] = asset_lookup[source].get("path", source)
+                resolved_cut["source"] = str(self._asset_abs_path(asset_lookup[source], source))
             src_path = Path(resolved_cut["source"]) if resolved_cut.get("source") else None
             if src_path and src_path.exists() and not self._is_inside(src_path, workspace):
                 dest = assets_dir / src_path.name
@@ -828,7 +862,7 @@ class HyperFramesCompose(BaseTool):
             aid = seg.get("asset_id")
             if not aid or aid not in asset_lookup:
                 continue
-            src = Path(asset_lookup[aid].get("path", ""))
+            src = self._asset_abs_path(asset_lookup[aid])
             if not src.exists():
                 continue
             if not self._is_inside(src, workspace):
@@ -848,7 +882,7 @@ class HyperFramesCompose(BaseTool):
         music = audio.get("music", {})
         m_id = music.get("asset_id")
         if m_id and m_id in asset_lookup:
-            src = Path(asset_lookup[m_id].get("path", ""))
+            src = self._asset_abs_path(asset_lookup[m_id])
             if src.exists():
                 if not self._is_inside(src, workspace):
                     dest = assets_dir / src.name

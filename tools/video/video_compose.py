@@ -24,11 +24,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
-import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from tools.base_tool import (
     BaseTool,
@@ -41,9 +42,31 @@ from tools.base_tool import (
     ToolStability,
     ToolTier,
 )
+from lib import paths as lib_paths
 
 
 import os
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _asset_abs_path(asset: dict, default: str = "") -> str:
+    """Resolve an asset record to an on-disk absolute path.
+
+    Session-uploaded assets carry an OS-portable ``relative_path`` (posix,
+    relative to the repo root); template/workspace assets may still carry an
+    absolute ``path``. Prefer ``relative_path`` so the same record resolves
+    correctly on a different OS than the one that performed the upload.
+    """
+    rel = asset.get("relative_path")
+    if rel:
+        p = Path(rel)
+        repo_root = Path(lib_paths.PROJECTS_DIR).resolve().parent
+        return str(p if p.is_absolute() else (repo_root / rel))
+    ap = asset.get("path")
+    if ap:
+        return str(ap)
+    return default
 
 
 def _get_remotion_concurrency():
@@ -61,9 +84,6 @@ def _get_remotion_concurrency():
 
     cores = os.cpu_count() or 4
     return str(min(cores, 8))
-
-
-_REMOTION_RENDER_SLOTS = None  # 惰性创建的进程级 BoundedSemaphore
 
 
 def _get_remotion_max_parallel() -> int:
@@ -84,17 +104,100 @@ def _get_remotion_max_parallel() -> int:
     return 2
 
 
-def _get_remotion_render_semaphore() -> threading.BoundedSemaphore:
-    """返回进程级 Remotion 渲染闸门。
+def _get_remotion_max_parallel_per_user() -> int:
+    """Return the maximum simultaneous Remotion processes for one user."""
+    env_val = os.environ.get("REMOTION_MAX_PARALLEL_PER_USER")
+    if env_val:
+        try:
+            val = int(env_val)
+            if val >= 1:
+                return min(val, _get_remotion_max_parallel())
+        except ValueError:
+            pass
+    return 1
 
-    video_compose.execute() 是同步方法，经 asyncio.to_thread 在 worker 线程
-    执行，因此必须用 threading 信号量而非 asyncio.Semaphore。Bounded 额外能
-    抓「释放次数 > 获取次数」的实现 bug。
+
+def _get_remotion_render_gate():
+    """Return the process-wide user-fair Remotion render gate."""
+    from lib.render_queue import get_fair_render_gate
+
+    return get_fair_render_gate(
+        _get_remotion_max_parallel(),
+        _get_remotion_max_parallel_per_user(),
+    )
+
+
+def _resolve_fps(edit_decisions: dict | None) -> float:
+    """Resolve the output frame rate from edit_decisions with cascading fallback.
+
+    Per docs/openmontage-173-server-fixes.md §P2 root-cause fix (Plan B):
+    clients may carry fps in any of five locations (top-level `fps`,
+    top-level `compose_target.fps`, top-level `format.fps`,
+    `metadata.fps`, `metadata.compose_target.fps`). The top-level locations
+    were historically stripped by `additionalProperties:false`; even after the
+    schema fix (Plan A) some clients still emit only `metadata.*`. Picking the
+    first present, valid (positive number) value preserves every shape and
+    avoids the silent `from = seconds * undefined = NaN` Remotion Sequence
+    crash.
+
+    Falls back to 30.0 and emits a WARNING so we can see in the journal when
+    a client emitted *no* fps anywhere — that's the "real cause hidden by
+    NaN" pattern the doc warns about.
     """
-    global _REMOTION_RENDER_SLOTS
-    if _REMOTION_RENDER_SLOTS is None:
-        _REMOTION_RENDER_SLOTS = threading.BoundedSemaphore(_get_remotion_max_parallel())
-    return _REMOTION_RENDER_SLOTS
+    ed = edit_decisions or {}
+    md = ed.get("metadata") or {}
+    candidates = (
+        ed.get("fps"),
+        (ed.get("compose_target") or {}).get("fps"),
+        (ed.get("format") or {}).get("fps"),
+        md.get("fps"),
+        (md.get("compose_target") or {}).get("fps"),
+    )
+    for c in candidates:
+        if isinstance(c, (int, float)) and c > 0:
+            return float(c)
+    import logging
+    logging.getLogger("video_compose").warning(
+        "fps missing from edit_decisions (no candidate in top-level fps / "
+        "compose_target.fps / format.fps / metadata.fps / "
+        "metadata.compose_target.fps); falling back to 30.0"
+    )
+    return 30.0
+
+
+def _resolve_compose_target(edit_decisions: dict | None) -> dict[str, Any] | None:
+    """Resolve the output canvas (width/height/fit) from edit_decisions.
+
+    Mirrors the cascade in ``_resolve_fps`` so dimensions and frame rate live
+    in the same logical place. Priority (first present wins):
+
+      1. ``edit_decisions.compose_target`` — top-level, schema-canonical
+         (schemas/artifacts/edit_decisions.schema.json:235).
+      2. ``edit_decisions.format`` — top-level legacy.
+      3. ``edit_decisions.metadata.compose_target`` — pre-schema-fix legacy.
+      4. ``edit_decisions.metadata.format`` — oldest legacy.
+
+    Returns the first dict that contains at least ``width`` and ``height`` as
+    positive numbers, or ``None`` if no candidate qualifies. Callers fall back
+    to the 1920x1080 default themselves so the resolution string format stays
+    in one place.
+    """
+    ed = edit_decisions or {}
+    md = ed.get("metadata") or {}
+    candidates = (
+        ed.get("compose_target"),
+        ed.get("format"),
+        md.get("compose_target"),
+        md.get("format"),
+    )
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+        w = c.get("width")
+        h = c.get("height")
+        if isinstance(w, (int, float)) and isinstance(h, (int, float)) and w > 0 and h > 0:
+            return dict(c)
+    return None
 
 
 class VideoCompose(BaseTool):
@@ -125,7 +228,7 @@ class VideoCompose(BaseTool):
         "properties": {
             "operation": {
                 "type": "string",
-                "enum": ["compose", "render", "remotion_render", "burn_subtitles", "overlay", "encode"],
+                "enum": ["compose", "render", "remotion_render", "burn_subtitles", "overlay", "encode", "remotion_bilingual_overlay"],
                 "description": (
                     "compose: low-level concat cuts + audio + subtitles. "
                     "render: high-level — resolves asset IDs, auto-routes to Remotion "
@@ -133,7 +236,10 @@ class VideoCompose(BaseTool):
                     "remotion_render: render via Remotion (Node.js). "
                     "burn_subtitles: burn subtitle file into existing video. "
                     "overlay: composite overlays onto base video. "
-                    "encode: re-encode to a target profile/codec."
+                    "encode: re-encode to a target profile/codec. "
+                    "remotion_bilingual_overlay: render bilingual subtitles via "
+                    "Remotion's BilingualCaptionOverlay composition (animated "
+                    "word-level highlighting, transparent or black background)."
                 ),
             },
             "input_path": {"type": "string"},
@@ -184,6 +290,30 @@ class VideoCompose(BaseTool):
                 "description": (
                     "Inline source narration script. Used by "
                     "transcript_comparison when a file path is unavailable."
+                ),
+            },
+            "project_id": {
+                "type": "string",
+                "default": "renders",
+                "pattern": "^[a-zA-Z0-9._-]{1,64}$",
+                "description": (
+                    "Project-scoped subdirectory under the caller's "
+                    "principal namespace. Auto-injected from the MCP "
+                    "session via ProjectWorkspace.for_current_principal() "
+                    "— the same pattern as upload_asset / video_downloader "
+                    "/ video_analyzer. Propagated to child tools "
+                    "(HyperFramesCompose, SubtitleGen, …) so future "
+                    "workspace validation on those targets doesn't break "
+                    "the cascade."
+                ),
+            },
+            "userid": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+                "description": (
+                    "OPTIONAL fallback for non-MCP callers (tests, scripts). "
+                    "When the MCP session's X-VClaw-User-Id is set, the "
+                    "userid is auto-resolved and this input is ignored."
                 ),
             },
             "subtitle_path": {"type": "string"},
@@ -256,6 +386,7 @@ class VideoCompose(BaseTool):
     _REMOTION_COMPONENTS = [
         "text_card", "stat_card", "callout", "comparison",
         "progress", "chart", "bar_chart", "line_chart", "pie_chart", "kpi_grid",
+        "bilingual_caption_overlay",
     ]
 
     best_for = [
@@ -405,9 +536,65 @@ class VideoCompose(BaseTool):
         )
         return info
 
+    # ------------------------------------------------------------------ #
+    # Workspace resolution — mirrors upload_asset / video_downloader /    #
+    # video_analyzer. Auto-injects userid from the MCP session, falls       #
+    # back to explicit userid input for non-MCP callers.                  #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _resolve_workspace(
+        inputs: dict[str, Any],
+    ) -> tuple[Any, Path, str]:
+        """Resolve (workspace, workspace_root, userid) for this call.
+
+        Returns ``(workspace, workspace_root, userid)`` on success or
+        ``(ToolResult, None, None)`` on failure. ``workspace_root`` is
+        an absolute ``Path`` to the resolved workspace.
+        """
+        from lib.principal_registry import Principal, PrincipalNotFound
+        from lib.project_workspace import ProjectWorkspace, WorkspaceErrorError
+
+        project_id = inputs.get("project_id") or "renders"
+        explicit_userid = inputs.get("userid")
+        try:
+            if explicit_userid:
+                principal = Principal(kind="user", principal_id=explicit_userid)
+                workspace = ProjectWorkspace.for_principal(principal, project_id)
+            else:
+                workspace = ProjectWorkspace.for_current_principal(project_id)
+        except PrincipalNotFound as e:
+            return (
+                ToolResult(
+                    success=False,
+                    error=(
+                        f"no authenticated principal bound to this call: {e}. "
+                        "Send X-VClaw-User-Id on the MCP request, or pass "
+                        "userid explicitly when calling from a non-MCP context."
+                    ),
+                ),
+                None,
+                None,
+            )
+        except ValueError as e:
+            return (
+                ToolResult(success=False, error=f"workspace resolution failed: {e}"),
+                None,
+                None,
+            )
+        return workspace, workspace.root, workspace.principal.principal_id
+
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         operation = inputs["operation"]
         start = time.time()
+
+        # Resolve workspace once per call; cascade to child tools.
+        ws_or_err, _root, userid = self._resolve_workspace(inputs)
+        if isinstance(ws_or_err, ToolResult):
+            return ws_or_err  # failure already wrapped
+        # Stash for sub-handlers to read.
+        self._resolved_userid = userid
+        self._resolved_project_id = inputs.get("project_id") or "renders"
 
         try:
             if operation == "compose":
@@ -422,6 +609,8 @@ class VideoCompose(BaseTool):
                 result = self._overlay(inputs)
             elif operation == "encode":
                 result = self._encode(inputs)
+            elif operation == "remotion_bilingual_overlay":
+                result = self._remotion_bilingual_overlay(inputs)
             else:
                 return ToolResult(success=False, error=f"Unknown operation: {operation}")
         except Exception as e:
@@ -482,23 +671,29 @@ class VideoCompose(BaseTool):
         crf = inputs.get("crf", 23)
         preset = inputs.get("preset", "medium")
         profile_name = inputs.get("profile")
+        # Forwarded to the final re-encode step only — the per-segment trims
+        # and concat-copy calls are intentionally NOT streamed because each
+        # one is short and uniform, so the streaming overhead would dominate
+        # the actual encode time.
+        progress_callback = inputs.get("_progress_callback")
 
         # Resolve target resolution + fit mode. Priority: explicit `profile`
-        # arg > edit_decisions.metadata.compose_target > default (landscape HD).
+        # arg > edit_decisions.compose_target (any of the 4 cascade locations
+        # documented in _resolve_compose_target) > default (landscape HD).
         # compose_target = {"width": W, "height": H, "fit": "pad"|"cover"} lets a
         # caller request vertical (9:16) or any aspect without a named profile.
         # fit="pad" letterboxes (no content loss, the historical default);
         # fit="cover" scales-to-fill and centre-crops (better for vertical social).
         resolution = "1920x1080"
         fit_mode = "pad"
-        compose_target = (edit_decisions.get("metadata") or {}).get("compose_target")
-        if isinstance(compose_target, dict):
+        ct = _resolve_compose_target(edit_decisions)
+        if ct:
             try:
-                resolution = f"{int(compose_target['width'])}x{int(compose_target['height'])}"
+                resolution = f"{int(ct['width'])}x{int(ct['height'])}"
             except (KeyError, ValueError, TypeError):
                 pass
-            if compose_target.get("fit") in ("pad", "cover"):
-                fit_mode = compose_target["fit"]
+            if ct.get("fit") in ("pad", "cover"):
+                fit_mode = ct["fit"]
         if profile_name:
             try:
                 from lib.media_profiles import get_profile
@@ -588,7 +783,7 @@ class VideoCompose(BaseTool):
                     #
                     # Target is target_w x target_h @ 30fps, yuv420p, sar=1
                     # (default 1920x1080; overridable via `profile` or
-                    # edit_decisions.metadata.compose_target — see above).
+                    # edit_decisions.compose_target — see _resolve_compose_target).
                     # fit="pad" letterboxes to preserve all content; fit="cover"
                     # scales-to-fill then centre-crops (no bars, for vertical social).
                     if fit_mode == "cover":
@@ -601,7 +796,7 @@ class VideoCompose(BaseTool):
                             f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease",
                             f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black",
                         ]
-                    vf_parts: list[str] = [*geom, "setsar=1", "fps=30"]
+                    vf_parts: list[str] = [*geom, "setsar=1", f"fps={_resolve_fps(edit_decisions):.3f}"]
                     af_parts: list[str] = []
                     if speed != 1.0:
                         vf_parts.append(f"setpts={1.0/speed}*PTS")
@@ -726,20 +921,21 @@ class VideoCompose(BaseTool):
                 cmd.extend(["-c:a", "copy"])
 
             cmd.append(str(output_path))
-            self.run_command(cmd)
+            progress_log = self._run_ffmpeg_with_progress(cmd, progress_callback)
 
-            return ToolResult(
-                success=True,
-                data={
-                    "operation": "compose",
-                    "cut_count": len(cuts),
-                    "has_subtitles": subtitle_path is not None,
-                    "has_mixed_audio": audio_path is not None,
-                    "profile": profile_name,
-                    "output": str(output_path),
-                },
-                artifacts=[str(output_path)],
-            )
+            artifacts: list[str] = [str(output_path)]
+            data: dict[str, Any] = {
+                "operation": "compose",
+                "cut_count": len(cuts),
+                "has_subtitles": subtitle_path is not None,
+                "has_mixed_audio": audio_path is not None,
+                "profile": profile_name,
+                "output": str(output_path),
+            }
+            if progress_log is not None:
+                artifacts.append(str(progress_log))
+                data["progress_log"] = str(progress_log)
+            return ToolResult(success=True, data=data, artifacts=artifacts)
         finally:
             # Cleanup temp files
             for f in temp_segments:
@@ -774,6 +970,7 @@ class VideoCompose(BaseTool):
         "screen-demo": "Explainer",
         "presenter": "TalkingHead",
         "animation-first": "Explainer",
+        "custom-composition": "CustomComposition",
     }
 
     @classmethod
@@ -1068,8 +1265,46 @@ class VideoCompose(BaseTool):
         output_path = Path(inputs.get("output_path", "renders/output.mp4"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # --- Custom user-code pipeline (script mode / 自定义合成) ---
+        # The user supplies TSX `code` and the uploaded session images; there is
+        # no templated cut timeline, so bypass the cut/validation gates below and
+        # route straight to Remotion with the custom composition.
+        if edit_decisions.get("composition_mode") == "custom" and \
+                str(edit_decisions.get("render_runtime", "remotion")).strip().lower() == "remotion":
+            remotion_inputs: dict[str, Any] = {
+                "edit_decisions": dict(edit_decisions),
+                "output_path": str(output_path),
+            }
+            profile = inputs.get("profile") or inputs.get("output_profile")
+            if profile:
+                remotion_inputs["profile"] = profile
+            # Forward the creator-facing render timeout, live-progress callback,
+            # and render job id so the slot gate + SSE progress keep working.
+            if inputs.get("remotion_timeout_ms") is not None:
+                remotion_inputs["remotion_timeout_ms"] = inputs["remotion_timeout_ms"]
+            if inputs.get("_progress_callback") is not None:
+                remotion_inputs["_progress_callback"] = inputs["_progress_callback"]
+            if inputs.get("_job_id") is not None:
+                remotion_inputs["_job_id"] = inputs["_job_id"]
+            return self._remotion_render(remotion_inputs)
+
         # Build asset lookup: id -> asset info
         asset_lookup = {a["id"]: a for a in asset_manifest.get("assets", [])}
+
+        # Honour ``edit_decisions.metadata.effects`` so the vclaw preview
+        # pipeline (animatic / sample / render) renders the same animation
+        # vocabulary as the final cut from ``create_remotion_video_share``.
+        # The shared helper rewrites cuts/scene_plan in place; when the
+        # caller (smoke test, clawx-studio) already set per-cut animation
+        # tokens, those are replaced by the parser — by design, since the
+        # free-text effects is the user-facing source of truth on the
+        # clawx-studio path.
+        from lib.effects_parser import apply_effects_to_edit_decisions
+        apply_effects_to_edit_decisions(
+            edit_decisions,
+            inputs.get("scene_plan"),
+            (edit_decisions.get("metadata") or {}).get("effects"),
+        )
 
         cuts = edit_decisions.get("cuts", [])
         if not cuts:
@@ -1081,7 +1316,7 @@ class VideoCompose(BaseTool):
             source_id = cut.get("source", "")
             resolved_cut = dict(cut)
             if source_id in asset_lookup:
-                resolved_cut["source"] = asset_lookup[source_id]["path"]
+                resolved_cut["source"] = _asset_abs_path(asset_lookup[source_id])
             resolved_cuts.append(resolved_cut)
 
         # --- Pre-compose validation gate ---
@@ -1299,6 +1534,8 @@ class VideoCompose(BaseTool):
             "output_path": str(output_path),
             "edit_decisions": dict(edit_decisions, cuts=resolved_cuts),
             "asset_manifest": asset_manifest,
+            "userid": getattr(self, "_resolved_userid", None),
+            "project_id": getattr(self, "_resolved_project_id", None),
         }
         if playbook_data:
             hf_inputs["playbook"] = playbook_data
@@ -1308,6 +1545,10 @@ class VideoCompose(BaseTool):
             hf_inputs["quality"] = inputs["quality"]
         if "fps" in inputs:
             hf_inputs["fps"] = inputs["fps"]
+        elif "edit_decisions" in inputs:
+            # Cascade fallback: top-level fps → compose_target.fps → metadata.*
+            # (see _resolve_fps for the full priority list).
+            hf_inputs["fps"] = _resolve_fps(inputs["edit_decisions"])
         if "strict" in inputs:
             hf_inputs["strict"] = inputs["strict"]
         if "skip_contrast" in inputs:
@@ -1414,6 +1655,30 @@ class VideoCompose(BaseTool):
 
         return render_result
 
+    def _normalize_custom_composition_props(
+        self, composition_data: dict, staged_images: list
+    ) -> dict:
+        """Build the props object consumed by the runtime-compiled CustomComposition.
+
+        MCP emits snake_case ``edit_decisions`` (``custom_code``,
+        ``duration_per_image``); the component reads camelCase props (``code``,
+        ``durationPerImage``). Map them so the user-authored TSX actually
+        receives its inputs instead of rendering an error screen. ``fps`` /
+        ``width`` / ``height`` are injected by Remotion from the composition
+        config, but we also forward them explicitly so the metadata pass and
+        scripts that read them directly get consistent values.
+        """
+        ct = _resolve_compose_target(composition_data) or {}
+        return {
+            "code": (composition_data or {}).get("custom_code", ""),
+            "images": staged_images,
+            "durationPerImage": (composition_data or {}).get("duration_per_image", 3),
+            "fps": _resolve_fps(composition_data),
+            "width": ct.get("width", 1080),
+            "height": ct.get("height", 1920),
+            "renderer_family": "custom-composition",
+        }
+
     def _remotion_render(self, inputs: dict[str, Any]) -> ToolResult:
         """Render via Remotion (requires Node.js + npx).
 
@@ -1457,6 +1722,34 @@ class VideoCompose(BaseTool):
         # Deep-copy props so we don't mutate the original
         props = json.loads(json.dumps(composition_data))
 
+        # Ensure every cut has in_seconds / out_seconds defaults so the
+        # Remotion Sequence "from" prop (from = in_seconds * fps) never becomes
+        # NaN when a client omits fps or timing fields from edit_decisions.
+        for cut in props.get("cuts") or []:
+            if cut.get("in_seconds") is None:
+                cut["in_seconds"] = 0
+            if cut.get("out_seconds") is None and cut.get("in_seconds") is not None:
+                cut["out_seconds"] = cut["in_seconds"] + 3.0
+
+        # Same defensive normalization for overlays. The Remotion Explainer
+        # component reads overlay.in_seconds / overlay.out_seconds (TS interface
+        # at Explainer.tsx:274-277), but OpenMontage's canonical overlay schema
+        # uses start_seconds / end_seconds (schemas/artifacts/edit_decisions.
+        # schema.json:280-283). Without this normalization, every overlay's
+        # `<Sequence from={Math.round(overlay.in_seconds * fps)}>` evaluates
+        # to NaN (undefined * 30) and Remotion crashes with
+        # "TypeError: The 'from' prop of a sequence must be finite, but got NaN."
+        for overlay in props.get("overlays") or []:
+            if overlay.get("in_seconds") is None and "start_seconds" in overlay:
+                overlay["in_seconds"] = overlay["start_seconds"]
+            if overlay.get("out_seconds") is None and "end_seconds" in overlay:
+                overlay["out_seconds"] = overlay["end_seconds"]
+            # Last-resort fill so no overlay ever has NaN timing.
+            if overlay.get("in_seconds") is None:
+                overlay["in_seconds"] = 0
+            if overlay.get("out_seconds") is None:
+                overlay["out_seconds"] = overlay["in_seconds"] + 3.0
+
         # Stage local media files into Remotion's public/ dir and reference
         # them by relative path so Img/OffthreadVideo/Audio load via
         # staticFile().
@@ -1483,37 +1776,88 @@ class VideoCompose(BaseTool):
         staging_id = inputs.get("staging_id") or uuid.uuid4().hex[:12]
         staged_dir = composer_dir / "public" / "_staged" / staging_id
 
-        for idx, cut in enumerate(props.get("cuts", [])):
-            # cuts[].source (Ken Burns / still) + background image/video layers
-            for field in ("source", "backgroundImage", "backgroundVideo"):
-                if cut.get(field):
-                    cut[field] = self._stage_remotion_asset(cut[field], idx, staged_dir)
-            # anime_scene / collage scenes: images[]
-            if cut.get("images"):
-                cut["images"] = [
-                    self._stage_remotion_asset(img, idx, staged_dir)
-                    for img in cut["images"]
-                ]
+        # --- Custom composition mode ---
+        # Stage the uploaded images (the only media channel for user TSX) so they
+        # can be referenced via staticFile() inside the custom code. Runs before
+        # the generic cuts loop (custom compositions carry no cuts).
+        if (composition_data or {}).get("composition_mode") == "custom":
+            custom_images = props.get("images") or []
+            staged_images = []
+            for idx, img in enumerate(custom_images):
+                if img:
+                    staged_images.append(self._stage_remotion_asset(img, idx, staged_dir))
+                else:
+                    staged_images.append(img)
+            # Replace the edit_decisions-shaped props with the component-facing
+            # contract so the user-authored TSX truly receives its inputs. MCP
+            # emits snake_case keys (custom_code / duration_per_image); the
+            # runtime-compiled CustomComposition reads camelCase props
+            # (code / durationPerImage). Without this mapping the component gets
+            # an empty `code` and renders an error screen instead of the video.
+            props = self._normalize_custom_composition_props(composition_data, staged_images)
 
-        # audio.narration.src / audio.music.src
-        audio = props.get("audio")
-        if audio:
-            for layer in ("narration", "music"):
-                if audio.get(layer, {}).get("src"):
-                    audio[layer]["src"] = self._stage_remotion_asset(
-                        audio[layer]["src"], -1, staged_dir
-                    )
+        # --- Generic local-resource staging loop (defense-in-depth) ---
+        # Single declarative pass over _STAGEABLE_FIELDS so adding a new
+        # local-resource field is one tuple entry instead of editing scattered
+        # if-branches. See /root/.claude/plans/shimmering-cooking-truffle.md.
+        def _stage_one(parent: dict, key: str, idx: int) -> None:
+            if not isinstance(parent, dict):
+                return
+            val = parent.get(key)
+            if val:
+                parent[key] = self._stage_remotion_asset(val, idx, staged_dir)
 
-        # The parameterized e-commerce composition keeps its image/audio
-        # references under assets rather than cuts/audio. Stage those fields
-        # too so MCP callers can pass absolute local paths safely.
-        assets = props.get("assets")
-        if isinstance(assets, dict):
-            for key in ("hero", "product", "detail", "lifestyle", "logo", "music"):
-                if assets.get(key):
-                    assets[key] = self._stage_remotion_asset(
-                        assets[key], -2, staged_dir
-                    )
+        for parent_key, field_key, idx in _STAGEABLE_FIELDS:
+            if not parent_key:
+                # Sentinel: field on the props root (e.g. `videoSrc` for
+                # TitledVideo / LyricOverlay / TalkingHead).
+                _stage_one(props, field_key, idx)
+                continue
+            container = props.get(parent_key)
+            if isinstance(container, list):
+                for item in container:
+                    _stage_one(item, field_key, idx)
+            elif isinstance(container, dict):
+                _stage_one(container, field_key, idx)
+
+        # Audio nested paths: audio.{narration|music}.src (explainer family)
+        # plus CinematicRenderer's top-level soundtrack / music.
+        audio_block = props.get("audio")
+        if isinstance(audio_block, dict):
+            for layer, idx in _STAGEABLE_AUDIO_FIELDS:
+                if layer in ("narration", "music"):
+                    layer_obj = audio_block.get(layer)
+                    if isinstance(layer_obj, dict) and layer_obj.get("src"):
+                        layer_obj["src"] = self._stage_remotion_asset(
+                            layer_obj["src"], idx, staged_dir
+                        )
+        for top_audio_key, idx in (("soundtrack", 10), ("music", 11)):
+            audio_obj = props.get(top_audio_key)
+            if isinstance(audio_obj, dict) and audio_obj.get("src"):
+                audio_obj["src"] = self._stage_remotion_asset(
+                    audio_obj["src"], idx, staged_dir
+                )
+
+        # CinematicRenderer consumes `scenes`, while the MCP workflow emits
+        # `cuts`. Bridge the trusted cut timeline explicitly so cinematic-
+        # montage renders uploaded stills instead of merely accepting a
+        # renderer_family label and receiving an empty composition. Run AFTER
+        # staging so it sees the already-staged `_staged/<job>/<file>` paths.
+        renderer_family = (composition_data or {}).get("renderer_family", "explainer-data")
+        if renderer_family in {"cinematic-trailer", "documentary-montage"} and not props.get("scenes"):
+            props["scenes"] = [
+                {
+                    "id": cut.get("id", f"scene-{idx:04d}"),
+                    "kind": "image",
+                    "src": cut.get("source", ""),
+                    "startSeconds": float(cut.get("in_seconds", 0)),
+                    "durationSeconds": max(0.1, float(cut.get("out_seconds", 0)) - float(cut.get("in_seconds", 0))),
+                    "fadeInFrames": 8 if idx else 14,
+                    "fadeOutFrames": 8,
+                }
+                for idx, cut in enumerate(props.get("cuts", []))
+                if cut.get("source")
+            ]
 
         # Build a custom themeConfig from the playbook's actual colors.
         # This ensures every video gets a unique visual identity derived
@@ -1530,13 +1874,49 @@ class VideoCompose(BaseTool):
 
         # Write props to temp file for Remotion CLI. 文件名带 staging_id，避免
         # 同一 project 内并发/retry 的 render 抢同一个 .remotion_props.json。
+        # Defense-in-depth: refuse to ship a `file://` or absolute path to
+        # Remotion. After staging, every local-resource field should be a
+        # `_staged/<job>/<name>` relative path; if anything is still absolute
+        # the staging loop missed a field — surface a structured blocker
+        # rather than letting Chrome fail mid-render with an opaque
+        # "Not allowed to load local resource" error.
+        import re as _re
+        _suspicious = _re.compile(r"^(?:[A-Za-z]:[\\/]|/|[A-Za-z]+://(?!localhost))")
+
+        def _walk_strings(obj):
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    yield from _walk_strings(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    yield from _walk_strings(v)
+            elif isinstance(obj, str) and obj:
+                yield obj
+
+        _bad_paths = [
+            s for s in _walk_strings(props)
+            if _suspicious.match(s)
+            and not s.startswith(("http://", "https://", "data:"))
+            and not s.startswith("_staged/")
+        ]
+        if _bad_paths:
+            return ToolResult(
+                success=False,
+                error=(
+                    "Remotion staging left these non-public paths in props — "
+                    "Chrome will reject them with 'Not allowed to load local "
+                    f"resource'. Sample: {_bad_paths[:5]}. Add the missing "
+                    "field to _STAGEABLE_FIELDS / _STAGEABLE_AUDIO_FIELDS in "
+                    "tools/video/video_compose.py."
+                ),
+            )
+
         props_path = output_path.parent / f".remotion_props.{staging_id}.json"
         with open(props_path, "w", encoding="utf-8") as f:
             json.dump(props, f)
 
         # Route to the correct Remotion composition based on renderer_family.
         # This prevents all pipelines from collapsing into the Explainer visual grammar.
-        renderer_family = (composition_data or {}).get("renderer_family", "explainer-data")
         composition_id = self._get_composition_id(renderer_family)
 
         cmd = [
@@ -1557,13 +1937,34 @@ class VideoCompose(BaseTool):
 
         # Apply media profile dimensions
         profile_name = inputs.get("profile")
+        render_width: int | None = None
+        render_height: int | None = None
         if profile_name:
             try:
                 from lib.media_profiles import get_profile
                 p = get_profile(profile_name)
-                cmd.extend(["--width", str(p.width), "--height", str(p.height)])
+                render_width = int(p.width)
+                render_height = int(p.height)
             except (ImportError, ValueError):
                 pass
+
+        # Fall back to edit_decisions.compose_target (any of the 4 cascade
+        # locations — see _resolve_compose_target). Without this fallback
+        # Remotion renders at the composition's registered width/height
+        # (e.g. Explainer = 1920x1080) regardless of what the caller asked
+        # for, producing silent-dimension bugs where vertical (1080x1920)
+        # edit_decisions yield landscape output.
+        if render_width is None or render_height is None:
+            ct = _resolve_compose_target(composition_data)
+            if ct:
+                try:
+                    render_width = int(ct["width"])
+                    render_height = int(ct["height"])
+                except (KeyError, ValueError, TypeError):
+                    pass
+
+        if render_width is not None and render_height is not None:
+            cmd.extend(["--width", str(render_width), "--height", str(render_height)])
 
         # Override concurrency from inputs if explicitly provided
         custom_concurrency = inputs.get("concurrency")
@@ -1576,33 +1977,47 @@ class VideoCompose(BaseTool):
         # restricted networks the default 30s browser setup times out with an
         # opaque failure. Pass it through and give the subprocess enough headroom
         # so run_command() does not kill Remotion before its own timeout fires.
+        #
+        # Default to 120s (was Remotion's built-in 28s). The 28s default is too
+        # tight when src/fonts.ts must register 30 woff2 faces via the FontFace
+        # API in headless Chrome — 30 sequential network round-trips + FontFace
+        # decode regularly exceed 30s on cold caches, and a hang there surfaces
+        # upstream as a misleadingly opaque "Remotion render failed" with the
+        # real delayRender() timeout swallowed by the 80-char log truncation
+        # in mcp_server.execute_tool. 120s comfortably covers cold-cache font
+        # loads while still failing fast enough for the user to iterate.
         remotion_timeout_ms = inputs.get("remotion_timeout_ms")
+        if remotion_timeout_ms is None:
+            remotion_timeout_ms = 120_000
         subprocess_timeout = 600
-        if remotion_timeout_ms:
-            try:
-                ms = int(remotion_timeout_ms)
-                cmd.append(f"--timeout={ms}")
-                subprocess_timeout = max(subprocess_timeout, ms // 1000 + 60)
-            except (TypeError, ValueError):
-                pass
+        try:
+            ms = int(remotion_timeout_ms)
+            cmd.append(f"--timeout={ms}")
+            subprocess_timeout = max(subprocess_timeout, ms // 1000 + 60)
+        except (TypeError, ValueError):
+            pass
 
         # 闸门：限制并发 Remotion 进程数，防止多用户无界扇出打爆宿主。
         # 排队/拿到槽位的状态经 progress_callback 上行，SSE 借此显示「排队→渲染」，
         # 并由 mcp_server._run_render_job 写入 session 的 render_phase + 排队位。
-        # 这里用 RenderQueue 记账等待集并返回排队位（position/depth）。
-        sem = _get_remotion_render_semaphore()
-        job_id = inputs.get("_job_id")
+        # FairRenderGate 在实际 CPU 闸门处按用户轮转；RenderQueue 继续提供
+        # 兼容的等待集快照，供状态清理与旧诊断代码使用。
+        gate = _get_remotion_render_gate()
+        # Pipeline/direct tool calls predate MCP job ids. Give those renders a
+        # private local identity so they keep the same global safety gate
+        # without requiring callers to know FrameFlow internals.
+        job_id = inputs.get("_job_id") or f"local-{uuid.uuid4().hex}"
+        queue_owner_id = str(inputs.get("_queue_owner_id") or job_id or "anonymous")
         try:
             from lib.render_queue import get_render_queue
             _rq = get_render_queue()
         except Exception:  # noqa: BLE001 - 队列模块不可用时退化为无记账
             _rq = None
-        if _rq is not None and job_id:
-            pos, depth = _rq.enter(job_id)
-            _queued_msg = f"排队中，第 {pos}/{depth} 位，等待可用渲染槽位"
-        else:
-            pos = depth = None
-            _queued_msg = "等待可用的 Remotion 渲染槽位"
+        ticket = None
+        ticket, pos, depth = gate.enter(job_id, queue_owner_id)
+        if _rq is not None:
+            _rq.enter(job_id)
+        _queued_msg = f"排队中，第 {pos}/{depth} 位，等待可用渲染槽位"
         if progress_callback:
             try:
                 _ev = {"phase": "render", "status": "queued", "slot_waiting": True,
@@ -1613,7 +2028,10 @@ class VideoCompose(BaseTool):
                 progress_callback(_ev)
             except Exception:  # noqa: BLE001
                 pass
-        with sem:
+        acquired = False
+        try:
+            gate.acquire(ticket)
+            acquired = True
             if _rq is not None and job_id:
                 _rq.leave(job_id)
             if progress_callback:
@@ -1631,7 +2049,27 @@ class VideoCompose(BaseTool):
                 on_output = None
                 if progress_callback:
                     on_output = lambda line: self._emit_remotion_progress(line, progress_callback)
-                self.run_command(cmd, timeout=subprocess_timeout, cwd=composer_dir, on_output=on_output)
+                # WorkBuddy's terminal injects NODE_OPTIONS=--require<genie-safe-delete>
+                # (a "safe delete" shim) into every child process. Remotion's bundle
+                # step cleans a large temp dir; the shim routes that delete through a
+                # recycle-bin binary that times out on Windows, corrupting the bundle
+                # and surfacing as "Cannot find module 'react/jsx-runtime'". Strip the
+                # shim from the subprocess env so Node deletes directly.
+                render_env = dict(os.environ)
+                render_env.pop("NODE_OPTIONS", None)
+                # Belt-and-suspenders: if the PATH `rm` shim still triggers, point it
+                # at a binary-less dir so it downgrades to the native recycle bin.
+                render_env["GENIE_TRASH_DIR"] = str(
+                    Path(os.environ.get("TMPDIR", os.environ.get("TEMP", "/tmp")))
+                    / "genie-trash-disabled"
+                )
+                self.run_command(
+                    cmd,
+                    timeout=subprocess_timeout,
+                    cwd=composer_dir,
+                    on_output=on_output,
+                    env=render_env,
+                )
             except subprocess.CalledProcessError as e:
                 # run_command uses check=True + capture_output, so the useful
                 # Remotion diagnostics live in stderr/stdout — surface the tail
@@ -1668,6 +2106,9 @@ class VideoCompose(BaseTool):
                     shutil.rmtree(staged_dir, ignore_errors=True)
                 except OSError:
                     pass
+        finally:
+            if acquired:
+                gate.release(queue_owner_id)
 
         if not output_path.exists():
             return ToolResult(
@@ -1685,6 +2126,197 @@ class VideoCompose(BaseTool):
             artifacts=[str(output_path)],
         )
 
+    def _remotion_bilingual_overlay(self, inputs: dict[str, Any]) -> ToolResult:
+        """Render animated bilingual subtitles via Remotion.
+
+        Takes ``segments`` (primary language) + ``target_segments`` (translated,
+        secondary language), runs them through ``subtitle_gen`` with
+        ``format="remotion_bilingual_captions"`` to get the Remotion-shaped
+        WordCaption JSON, then invokes ``npx remotion render`` against the
+        ``BilingualCaptionOverlayOnly`` composition registered in
+        ``remotion-composer/src/Root.tsx``.
+
+        Output is an MP4 with the bilingual subtitles rendered on a black
+        background. To composite onto original footage, use the ``
+        `operation="overlay"` path with this file as the overlay input.
+        """
+        import shutil
+        import tempfile
+
+        segments = inputs.get("segments")
+        target_segments = inputs.get("target_segments")
+        if not segments:
+            return ToolResult(
+                success=False,
+                error="`segments` (primary language) required for remotion_bilingual_overlay",
+            )
+        if not target_segments:
+            return ToolResult(
+                success=False,
+                error="`target_segments` (translated language) required for remotion_bilingual_overlay",
+            )
+
+        if not shutil.which("npx"):
+            return ToolResult(
+                success=False,
+                error="npx not found. Install Node.js to use Remotion rendering.",
+            )
+
+        composer_dir = (
+            Path(__file__).resolve().parent.parent.parent / "remotion-composer"
+        )
+        if not (composer_dir / "node_modules").exists():
+            return ToolResult(
+                success=False,
+                error=(
+                    f"remotion-composer/node_modules missing. Run "
+                    f"`make install` (or `cd {composer_dir} && npm install`) "
+                    f"to set up Remotion."
+                ),
+            )
+
+        output_path = Path(
+            inputs.get("output_path", "renders/bilingual_overlay.mp4")
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = output_path.resolve()
+
+        # 1. Build the Remotion props JSON via subtitle_gen.
+        # Lazy import to avoid pulling subtitle_gen at module load time
+        # (it can be heavy on cold starts and is only needed here).
+        from tools.subtitle.subtitle_gen import SubtitleGen
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subtitle_path = Path(tmpdir) / "bilingual.remotion.json"
+            sg = SubtitleGen().execute({
+                "segments": segments,
+                "target_segments": target_segments,
+                "format": "remotion_bilingual_captions",
+                "output_path": str(subtitle_path),
+                "userid": getattr(self, "_resolved_userid", None),
+                "project_id": getattr(self, "_resolved_project_id", None),
+            })
+            if not sg.success:
+                return ToolResult(
+                    success=False,
+                    error=f"subtitle_gen failed: {sg.error}",
+                )
+            if not subtitle_path.exists():
+                return ToolResult(
+                    success=False,
+                    error="subtitle_gen reported success but produced no file",
+                )
+
+            # 2. Stage props for the BilingualCaptionOverlayOnly composition.
+            #    subtitle_gen wrote `primaryWords` / `secondaryWords` at the
+            #    top level — those are exactly what the composition consumes.
+            props = json.loads(subtitle_path.read_text(encoding="utf-8"))
+
+            # Allow callers to override visual styling per-call (font sizes,
+            # highlight colors, page size, etc.). All keys are optional.
+            for key in (
+                "primaryFontSize", "secondaryFontSize",
+                "primaryColor", "primaryHighlightColor",
+                "secondaryColor", "secondaryHighlightColor",
+                "backgroundColor",
+                "primaryFontFamily", "secondaryFontFamily",
+                "wordsPerPage", "rowGap",
+            ):
+                if key in inputs:
+                    props[key] = inputs[key]
+
+            props_path = Path(tmpdir) / "props.json"
+            props_path.write_text(
+                json.dumps(props, ensure_ascii=False), encoding="utf-8"
+            )
+
+            # 3. Build the npx remotion render command. Mirrors the
+            #    `_remotion_render` command shape but skips the asset
+            #    staging path — bilingual overlay needs no media.
+            cmd = [
+                "npx", "remotion", "render",
+                str(composer_dir / "src" / "index.tsx"),
+                "BilingualCaptionOverlayOnly",
+                str(output_path),
+                "--props", str(props_path),
+                "--concurrency", str(_get_remotion_concurrency()),
+                "--no-sandbox",
+            ]
+            custom_concurrency = inputs.get("concurrency")
+            if custom_concurrency:
+                cmd = [c for c in cmd if not c.startswith("--concurrency")]
+                cmd.extend(["--concurrency", str(custom_concurrency)])
+            if inputs.get("remotion_timeout_ms"):
+                cmd.append(f"--timeout={int(inputs['remotion_timeout_ms'])}")
+
+            start = time.time()
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(composer_dir),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+            except subprocess.TimeoutExpired:
+                return ToolResult(
+                    success=False,
+                    error="Remotion render timed out after 600s",
+                )
+            except FileNotFoundError as exc:
+                return ToolResult(
+                    success=False,
+                    error=f"Remotion binary launch failed: {exc}",
+                )
+
+            if proc.returncode != 0:
+                # Trim long stacks but keep the most recent lines so the
+                # operator can see what Remotion actually complained about.
+                stderr_tail = "\n".join(
+                    (proc.stderr or "").splitlines()[-20:]
+                )
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"npx remotion render failed (exit {proc.returncode}): "
+                        f"{stderr_tail or proc.stdout or '(no output)'}"
+                    ),
+                )
+
+            if not output_path.exists():
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Remotion exit was 0 but output file is missing — "
+                        "check disk space and write permissions."
+                    ),
+                )
+
+            return ToolResult(
+                success=True,
+                data={
+                    "output_path": str(output_path),
+                    "operation": "remotion_bilingual_overlay",
+                    "composition_id": "BilingualCaptionOverlayOnly",
+                    "primary_word_count": len(props.get("primaryWords", [])),
+                    "secondary_word_count": len(props.get("secondaryWords", [])),
+                    "render_seconds": round(time.time() - start, 2),
+                },
+                artifacts=[str(output_path)],
+                duration_seconds=round(time.time() - start, 2),
+            )
+
+    # Each tuple is (parent_dict_key, field_name, idx_sentiment).
+    #   parent_dict_key="" means field is on the props root (e.g. `videoSrc`).
+    #   idx_sentiment picks the per-call `idx` argument so distinct copies land in
+    #   distinct filenames and dedup still works (helper dedups by content hash).
+    # See _STAGEABLE_AUDIO_FIELDS below for the audio-source variant. These
+    # tables drive the generic local-resource staging loop in _remotion_render
+    # so adding a new field is one tuple entry instead of editing scattered
+    # if-branches. Edit /opt/OpenMontage_Voicebox plan:
+    # shimmer-remotion-local-asset-loading.
+
     @staticmethod
     def _parse_remotion_progress(line: str) -> Optional[float]:
         """Extract a 0-100 render-percentage from a Remotion CLI output line.
@@ -1694,8 +2326,6 @@ class VideoCompose(BaseTool):
         bare percentage lines. Returns the percentage or ``None`` if the line
         carries no progress information.
         """
-        if not line:
-            return None
         import re
 
         m = re.search(r"frame\s+(\d+)\s*/\s*(\d+)", line)
@@ -1724,6 +2354,185 @@ class VideoCompose(BaseTool):
         except Exception:  # noqa: BLE001
             pass
 
+    # ------------------------------------------------------------------ #
+    #  FFmpeg `-progress` cycle parser
+    # ------------------------------------------------------------------ #
+    #
+    # ffmpeg emits progress in two interleaved streams when ``stderr=STDOUT``
+    # is in effect (which is how ``run_command``'s streaming mode works):
+    #
+    #   1. Verbose stderr — ONE line per update, terminated by ``\r`` (and
+    #      occasionally ``\n``). Each line carries MULTIPLE ``key=value``
+    #      pairs separated by spaces, e.g.
+    #      ``frame=    1 fps=0.0 q=0.0 size=       0kB time=00:00:00.00
+    #      bitrate=N/A speed=N/A``.
+    #   2. ``-progress pipe:1`` stdout — STRICT key=value pairs, ONE per
+    #      line, terminated by ``\n``, terminated-cycle-by
+    #      ``progress=continue`` / ``progress=end``.
+    #
+    # Real captured output (see burn_subtitles tests) shows verbose and
+    # -progress lines interleaved at line granularity. They share the keys
+    # ``frame`` / ``fps`` / ``size`` / ``speed``, so we cannot distinguish
+    # by key name. The cleanest signal we have is structural: verbose lines
+    # carry many ``=`` signs (one per field); -progress lines carry exactly
+    # one. ``out_time=00:00:00.000000`` is the only -progress value with a
+    # colon, and even that has exactly one ``=``.
+    _FFMPEG_PROGRESS_KEYS = frozenset({
+        "frame", "fps", "stream_0_0_q", "bitrate", "total_size",
+        "out_time_us", "out_time_ms", "out_time",
+        "dup_frames", "drop_frames", "speed", "progress",
+    })
+
+    @staticmethod
+    def _parse_ffmpeg_progress(
+        line: str, state: dict[str, str]
+    ) -> Optional[dict[str, str]]:
+        """Accumulate one ffmpeg ``-progress`` line; emit cycle dict on cycle end.
+
+        Mutates ``state`` in place. Returns the accumulated cycle dict (a
+        shallow copy) at the ``progress=continue`` / ``progress=end`` line,
+        or ``None`` otherwise. Lines outside the ``-progress`` vocabulary
+        — verbose stderr multi-pair lines, ffmpeg banner lines, libx264
+        diagnostics — are dropped.
+        """
+        line = line.strip()
+        if not line:
+            return None
+
+        # Verbose emits one line with many `=` (one per field); -progress
+        # emits one line with exactly one `=`. The discriminator is on the
+        # raw line, before partition(), so it works for `out_time=` values
+        # that contain `:` but never more than one `=`.
+        if line.count("=") != 1:
+            return None
+
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+
+        if key not in VideoCompose._FFMPEG_PROGRESS_KEYS:
+            return None
+
+        # Verbose emits `bitrate=N/A` / `speed=N/A` before the encoder has
+        # data. -progress never uses the literal `N/A` sentinel — it emits
+        # `0` or `0.0` until the metric is real. Skipping these keeps
+        # state clean for the actual encoder output that follows.
+        if val == "N/A":
+            return None
+
+        state[key] = val
+        if key == "progress":
+            cycle = dict(state)
+            state.clear()
+            return cycle
+        return None
+
+    @staticmethod
+    def _emit_ffmpeg_progress(
+        line: str,
+        state: dict[str, str],
+        progress_callback: Callable[[dict], None],
+        progress_log: Path,
+    ) -> None:
+        """Persist raw ffmpeg line + fire callback at each ``-progress`` cycle.
+
+        Side effects (file write, callback invocation) are individually
+        wrapped in try/except — a misbehaving observer must NEVER kill the
+        render, and a transient I/O error on the log file must NEVER drop a
+        progress cycle.
+        """
+        # Append raw line for post-mortem. Cheap; runs only when the caller
+        # wired the hook (which implies they're willing to pay the I/O cost).
+        try:
+            with open(progress_log, "a", encoding="utf-8") as fh:
+                fh.write(line.rstrip("\r\n") + "\n")
+        except OSError:
+            pass
+
+        cycle = VideoCompose._parse_ffmpeg_progress(line, state)
+        if cycle is None:
+            return
+
+        out_time_us = int(cycle.get("out_time_us", 0) or 0)
+        is_end = cycle.get("progress") == "end"
+        payload = {
+            "phase": "render",
+            "status": "complete" if is_end else "rendering",
+            "frame": int(cycle.get("frame", 0) or 0),
+            "fps": float(cycle.get("fps", 0) or 0),
+            "out_time_us": out_time_us,
+            "out_time_seconds": out_time_us / 1_000_000.0,
+            "speed": cycle.get("speed", ""),
+            "total_size": int(cycle.get("total_size", 0) or 0),
+            "progress_log": str(progress_log),
+            "message": (
+                f"frame={cycle.get('frame', '?')} fps={cycle.get('fps', '?')} "
+                f"out_time={cycle.get('out_time', '?')} "
+                f"speed={cycle.get('speed', '?')}"
+            ),
+        }
+        try:
+            progress_callback(payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _run_ffmpeg_with_progress(
+        self,
+        cmd: list[str],
+        progress_callback: Callable[[dict], None] | None,
+    ) -> Path | None:
+        """Run an ffmpeg subprocess with optional `-progress pipe:1` streaming.
+
+        Centralises the progress-hook wiring used by ``_burn_subtitles``,
+        ``_compose`` (final re-encode step), and ``_encode``. When
+        ``progress_callback`` is None the legacy capture_output fast path
+        is used unchanged — callers that don't need per-frame progress pay
+        no extra cost. When a callback is wired we:
+
+          1. Insert ``-progress pipe:1`` right after ``ffmpeg -y`` (or
+             ``ffmpeg``) so ffmpeg emits structured key=value cycles.
+          2. Drop any stale ``<output>.progress.log`` from a prior failed
+             run, so post-mortem is clean.
+          3. Stream every stdout line through ``_emit_ffmpeg_progress``,
+             which parses the cycle and fires the callback at
+             ``progress=continue`` / ``progress=end``.
+
+        Returns the per-call progress log path when a callback was wired
+        (and the log was written), ``None`` otherwise. Callers use the
+        returned path to decide whether to surface it in
+        ``ToolResult.artifacts``.
+        """
+        if progress_callback is None:
+            # Legacy fast path — no -progress flag, no log file.
+            self.run_command(cmd)
+            return None
+
+        progress_log = Path(cmd[-1]).with_suffix(
+            Path(cmd[-1]).suffix + ".progress.log"
+        )
+
+        # Strip any caller-supplied -progress to avoid double-add, then
+        # re-insert at the canonical position (right after "ffmpeg" + "-y",
+        # or right after "ffmpeg" if no "-y").
+        cleaned = [c for c in cmd if c not in {"-progress", "pipe:1"}]
+        insert_at = 2 if len(cleaned) >= 2 and cleaned[1] == "-y" else 1
+        final_cmd = cleaned[:insert_at] + ["-progress", "pipe:1"] + cleaned[insert_at:]
+
+        if progress_log.exists():
+            try:
+                progress_log.unlink()
+            except OSError:
+                pass
+
+        state: dict[str, str] = {}
+
+        def _on_line(line: str) -> None:
+            VideoCompose._emit_ffmpeg_progress(
+                line, state, progress_callback, progress_log
+            )
+
+        self.run_command(final_cmd, on_output=_on_line)
+        return progress_log
+
     def _stage_remotion_asset(self, source: str, idx: int, staged_dir: Path) -> str:
         """把一个本地素材拷进 per-job staging 目录，返回 public 相对路径。
 
@@ -1748,6 +2557,19 @@ class VideoCompose(BaseTool):
         else:
             resolved = Path(source)
         if not resolved.exists():
+            # Empty / missing paths used to silently pass through to TS resolveAsset()
+            # which then produced file:// URIs that Chrome refused to load. Now we at
+            # least log the warning so a stale path is observable in mcp_server.log;
+            # the runtime will still fail in headless Chrome with a clear error
+            # message (or the defensive guard at the end of _remotion_render will
+            # block the render before launching Chrome at all). Empty string / None
+            # are still legitimate "no asset" semantics — those are short-circuited
+            # by the `if not source` check above and never reach here.
+            logging.getLogger("video_compose").warning(
+                "_stage_remotion_asset: skipping missing path %r (will fall through "
+                "to resolveAsset() / file:// in TS; Chrome will reject it)",
+                source,
+            )
             return source
         import hashlib
         import os as _os
@@ -2017,6 +2839,29 @@ class VideoCompose(BaseTool):
                     technical_probe["issues"].append(
                         f"Resolution {width}x{height} is very low"
                     )
+
+                # Cross-check rendered dimensions against the requested
+                # compose_target. Catches the silent-dimension bug where the
+                # renderer's registered width/height (e.g. Explainer = 1920x1080)
+                # wins over edit_decisions.compose_target.{width,height}.
+                if edit_decisions:
+                    ct = _resolve_compose_target(edit_decisions)
+                    if ct:
+                        target_w_req = int(ct.get("width", 0))
+                        target_h_req = int(ct.get("height", 0))
+                        technical_probe["target_resolution"] = (
+                            f"{target_w_req}x{target_h_req}"
+                        )
+                        if (target_w_req, target_h_req) != (width, height):
+                            technical_probe["resolution_match"] = False
+                            technical_probe["issues"].append(
+                                f"Dimension mismatch: rendered {width}x{height} "
+                                f"but compose_target requested "
+                                f"{target_w_req}x{target_h_req}. The renderer's "
+                                f"registered width/height won over edit_decisions."
+                            )
+                        else:
+                            technical_probe["resolution_match"] = True
                 if not audio_stream:
                     technical_probe["issues"].append("No audio stream in output")
             else:
@@ -2299,6 +3144,7 @@ class VideoCompose(BaseTool):
                 "silent downgrade", "delivery promise violation",
                 "effectively silent", "ffprobe failed", "suspiciously short",
                 "tts punctuation leak",  # reading literal punctuation aloud
+                "dimension mismatch",  # renderer's registered w/h overrode edit_decisions
             ])
         ]
 
@@ -2355,7 +3201,20 @@ class VideoCompose(BaseTool):
             return 0.0
 
     def _burn_subtitles(self, inputs: dict[str, Any]) -> ToolResult:
-        """Burn subtitle file into video."""
+        """Burn subtitle file into video.
+
+        Streams ffmpeg progress through the optional ``_progress_callback``
+        input (same convention as the Remotion render path). Each
+        ffmpeg ``-progress`` cycle (``progress=continue`` / ``progress=end``)
+        fires one callback with ``out_time_us``, ``frame``, ``fps``,
+        ``speed``, ``total_size`` plus a derived ``out_time_seconds``.
+        Without ``_progress_callback`` the legacy capture_output fast path
+        is used unchanged — callers that don't care about per-frame
+        progress pay no extra cost.
+
+        See ``_run_ffmpeg_with_progress`` for the cmd-mutation + log-file
+        + state-dict wiring that powers the hook.
+        """
         input_path = Path(inputs["input_path"])
         subtitle_path = Path(inputs["subtitle_path"])
         output_path = Path(inputs.get("output_path", str(input_path.with_stem(f"{input_path.stem}_subtitled"))))
@@ -2380,16 +3239,20 @@ class VideoCompose(BaseTool):
             str(output_path),
         ]
 
-        self.run_command(cmd)
-
-        return ToolResult(
-            success=True,
-            data={
-                "operation": "burn_subtitles",
-                "output": str(output_path),
-            },
-            artifacts=[str(output_path)],
+        progress_log = self._run_ffmpeg_with_progress(
+            cmd, inputs.get("_progress_callback")
         )
+
+        artifacts: list[str] = [str(output_path)]
+        data: dict[str, Any] = {
+            "operation": "burn_subtitles",
+            "output": str(output_path),
+        }
+        if progress_log is not None:
+            artifacts.append(str(progress_log))
+            data["progress_log"] = str(progress_log)
+
+        return ToolResult(success=True, data=data, artifacts=artifacts)
 
     def _overlay(self, inputs: dict[str, Any]) -> ToolResult:
         """Composite overlay images/videos on top of base video."""
@@ -2403,6 +3266,12 @@ class VideoCompose(BaseTool):
             return ToolResult(success=False, error=f"Input not found: {input_path}")
         if not overlays:
             return ToolResult(success=False, error="No overlays provided")
+
+        # Defensive mkdir: callers don't always pre-create the project's
+        # `renders/` or `outputs/` tree, and ffmpeg refuses to write into a
+        # missing parent directory. ``exist_ok=True`` keeps idempotent
+        # re-renders safe (the parent already exists from an earlier run).
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Build complex filter for each overlay
         input_args = ["-i", str(input_path)]
@@ -2491,19 +3360,22 @@ class VideoCompose(BaseTool):
                 pass  # proceed without profile
 
         cmd.append(str(output_path))
-        self.run_command(cmd)
-
-        return ToolResult(
-            success=True,
-            data={
-                "operation": "encode",
-                "codec": codec,
-                "crf": crf,
-                "profile": profile_name,
-                "output": str(output_path),
-            },
-            artifacts=[str(output_path)],
+        progress_log = self._run_ffmpeg_with_progress(
+            cmd, inputs.get("_progress_callback")
         )
+
+        artifacts: list[str] = [str(output_path)]
+        data: dict[str, Any] = {
+            "operation": "encode",
+            "codec": codec,
+            "crf": crf,
+            "profile": profile_name,
+            "output": str(output_path),
+        }
+        if progress_log is not None:
+            artifacts.append(str(progress_log))
+            data["progress_log"] = str(progress_log)
+        return ToolResult(success=True, data=data, artifacts=artifacts)
 
     @staticmethod
     def _resolve_subtitle_style(
@@ -2590,3 +3462,47 @@ class VideoCompose(BaseTool):
             remaining /= 0.5
         filters.append(f"atempo={remaining:.4f}")
         return ",".join(filters)
+
+
+# Module-level constants for the generic local-resource staging loop in
+# _remotion_render. Defined outside the VideoCompose class so they can be
+# referenced from unit tests without instantiating the tool.
+#
+# Each tuple is (parent_dict_key, field_name, idx_sentiment).
+#   parent_dict_key="" means field is on the props root (e.g. `videoSrc`).
+#   idx_sentiment picks the per-call `idx` argument so distinct copies land in
+#   distinct filenames and dedup still works (helper dedups by content hash).
+# See _STAGEABLE_AUDIO_FIELDS below for the audio-source variant. These
+# tables drive the generic staging pass in _remotion_render — adding a new
+# field is one tuple entry instead of editing scattered if-branches. Plan:
+# /root/.claude/plans/shimmering-cooking-truffle.md.
+_STAGEABLE_FIELDS: tuple[tuple[str, str, int], ...] = (
+    # cuts[*] (explainer family) — already covered; kept here for symmetry.
+    ("cuts", "source", 0),
+    ("cuts", "backgroundImage", 1),
+    ("cuts", "backgroundVideo", 2),
+    # scenes[*] (cinematic / documentary family).
+    ("scenes", "src", 3),
+    ("scenes", "backgroundSrc", 4),
+    # clips[*] (CollageBurst — top-level prop, NOT under cuts[*]).
+    ("clips", "src", 5),
+    ("clips", "backgroundSrc", 6),
+    # TitledVideo / LyricOverlay / TalkingHead — top-level `videoSrc` prop.
+    ("", "videoSrc", 7),
+    # Ecommerce assets dict.
+    ("assets", "hero", -2),
+    ("assets", "product", -2),
+    ("assets", "detail", -2),
+    ("assets", "lifestyle", -2),
+    ("assets", "logo", -2),
+    ("assets", "music", -2),
+)
+
+# Audio sources — nested under audio.{narration|music}.src or top-level
+# soundtrack.src / music.src for CinematicRenderer. Handled as a separate
+# loop because the path is nested.
+_STAGEABLE_AUDIO_FIELDS: tuple[tuple[str, int], ...] = (
+    ("narration", -1),
+    ("music", -1),
+    ("soundtrack", 10),
+)

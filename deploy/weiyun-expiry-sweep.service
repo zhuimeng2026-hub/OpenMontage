@@ -1,0 +1,39 @@
+[Unit]
+Description=Weiyun share-link expiry sweeper (oneshot)
+Documentation=file:/opt/OpenMontage_Voicebox/tools/publishers/README-weiyun-expiry.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Run as the same unprivileged user that owns the project so projects/_share_expiry/
+# stays writable. Create with: useradd --system --no-create-home --shell /usr/sbin/nologin weiyun-sweeper
+User=weiyun-sweeper
+Group=weiyun-sweeper
+# WEIYUN_MCP_TOKEN lives here (mode 0640, root:weiyun-sweeper).
+EnvironmentFile=/etc/weiyun-sweeper/sweeper.env
+WorkingDirectory=/opt/OpenMontage_Voicebox
+# --limit caps rows touched per run as a defensive brake against huge backlogs.
+ExecStart=/usr/bin/python3 -m tools.publishers.weiyun_expiry_sweep --limit 500
+
+# Output goes to journald by default; `journalctl -u weiyun-expiry-sweep.service`
+# to inspect. Set --no-block + SIGTERM-friendly cleanup in case of overlap with timer.
+TimeoutStartSec=600
+# If the sweeper hits an unexpected exception, surface it but don't loop forever.
+Restart=no
+
+# Lower CPU/IO priority so the sweep never starves the render pipeline.
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+Nice=19
+
+# Hardening — same baseline as frameflow-*.service.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Only the project tree + log dir need write access; the rest of the FS is read-only.
+ReadWritePaths=/opt/OpenMontage_Voicebox/projects /var/log/weiyun-sweeper
+
+[Install]
+WantedBy=multi-user.target

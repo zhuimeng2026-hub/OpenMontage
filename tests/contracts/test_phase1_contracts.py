@@ -91,10 +91,16 @@ class TestPhase1ToolStatus:
         assert tool.get_status() == ToolStatus.AVAILABLE
 
     def test_transcriber_reports_status_correctly(self):
-        """Transcriber should report unavailable if faster_whisper not installed."""
+        """Transcriber should report unavailable if faster_whisper not installed.
+
+        DEGRADED is also acceptable: the package is importable but the
+        default model is not pre-cached locally. The provider menu's
+        setup-offer path surfaces install_instructions in that case — the
+        honest answer is "needs setup", not "fully working".
+        """
         tool = Transcriber()
         status = tool.get_status()
-        assert status in (ToolStatus.AVAILABLE, ToolStatus.UNAVAILABLE)
+        assert status in (ToolStatus.AVAILABLE, ToolStatus.UNAVAILABLE, ToolStatus.DEGRADED)
 
     def test_ffmpeg_tools_report_status(self):
         """FFmpeg-dependent tools should report based on ffmpeg availability."""

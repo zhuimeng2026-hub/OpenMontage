@@ -1,0 +1,175 @@
+"""Pure translation: target_blueprint Scene -> HyperFrames cut dict.
+
+The cut shape consumed by `tools/video/hyperframes_compose.py:_cut_to_html()`
+(see line 1053 in that file for the authoritative contract). Key fields:
+    in_seconds, out_seconds, source, type, text, subtitle, ...
+
+Mapping rules are derived from MVP doc §11. Unknown / future scene types
+fall back to feature_demo per MVP doc §9.
+
+Everything is a pure function: deterministic input, deterministic output.
+That's a hard requirement for the multi-process workers — module-level
+pickle safety is enforced by the absence of side effects and bound state.
+"""
+
+from __future__ import annotations
+
+from typing import TypedDict
+
+from .models import Scene, SceneType
+
+
+# Set of asset-extensions recognised by _cut_to_html (parity with the
+# existing tool — see tools/video/hyperframes_compose.py constants).
+_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+)
+_VIDEO_EXTENSIONS: frozenset[str] = frozenset(
+    {".mp4", ".mov", ".webm", ".mkv"}
+)
+
+
+class AssetMeta(TypedDict):
+    """Minimal asset descriptor for scene resolution."""
+
+    asset_id: str
+    local_path: str  # absolute path on disk after staging
+    label: str | None
+
+
+AssetLookup = dict[str, AssetMeta]
+
+
+class CutDict(TypedDict, total=False):
+    """HyperFrames cut shape (subset of the real tool's contract)."""
+
+    in_seconds: float
+    out_seconds: float
+    type: str  # "text_card" | "image" | "video"
+    source: str  # path to asset (image/video)
+    text: str
+    subtitle: str
+
+
+def detect_cut_kind(asset_path: str | None) -> str:
+    """Return the cut `type` for an asset path. Empty/None -> text_card."""
+    if not asset_path:
+        return "text_card"
+    ext = "." + asset_path.rsplit(".", 1)[-1].lower() if "." in asset_path else ""
+    if ext in _VIDEO_EXTENSIONS:
+        return "video"
+    if ext in _IMAGE_EXTENSIONS:
+        return "image"
+    # Fall back per MVP doc §9 — unknown kinds still emit a text card so
+    # render never silently dies on a corrupt asset filename.
+    return "text_card"
+
+
+def compute_timeline(scenes: list[Scene]) -> list[tuple[float, float]]:
+    """Cumulative in/out timestamps aligned to scene order.
+
+    Returns one (in_seconds, out_seconds) pair per scene, same order.
+    """
+    cursor = 0.0
+    out: list[tuple[float, float]] = []
+    for scene in scenes:
+        in_s = cursor
+        out_s = cursor + float(scene.duration)
+        out.append((in_s, out_s))
+        cursor = out_s
+    return out
+
+
+def scene_to_cut(
+    scene: Scene,
+    in_seconds: float,
+    out_seconds: float,
+    asset_lookup: AssetLookup,
+) -> CutDict:
+    """Translate one Scene to one CutDict. Pure function.
+
+    `asset_lookup` is the full asset index — passed in by the worker so the
+    scene→cut mapping is independent of any other scene. The function
+    never touches disk, never logs, never imports anything global.
+    """
+    asset_path: str | None = None
+    if scene.asset_id is not None:
+        meta = asset_lookup.get(scene.asset_id)
+        if meta is not None:
+            asset_path = meta["local_path"]
+
+    cut_type = detect_cut_kind(asset_path)
+    cut: CutDict = {
+        "in_seconds": float(in_seconds),
+        "out_seconds": float(out_seconds),
+        "type": cut_type,
+    }
+
+    if cut_type == "text_card":
+        # MVP doc falls back unknown types to feature_demo; we treat the
+        # feature scene without an asset_id the same way — emit a text
+        # card with the headline as the headline, voiceover as the body.
+        effective_type = scene.type
+        if (
+            scene.asset_id is None
+            and effective_type in (SceneType.FEATURE_DEMO, SceneType.LIFESTYLE, SceneType.SOCIAL_PROOF)
+        ):
+            # Fall back to a text card so the render doesn't fail.
+            cut["text"] = scene.headline
+            cut["subtitle"] = scene.voiceover
+            return cut
+
+        if effective_type in (SceneType.HOOK, SceneType.OFFER, SceneType.CTA):
+            cut["text"] = scene.headline
+            return cut
+
+        if effective_type == SceneType.PAIN_POINT:
+            cut["text"] = scene.voiceover
+            cut["subtitle"] = scene.headline
+            return cut
+
+        # Final fallback (shouldn't trigger in practice).
+        cut["text"] = scene.headline
+        return cut
+
+    # Image / video cuts: surface source path; optional headline overlay.
+    cut["source"] = asset_path or ""
+    if scene.headline and scene.type != SceneType.PRODUCT_REVEAL:
+        cut["text"] = scene.headline
+    return cut
+
+
+def build_audio_refs(
+    scenes: list[Scene],
+    timeline: list[tuple[float, float]],
+    *,
+    music_path: str | None = None,
+    music_volume: float = 0.4,
+) -> dict:
+    """Construct the `audio_refs` payload consumed by HyperFramesCompose.
+
+    MVP doc §11 has voiceover strings in target_blueprint, but the actual
+    TTS audio isn't generated by this prototype — only the timing slots.
+    When TTS is wired upstream, this function can take `narration_paths`
+    instead. For now we emit the timing slots with empty source so
+    `HyperFramesCompose` still accepts the payload.
+    """
+    narration: list[dict] = []
+    for scene, (in_s, out_s) in zip(scenes, timeline, strict=True):
+        if not scene.voiceover:
+            continue
+        narration.append(
+            {
+                "src": "",
+                "start_seconds": float(in_s),
+                "end_seconds": float(out_s),
+                "text": scene.voiceover,
+                "scene_id": scene.id,
+                # Empty `src` is a hint for the narrator; the rendering
+                # tool skips audio tags with empty src.
+            }
+        )
+    audio_refs: dict = {"narration": narration}
+    if music_path:
+        audio_refs["music"] = {"src": music_path, "volume": float(music_volume)}
+    return audio_refs

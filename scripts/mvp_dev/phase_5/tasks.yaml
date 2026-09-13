@@ -1,0 +1,59 @@
+phase: 5
+scope: §17.F + §17.G — Agent Gateway + 状态聚合
+section_ref: docs/openmontage_product_video_mvp_golang_scope.md#17.1-必须的
+
+status: READY
+last_edited_by: human
+
+# Phase 5 把"8 个业务动词的 agent gateway" + "OM 原始状态 → 13 档统一状态"两件事落地。
+# 真正调 OM/OpenClaw 留给 Phase 6+;MVP 阶段 gateway 直接路由到 Phase 3 的 handler。
+
+files_to_create:
+  - frameflow/bff/internal/gwsvc/verbs.go                # 8 个业务动词名 + 路由表
+  - frameflow/bff/internal/gwsvc/status_map.go           # OM 原始状态 → 13 档统一状态映射
+  - frameflow/bff/internal/gwsvc/types.go                # GatewayResponse / VerbRequest 共享类型
+  - frameflow/bff/cmd/mvp/handlers_gateway.go            # 8 个 verb handler + 状态聚合 /lookup handler
+
+files_to_modify:
+  - frameflow/bff/cmd/mvp/main.go                        # 挂载 8  verb 路由 + /status/lookup
+
+sql_migrations: ""  # Phase 5 无新表(纯逻辑层)
+
+go_tests: []
+
+gate_endpoints:
+  - POST /api/gateway/analyze-product-assets      # AnalyzeProductAssets
+  - POST /api/gateway/analyze-reference-video     # AnalyzeReferenceVideo
+  - POST /api/gateway/generate-storyboard         # GenerateStoryboard
+  - POST /api/gateway/generate-animatic           # GenerateAnimatic
+  - POST /api/gateway/generate-sample             # GenerateSample
+  - POST /api/gateway/render-final                # RenderFinal
+  - POST /api/gateway/cancel-production           # CancelProduction
+  - GET  /api/gateway/production-status           # GetProductionStatus
+  - GET  /api/status/lookup?raw=<om_state>        # 状态聚合:OM 原始状态 → 13 档
+
+gate_min_verification: |
+  8 个 verb 路由都有 200(或合理 4xx,不是 404);
+  /status/lookup 覆盖所有 13 档统一状态,无 unknown;
+  跨 tenant → 403;
+  状态聚合返回 status 字段(13 档之一)。
+
+estimated_changes: "4 新文件 + 1 改文件,约 350 LOC Go"
+
+notes: |
+  实现要点:
+  1. 8 个 verb handler 全部委托给 Phase 3 的对应 handler(storyboard → StartStage,
+     render → Render, cancel → Cancel)。MVP gateway = 业务语义层,真实实现
+     会包 OpenClaw/Hermes skill(plan §21)。
+  2. /api/gateway/production-status 是 GET,带 project_id query,内部查
+     video_projects 表返回状态。
+  3. /api/status/lookup 是纯函数:GET ?raw=<string> → JSON {"raw": ..., "unified": ...}。
+     raw 是 OM 的原始状态字符串(unknown / mcp-raw / mcp-progress / success / failed / running / ...),
+     映射到 §17.G 的 13 档之一。
+  4. 状态映射表覆盖范围:
+     - 已知 OM 状态(20+ 个常见字符串)→ 13 档
+     - 未知 raw → "FAILED"(fail-loud,不能 silently fallback — plan §8.2)
+     - 已经是 13 档之一的 raw → 原样返回
+  5. unified 状态机校验:返回值必须在 jobsvc.AllStatuses 集合内,否则 handler panic。
+  6. 不接真实 Agent 框架;这就是 8 个 thin wrapper + 1 个 lookup。
+  7. port: Phase 0=18901 / 1=18902 / 2=18903 / 3=18904 / 4=18905 / **5=18906**。

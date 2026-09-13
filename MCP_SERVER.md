@@ -143,7 +143,9 @@ openclaw gateway --restart
 
 ## 4. MCP 工具一览
 
-共 16 个工具，分为 5 组。
+共 **32 个 MCP 工具**（FastMCP `@mcp.tool()` 装饰器），分为 9 组；外加
+2 个非 MCP 的 HTTP 路由（`/render-progress/{job_id}` SSE、`/voicebox/mcp/{path:path}`
+反向代理），见 §4.9。
 
 ### 4.1 工具发现（4 个）
 
@@ -273,13 +275,47 @@ WorkBuddy 会话。上传文件会保存到该会话对应的隔离目录；分�
 调整；文件始终限制在对应项目的 `assets` 子目录内。
 
 对于 1080p 图片、视频或批量素材，优先使用 `upload_asset_chunk`，避免
-Base64 请求经过 Nginx/网关时超限。每个分块建议不超过 1 MiB，流程为：
+Base64 请求经过 Nginx/网关时超限。每个分块建议不超过 1 MiB。
+
+#### `upload_asset_chunk` — 分片上传（用于 1080p / 批量素材）
+
+针对 1080p 图片、视频或大批量素材的可恢复分片上传通道。每个分片作为
+一次 MCP 工具调用（参数为 Base64 字符串），单次请求体较小，可安全通过
+Nginx / 网关。
+
+**操作流程（三阶段）：**
 
 ```text
-start(project_id, filename, total_bytes, mime_type, sha256)
-→ append(upload_id, offset, chunk_base64) × N
-→ complete(upload_id)
+start  (operation=start,  project_id, filename, total_bytes, mime_type, sha256)
+       → 返回 upload_id
+append (operation=append, upload_id, offset, chunk_base64)
+       → 单片 ≤ 1 MiB，可重复调用直到 offset+len == total_bytes
+complete(operation=complete, upload_id)
+       → 校验 SHA-256，落盘到 projects/<project_id>/assets/
 ```
+
+**参数（按 operation 区分）：**
+
+| 参数 | 类型 | 必填 | 适用 | 说明 |
+|------|------|------|------|------|
+| operation | enum | 是 | 全部 | `start` / `append` / `complete` |
+| project_id | string | 是 | start | 项目 ID，规则同 `upload_asset` |
+| filename | string | 是 | start | 文件名，禁止路径分隔符 |
+| total_bytes | int | 是 | start | 完整文件字节数（用于服务端预算与校验） |
+| mime_type | string? | 否 | start | MIME 类型，按扩展名推断 |
+| sha256 | string? | 否 | start | 64 位 SHA-256，`complete` 时校验 |
+| upload_id | string | 是 | append/complete | `start` 返回的上传句柄 |
+| offset | int | 是 | append | 当前分片在文件内的字节偏移 |
+| chunk_base64 | string | 是 | append | 本片 Base64 字符串（≤ 1 MiB） |
+
+**返回值关键字段：**
+
+- `start` 返回 `{ upload_id, received_bytes: 0 }`
+- `append` 返回 `{ upload_id, received_bytes }`
+- `complete` 返回标准 `success` + `artifacts`（写入路径）
+
+> 服务端只信任 `Mcp-Session-Id` 标头确定归属，不接受请求体里另外声明
+> `upload_id` 的所属会话；`upload_id` 只能由创建它的会话继续使用。
 
 #### `rsync_upload_artifact` — 上传生成产物到公网服务器
 
@@ -527,6 +563,304 @@ AWS SigV4，无需安装 `boto3`/`minio` 等依赖，只需配置 `.env` 中的�
 
 **返回：** `{"success": true, "path": "..."}`
 
+### 4.6 声音克隆与 Voicebox 桥接（5 个）
+
+通过本地 Voicebox REST API（默认 `http://127.0.0.1:17493`，可通过环境变量
+`VOICEBOX_REST_URL` 覆盖）做声音克隆与合成；语音数据完全在本地处理，
+不消耗云端 API 额度。
+
+#### `clone_voice` — 创建克隆声纹（Voicebox，简化接口）
+
+调用 Voicebox `/clone_voice` 接口创建一个克隆声纹，返回 `profile_id`
+供 `voicebox_tts` 后续合成使用。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| name | string | 是 | 声纹名称（Voicebox 内可见） |
+| audio_paths | string[] | 是 | 参考音频文件绝对路径列表；建议总时长 ≥ 30 秒 |
+| description | string? | 否 | 声纹备注 |
+| engine | string? | 否 | 克隆引擎，默认 `qwen`；可选 `qwen`/`luxtts`/`chatterbox`/`chatterbox_turbo`/`tada`。预设声纹（`kokoro` 等）不支持克隆 |
+| reference_texts | string[]? | 否 | 每段音频对应文本（与 audio_paths 同序）；Voicebox 要求每段参考音频有匹配转写 |
+| reference_text | string? | 否 | 同一段文本应用到所有参考音频（粗粒度回退） |
+
+**返回：** ExecuteResult，`data.profile_id` 为新声纹 ID。
+
+#### `list_cloned_voices` — 列出本地声纹
+
+仅返回 `voice_type=cloned`（即通过 `clone_voice` / `voicebox_clone_voice` 创建的）声纹。
+`include_presets=True` 时同时返回预设和 designed 声纹。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| include_presets | bool | 否 | 默认 false |
+
+**返回：** ExecuteResult，`data.voices[]` 每项含 `id`、`name`、`voice_type`、`is_cloned`。
+
+#### `voicebox_clone_voice` — 同 `clone_voice`，显式命名空间别名
+
+与 `clone_voice` 功能相同；保留这个具名别名是因为它在 `.mcp.json` 的
+`voicebox` server 上下文里调用更清晰，且接受 Voicebox 原生参数字段
+（`default_engine` 而非 `engine`）。行为以 `clone_voice` 为准。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| name | string | 是 | 声纹名称 |
+| audio_paths | string[] | 是 | 参考音频路径列表 |
+| description | string? | 否 | 声纹描述 |
+| default_engine | string? | 否 | 默认 `qwen` |
+| reference_texts | string[]? | 否 | 每段参考音频对应转写 |
+| reference_text | string? | 否 | 公共参考文本（粗粒度） |
+
+#### `voicebox_tts` — 用 Voicebox 声纹合成语音
+
+通过本地 Voicebox REST API 调用文本转语音，使用已克隆（或预设）的声纹。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| text | string | 是 | 要合成的文本 |
+| profile_id | string | 是 | `voicebox_clone_voice` 返回或预设的声纹 ID |
+| language | string? | 否 | 默认 `en` |
+| engine | string? | 否 | 覆盖该声纹的默认引擎 |
+| model_size | string? | 否 | 模型尺寸（视引擎而定） |
+| instruct | string? | 否 | 风格/情感指令 |
+| personality | bool? | 否 | 是否启用 personality 向量 |
+| seed | int? | 否 | 随机种子 |
+| output_path | string? | 否 | 不指定时落到当前项目 `assets/audio/` |
+| timeout_seconds | int? | 否 | 单次请求超时 |
+
+**返回：** ExecuteResult，`artifacts=[output_path]`。
+
+#### `voicebox_list_cloned_voices` — 同 `list_cloned_voices`
+
+与 `list_cloned_voices` 等价；保留这个具名别名用于 Voicebox 命名空间下
+调用的清晰度。返回字段（含 `voice_type` 和 `is_cloned`）刻意对齐
+ElevenLabs 的 schema，方便上层 selector 跨供应商做统一过滤。
+
+### 4.7 字幕烧录与发布辅助（4 个）
+
+围绕「渲染 → 发布」流水线提供的、已经被高层 `create_remotion_video_share`
+组合好的底层工具，单独暴露以便重试、修复或手工拼接。
+
+#### `burn_subtitles` — 把字幕烧进视频
+
+`video_compose` `operation=burn_subtitles` 的薄封装，使用 FFmpeg
+`subtitles=` 滤镜；codec 默认 `libx264` 保证广泛兼容，音轨原样拷贝
+（不重编码）。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| input_path | string | 是 | 源视频路径 |
+| subtitle_path | string | 是 | `.srt` / `.ass` / `.vtt` 文件路径 |
+| output_path | string? | 否 | 不传则覆盖原文件（FFmpeg 同名输出） |
+| subtitle_style | object? | 否 | `fontname` / `fontsize` / `primary_color` 等覆盖 |
+| codec | string | 否 | 默认 `libx264` |
+| crf | int | 否 | 默认 23，数值越低质量越高 |
+
+**返回：** ExecuteResult，`artifacts=[output_path]`。
+
+#### `retry_render_publish` — 重试失败的微云发布
+
+仅重试已渲染成功但发布到 Weiyun 失败的渲染任务。**不会再次调用渲染器**，
+可以反复调用：已经 `published` 的任务直接返回现有 `share_url` 而不会
+重复上传；失败的 `video_path` 在持久化层保留，便于客户端取回半成品。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| render_job_id | string | 是 | 由 `create_remotion_video_share` 返回的渲染任务 ID |
+
+**返回：**
+
+```json
+{
+  "success": true,
+  "render_job_id": "...",
+  "status": "published",
+  "stage": null,
+  "share_url": "https://share.weiyun.com/...",
+  "error": null
+}
+```
+
+并发安全：对同一 `render_job_id` 的重试由每 job 独立的 thread lock 串行化，
+并发调用第二个会立即返回 `success=false, stage="in_progress"` 而不是
+排队，避免双发重复上传。
+
+> 当 `status="failed"` 且 `stage` 为 `render` / `validation` /
+> `background_crash` 时（渲染未完成），此工具**无法恢复**；需重新调用
+> `create_remotion_video_share`。
+
+#### `weiyun_upload` — 上传视频到腾讯微云（Token 流）
+
+不需要 QR 码登录 / cookie，依赖 `.env` 里的 `WEIYUN_MCP_TOKEN`。
+返回 `file_id` 与上传后的文件名，作为 `weiyun_gen_share_link` 的输入。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| video_path | string | 是 | 已渲染视频本地路径 |
+| target_dir | string | 否 | 远端目标目录，空字符串表示根 |
+| overwrite | bool | 否 | 默认 false |
+
+**返回：** `{ success, data: { file_id, name, ... }, error }`
+
+#### `weiyun_gen_share_link` — 生成微云分享外链
+
+把 `weiyun_upload` 上传的文件（或目录）打包成可对外分发的短链。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| file_list | string[] | 否 | 文件名/路径列表 |
+| dir_list | string[] | 否 | 目录列表 |
+| share_name | string | 否 | 分享标题 |
+| passwd | string | 否 | 提取码，留空表示无密码 |
+
+**返回：** `{ success, data: { share_url, ... }, error }`
+
+### 4.8 WorkBuddy 会话资产（2 个）
+
+为前端 BFF 提供「当前 MCP 会话已上传素材」的查询与回读能力，按
+`Mcp-Session-Id` 隔离会话状态，不需要把会话 ID 作为工具参数显式传入。
+
+#### `read_session_asset` — 回读已上传素材的字节流
+
+按 repo 相对路径读取当前会话上传的资产并以 Base64 返回。存在的目的：
+让远端 BFF（与本 MCP server 不共享文件系统）也能渲染 `<img>` 缩略图
+或代理下载。**不做白名单检查**——BFF 必须先调用 `get_session_assets`
+确认资产归属后再调用本工具。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| relative_path | string | 是 | repo 内相对路径，必须落在 `<repo>/projects/` 下 |
+
+**返回：**
+
+```json
+{
+  "success": true,
+  "bytes": 123456,
+  "data_base64": "...",
+  "mime_type": "image/png",
+  "filename": "bag.png",
+  "relative_path": "projects/demo/assets/images/bag.png"
+}
+```
+
+> 路径安全由工具强制（限定在 `projects/` 下），但归属检查交由 BFF。
+
+#### `get_session_assets` — 列出当前会话已上传的素材
+
+返回当前 `Mcp-Session-Id` 对应批次内已上传的资产清单（按 sha256 去重）。
+前端用来在断点续传后让用户看到「服务端已有什么」，避免重传。
+
+**返回：**
+
+```json
+{
+  "success": true,
+  "assets": [
+    {
+      "relative_path": "projects/demo/assets/images/bag.png",
+      "original_filename": "bag.png",
+      "sha256": "...",
+      "bytes": 123456,
+      "type": "image/png"
+    }
+  ]
+}
+```
+
+会话内无任何上传时返回 `{ success: true, assets: [] }`。
+
+### 4.9 非 MCP HTTP 路由（2 个）
+
+这两个不是 `@mcp.tool()` 工具，而是挂在 `:8900` 同源下的额外 HTTP 端点。
+同样受 Bearer 鉴权保护（与 MCP 主路径同一中间件）。
+
+#### `GET /render-progress/{job_id}` — 渲染进度 SSE 流
+
+针对 `create_remotion_video_share` 派发的 `render_job_id`，以 Server-Sent
+Events 实时推送渲染阶段变更。客户端无需轮询 `get_render_status`，
+订阅此流即可获得首次快照 + 后续增量事件，直到终态（`published` /
+`failed`）后自动结束。
+
+**事件流示例：**
+
+```
+data: {"phase":"snapshot","status":"rendering","render_phase":"remotion_install", ...}
+
+data: {"phase":"update","status":"rendering","render_phase":"remotion_render","progress":0.42, ...}
+
+data: {"phase":"update","status":"uploading","stage":"weiyun_upload", ...}
+
+data: {"phase":"update","status":"published","share_url":"https://share.weiyun.com/..."}
+
+data: {"phase":"done","status":"published"}
+```
+
+**SSE 保持：**
+
+- 每 1 秒无事件时推送 `: keep-alive` 注释帧，防止 nginx / 代理断开
+  空闲连接。
+- 响应头显式 `X-Accel-Buffering: no`，关闭 nginx 的 SSE 缓冲。
+- 订阅者断开时自动 `unsubscribe`，无资源泄漏。
+
+**前端调用：**
+
+```javascript
+const evtSource = new EventSource(
+  `/render-progress/${renderJobId}`,
+  // 若 MCP_API_TOKEN 已配置，浏览器需通过 fetch + EventSource polyfill
+  // 或由反向代理去掉鉴权头；原生 EventSource 不支持自定义 header
+);
+```
+
+#### `* /voicebox/mcp/{path:path}` — Voicebox FastMCP 反向代理
+
+将本地 Voicebox FastMCP server（loopback `:17493`）反向代理到 OpenMontage
+的 `:8900` 同源 `/voicebox/mcp/*`。客户端只需配一个 `:8900` 入口
+（带 Bearer 头）就能同时调用 OpenMontage 工具和 Voicebox 工具，
+不必为 Voicebox 单独再开端口和鉴权。
+
+**实现要点：**
+
+- 入口鉴权由 `BearerTokenAuthMiddleware` 统一处理（`X-Voicebox-Client-Id`
+  不在入口出现）。
+- 转发前会剥离客户端的 `Authorization` 头，因为 Voicebox 使用的是
+  `X-Voicebox-Client-Id` 头；Voicebox 信任 loopback 跳（因为 `:8900`
+  已经把住了入口）。
+- SSE 透传：上游的 SSE 响应原样流式转发到客户端，不缓冲。
+
+**等价直连：**
+
+```bash
+# 不走代理时直连 Voicebox
+curl -X POST http://127.0.0.1:17493/mcp \
+  -H "Content-Type: application/json" \
+  -H "X-Voicebox-Client-Id: openmontage-agent" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# 通过 :8900 代理后等价
+curl -X POST http://127.0.0.1:8900/voicebox/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $MCP_API_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
 ---
 
 ## 5. 当前可用工具清单
@@ -589,8 +923,9 @@ AWS SigV4，无需安装 `boto3`/`minio` 等依赖，只需配置 `.env` 中的�
 2. get_tool_info("edge_tts")
    → 查看 TTS 输入格式
 
-3. execute_tool("edge_tts", {"text": "大家好...", "voice": "zh-CN-YunxiNeural", "output_path": "narration.mp3"})
-   → 生成旁白音频（免费，中文质量高）
+3. execute_tool("edge_tts", {"text": "大家好...", "voice": "zh-CN-XiaoxiaoNeural", "output_path": "narration.mp3"})
+   → 生成旁白音频（免费，中文质量高）。显式指定 `voice` 为 `XiaoxiaoNeural`
+   是当前默认；若希望用 `YunxiNeural` 可显式传入但要做好回退准备（见 §8.1 注）
 
 4. execute_tool("subtitle_gen", {"segments": [...], "format": "srt"})
    → 生成字幕
@@ -669,11 +1004,18 @@ sudo iptables -A INPUT -p tcp --dport 8900 -j ACCEPT
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | text | string | 是 | — | 要合成的文本（支持中英文混合） |
-| voice | string | 否 | `zh-CN-YunxiNeural` | 声音名称，见下方声音列表 |
+| voice | string | 否 | `zh-CN-XiaoxiaoNeural` | 声音名称，见下方声音列表 |
 | rate | string | 否 | `+0%` | 语速调节，如 `+20%` 加速、`-10%` 减速 |
 | volume | string | 否 | `+0%` | 音量调节，如 `+50%` |
 | pitch | string | 否 | `+0Hz` | 音调调节，如 `+5Hz` 升调、`-3Hz` 降调 |
 | output_path | string | 否 | `tts_output.mp3` | 输出文件路径（MP3 格式） |
+
+> **关于默认声音 `XiaoxiaoNeural`（vs 上游 `YunxiNeural`）的工程说明：**
+> 上游 `edge_tts` 工具的默认声音是 `zh-CN-YunxiNeural`，但微软 edge-tts
+> 服务在许多出口 IP 上会拒绝该声音（返回 `NoAudioReceived`）。MCP 包装层
+> 把默认值改为 `zh-CN-XiaoxiaoNeural` 以保证开箱即用。如果业务明确需要
+> `YunxiNeural`，显式传 `voice="zh-CN-YunxiNeural"`，遇到 NoAudioReceived
+> 时回退到 `XiaoxiaoNeural` 即可。
 
 ### 8.2 推荐中文声音
 
@@ -727,7 +1069,7 @@ sudo iptables -A INPUT -p tcp --dport 8900 -j ACCEPT
   "tool_name": "edge_tts",
   "inputs": {
     "text": "OpenMontage是一个AI视频生产系统，支持多语言旁白。",
-    "voice": "zh-CN-YunxiNeural",
+    "voice": "zh-CN-XiaoxiaoNeural",
     "output_path": "mixed.mp3"
   }
 }

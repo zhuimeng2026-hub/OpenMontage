@@ -13,8 +13,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from backlot.state import PROJECTS_DIR, REPO_ROOT, list_projects, load_board_state, summarize_project
@@ -174,6 +174,41 @@ def create_app() -> FastAPI:
     async def project_state(project_id: str) -> dict:
         project_dir = _safe_project_dir(project_id)
         return await asyncio.to_thread(load_board_state, project_dir)
+
+    @app.get("/api/project/{project_id}/artifact")
+    async def project_artifact(project_id: str, path: str = Query(...)) -> JSONResponse:
+        """Return a single canonical artifact JSON for the project.
+
+        Restricted to *.json files under the project dir (analysis briefs,
+        asset_manifest, scene_plan, etc.). Path-traversal is blocked the
+        same way /thumb and /media block it: target.resolve() must remain
+        inside project_dir.resolve().
+
+        The Backlot reference panel links here so a user can open the raw
+        video_analysis_brief.json in a new tab (sibling: /state returns
+        the same brief inlined as state.reference_brief; this endpoint
+        serves the original on-disk file).
+        """
+        project_dir = _safe_project_dir(project_id)
+        if not path:
+            raise HTTPException(status_code=400, detail="path required")
+        target = (project_dir / path).resolve()
+        try:
+            target.relative_to(project_dir.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="path escapes project")
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail=f"artifact not found: {path}")
+        if target.suffix.lower() != ".json":
+            raise HTTPException(status_code=400, detail="only .json artifacts are served")
+        try:
+            content = await asyncio.to_thread(target.read_text, "utf-8")
+            parsed = json.loads(content)
+        except (OSError, UnicodeDecodeError) as e:
+            raise HTTPException(status_code=500, detail=f"read failed: {e}")
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=500, detail=f"invalid JSON: {e}")
+        return JSONResponse(content=parsed)
 
     @app.get("/api/project/{project_id}/events")
     async def project_events(project_id: str, request: Request) -> StreamingResponse:

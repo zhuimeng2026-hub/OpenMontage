@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any
 
 from tools.base_tool import BaseTool, ResourceProfile, ToolResult, ToolRuntime, ToolStability, ToolTier
-from lib.workbuddy_session import register_asset, register_image, require_session, session_hash
+from lib import paths as lib_paths
+from lib.workbuddy_session import register_image, require_session, session_hash
+from lib.project_workspace import ProjectWorkspace
 
 
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
@@ -88,19 +90,40 @@ class UploadAsset(BaseTool):
     }
 
     @staticmethod
-    def _workspace_root() -> Path:
-        return Path(__file__).resolve().parent.parent
+    def _sanitize_filename(filename: str) -> tuple[str, str]:
+        """Return (safe_filename, original_filename).
+
+        Accepts unicode/special filenames (e.g. WeChat screenshot names) by
+        replacing the unsafe basename with a sha256 hash prefix while preserving
+        the original extension. Already-safe names are returned unchanged.
+        """
+        if not isinstance(filename, str) or not filename:
+            raise ValueError("filename must be a non-empty string")
+        original = filename.strip()
+        base = Path(original).stem
+        suffix = Path(original).suffix.lower()
+        safe_candidate = original
+        if not _SAFE_FILENAME.fullmatch(safe_candidate):
+            digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:12]
+            safe_candidate = f"asset_{digest}{suffix}"
+            if not _SAFE_FILENAME.fullmatch(safe_candidate):
+                safe_candidate = f"asset_{digest}"
+        return safe_candidate, original
 
     def _project_dir(self, project_id: str) -> Path:
-        if not isinstance(project_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", project_id):
-            raise ValueError("project_id must be a safe basename (letters, numbers, '.', '_' and '-' only)")
-        root = (self._workspace_root() / "projects").resolve()
-        project_dir = (root / project_id).resolve()
-        try:
-            project_dir.relative_to(root)
-        except ValueError as exc:
-            raise ValueError("project_id escapes the projects directory") from exc
-        return project_dir
+        """Return the per-principal project directory.
+
+        Phase C: delegate to ``ProjectWorkspace.for_current_principal``
+        so the upload lands in the authenticated user's namespace
+        (``projects/users/<namespace_key>/<project_id>/``). Validation
+        moves with the call — ``sanitize_project_id`` rejects path
+        separators, CR/LF, overlong ids, and empty input with the same
+        kind of error the inline regex used to raise. Tightened length
+        cap (64 chars) is documented in
+        ``docs/user-isolation-via-mcp-session.md`` §Phase C.
+        """
+        workspace = ProjectWorkspace.for_current_principal(project_id)
+        return workspace.root
 
     @staticmethod
     def _decode_content(value: Any) -> bytes:
@@ -126,9 +149,7 @@ class UploadAsset(BaseTool):
         started = __import__("time").monotonic()
         try:
             project_id = inputs.get("project_id")
-            filename = inputs.get("filename")
-            if not isinstance(filename, str) or not _SAFE_FILENAME.fullmatch(filename):
-                raise ValueError("filename must be a safe basename without path separators")
+            filename, original_filename = self._sanitize_filename(inputs.get("filename"))
             suffix = Path(filename).suffix.lower()
             if suffix not in _ALLOWED_EXTENSIONS:
                 raise ValueError(f"unsupported media extension: {suffix or '<none>'}")
@@ -142,7 +163,15 @@ class UploadAsset(BaseTool):
             project_dir = self._project_dir(project_id)
             session_id = inputs.get("mcp_session_id")
             session_digest = require_session(session_id)
-            assets_dir = project_dir / "assets" / "_sessions" / session_digest
+            # Phase C: ``_project_dir`` now returns a per-principal
+            # ``projects/users/<ns>/<project_id>`` workspace. Layering
+            # ``_sessions/<digest>`` under ``assets/`` keeps the existing
+            # session-scoped sub-folder so multiple sessions of the same
+            # user cannot clobber each other's batch manifest entries
+            # (workbuddy_session dedups at the sha layer anyway, but the
+            # session sub-folder is also what Backlot reads to list
+            # session-uploaded assets for one user).
+            assets_dir = (project_dir / "assets" / "_sessions" / session_digest).resolve()
             assets_dir.mkdir(parents=True, exist_ok=True)
             target = (assets_dir / filename).resolve()
             try:
@@ -169,12 +198,21 @@ class UploadAsset(BaseTool):
                         os.unlink(tmp_name)
                 deduplicated = False
 
-            relative_path = target.relative_to(self._workspace_root()).as_posix()
+            # Phase C: anchor the ``relative_path`` to ``PROJECTS_DIR.parent``
+# (the repo root) rather than the hardcoded repo-root of this source
+# file. Tests that monkeypatch ``lib.paths.PROJECTS_DIR`` to a tmp dir
+# then exercise the relative-path round-trip need the same root the
+# file actually lives under.
+            # ``relative_path`` is rooted at the configured projects-root
+            # parent, not the source checkout. This keeps upload→read→render
+            # portable when OPENMONTAGE_PROJECTS_DIR points elsewhere.
+            configured_repo_root = Path(lib_paths.PROJECTS_DIR).resolve().parent
+            relative_path = target.relative_to(configured_repo_root).as_posix()
             mime_type = inputs.get("mime_type") or mimetypes.guess_type(filename)[0] or "application/octet-stream"
             asset = {
                 "id": f"{project_id}-{digest[:12]}",
                 "filename": filename,
-                "path": str(target),
+                "original_filename": original_filename,
                 "relative_path": relative_path,
                 "type": "image" if mime_type.startswith("image/") else "video" if mime_type.startswith("video/") else "audio" if mime_type.startswith("audio/") else "media",
                 "mime_type": mime_type,
@@ -187,6 +225,10 @@ class UploadAsset(BaseTool):
             if asset["type"] == "image":
                 batch = register_image(session_id, project_id, asset)
             else:
+                # Video/audio uploads do not join the photo-render batch but
+                # still have to be discoverable by asset id so the caption
+                # and cloned-voice workflows can resolve them later.
+                from lib.workbuddy_session import register_asset
                 register_asset(session_id, project_id, asset)
             return ToolResult(
                 success=True,

@@ -27,11 +27,14 @@ window.FF_CONFIG = {
   // —— Remotion 渲染服务（MCP）——
   // 前端【不直接】持有 MCP_API_TOKEN，必须经自建 BFF / 网关转发（见接入说明）。
   remotion: {
-    mcpUrl: "https://dw.aixifs.com/mcp",          // Streamable HTTP MCP 端点
-    progressUrl: "https://dw.aixifs.com/render-progress", // SSE 实时进度：progressUrl/{jobId}
+    // MCP and SSE URLs are server-side implementation details. The browser
+    // always talks to the BFF, which is same-origin in production and local
+    // hosts-based development.
+    mcpUrl: "",
+    progressUrl: "",
     // 你的 BFF 网关地址；前端统一走这里，由它持有 MCP_API_TOKEN。
     // 填了即切出「演示骨架」进入真实调用。建议与前端同源部署（即 BFF 自己托管 SPA），
     // 此时填 BFF 自身域名即可，例如 http://localhost:8080 或 https://bff.example.com。
-    bffBaseUrl: "http://localhost:8080"
+    bffBaseUrl: window.location.origin
   }
 };

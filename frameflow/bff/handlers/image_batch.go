@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -10,37 +11,69 @@ import (
 
 	"frameflow-bff/internal/config"
 	"frameflow-bff/internal/imagebatch"
-	"frameflow-bff/internal/limits"
 	"frameflow-bff/internal/mcp"
 )
 
 // Named scripts are deliberately server-side choices. They map to trusted
 // Remotion compositions; arbitrary browser-supplied TSX is not executed.
-var imageScripts = map[string]string{
-	"photo-ken-burns":        "照片运镜",
-	"cinematic-montage":      "电影混剪",
-	"ecommerce-product-demo": "电商产品演示",
+//
+// `imageScripts` is a slice (not a map) because the order is part of the
+// contract: the FIRST entry is the UI's default selection. The list is served
+// in declared order by the /api/image-scripts endpoint and consumed by the
+// frontend in the same order, so callers must not switch this back to a map.
+type imageScript struct {
+	ID   string
+	Name string
+}
+
+var imageScripts = []imageScript{
+	{ID: "ecommerce-product-demo", Name: "电商产品演示"},
+	{ID: "photo-ken-burns", Name: "照片运镜"},
+	{ID: "cinematic-montage", Name: "电影混剪"},
+}
+
+// knownScript reports whether id matches one of the system scripts in
+// declared order. Used by Create() before admitting a render submission.
+func knownScript(id string) bool {
+	for _, s := range imageScripts {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// listImageScripts returns the catalog in the order the UI should render it.
+// Kept as a helper so Scripts() and the 422 response in Create() stay in sync.
+func listImageScripts() []gin.H {
+	out := make([]gin.H, 0, len(imageScripts))
+	for _, s := range imageScripts {
+		out = append(out, gin.H{"id": s.ID, "name": s.Name})
+	}
+	return out
+}
+
+func validateImageCount(count int) error {
+	if count < imagebatch.MinBatchImages || count > imagebatch.MaxBatchImages {
+		return fmt.Errorf("image batch requires %d to %d images", imagebatch.MinBatchImages, imagebatch.MaxBatchImages)
+	}
+	return nil
 }
 
 type ImageBatchHandler struct {
-	Batches   *imagebatch.Store
-	Sessions  *mcp.SessionStore
-	Cfg       *config.Config
-	Semaphore *limits.Semaphore
+	Batches  *imagebatch.Store
+	Sessions *mcp.SessionStore
+	Cfg      *config.Config
 }
 
 // ensureBatchSession restores the dedicated upstream MCP session after a BFF
 // restart. Durable batch metadata is enough to recreate the client lazily.
-func (h *ImageBatchHandler) ensureBatchSession(sid string, b *imagebatch.Batch) error {
-	return h.Sessions.CreateBatch(sid, b.ID, b.ProjectID)
+func (h *ImageBatchHandler) ensureBatchSession(scope string, b *imagebatch.Batch) error {
+	return h.Sessions.CreateBatch(scope, b.ID, b.ProjectID)
 }
 
-func NewImageBatchHandler(cfg *config.Config, batches *imagebatch.Store, sessions *mcp.SessionStore, semaphores ...*limits.Semaphore) *ImageBatchHandler {
-	var semaphore *limits.Semaphore
-	if len(semaphores) > 0 {
-		semaphore = semaphores[0]
-	}
-	return &ImageBatchHandler{Cfg: cfg, Batches: batches, Sessions: sessions, Semaphore: semaphore}
+func NewImageBatchHandler(cfg *config.Config, batches *imagebatch.Store, sessions *mcp.SessionStore) *ImageBatchHandler {
+	return &ImageBatchHandler{Cfg: cfg, Batches: batches, Sessions: sessions}
 }
 
 func (h *ImageBatchHandler) ensureSession(c *gin.Context) string {
@@ -54,15 +87,15 @@ func (h *ImageBatchHandler) ensureSession(c *gin.Context) string {
 }
 
 func (h *ImageBatchHandler) Scripts(c *gin.Context) {
-	out := make([]gin.H, 0, len(imageScripts))
-	for id, name := range imageScripts {
-		out = append(out, gin.H{"id": id, "name": name})
-	}
-	c.JSON(http.StatusOK, gin.H{"scripts": out})
+	c.JSON(http.StatusOK, gin.H{"scripts": listImageScripts()})
 }
 
 func (h *ImageBatchHandler) Create(c *gin.Context) {
 	sid := h.ensureSession(c)
+	// Scope the upstream session + batch metadata by the stable WeChat identity
+	// (or device session when anonymous) so a user's image batches are consistent
+	// across machines.
+	scope := renderQueueOwnerID(sid)
 	var req struct {
 		ScriptID string `json:"script_id"`
 	}
@@ -70,20 +103,23 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
-	if _, ok := imageScripts[req.ScriptID]; !ok {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "unknown script_id", "scripts": imageScripts})
+	if !knownScript(req.ScriptID) {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "unknown script_id", "scripts": listImageScripts()})
 		return
 	}
 
 	id := "batch-" + randHex(12)
 	projectID := "frameflow-batch-" + id
-	if err := h.Sessions.CreateBatch(sid, id, projectID); err != nil {
+	t0 := time.Now()
+	if err := h.Sessions.CreateBatch(scope, id, projectID); err != nil {
+		log.Printf("[image-batch] create_session_failed batch_id=%s project_id=%s sid_hash=%s elapsed_ms=%d err=%v", id, projectID, mcp.ShortHashForLog(sid), time.Since(t0).Milliseconds(), err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	b, err := h.Batches.Create(sid, id, projectID, req.ScriptID)
+	log.Printf("[image-batch] create_session_ok batch_id=%s project_id=%s sid_hash=%s elapsed_ms=%d", id, projectID, mcp.ShortHashForLog(sid), time.Since(t0).Milliseconds())
+	b, err := h.Batches.Create(scope, id, projectID, req.ScriptID)
 	if err != nil {
-		h.Sessions.DropBatch(sid, id, projectID)
+		h.Sessions.DropBatch(scope, id, projectID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -92,7 +128,18 @@ func (h *ImageBatchHandler) Create(c *gin.Context) {
 
 func (h *ImageBatchHandler) List(c *gin.Context) {
 	sid := h.ensureSession(c)
-	batches, err := h.Batches.List(sid)
+	scope := renderQueueOwnerID(sid)
+	batches, err := h.Batches.List(scope)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// 状态一致性：以渲染后台(MCP get_render_status)为唯一权威来源，实时刷新
+	// 每个批次后再返回，避免 BFF 缓存状态与后台漂移。
+	for _, b := range batches {
+		h.refreshBatchFromUpstream(scope, b)
+	}
+	batches, err = h.Batches.List(scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -100,9 +147,47 @@ func (h *ImageBatchHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"batches": batches})
 }
 
+// refreshBatchFromUpstream 以渲染后台 get_render_status 为唯一权威来源刷新批次
+// 状态（含 render_job 回填）。终态「published」批次不再查询，其余一律实时取。
+func (h *ImageBatchHandler) refreshBatchFromUpstream(scope string, b *imagebatch.Batch) {
+	if b == nil || b.RenderJobID == "" || b.Status == "published" {
+		return
+	}
+	if err := h.ensureBatchSession(scope, b); err != nil {
+		return
+	}
+	res, err := h.Sessions.CallBatch(scope, b.ID, b.ProjectID, "get_render_status", map[string]interface{}{"render_job_id": b.RenderJobID})
+	if err != nil {
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(digString(res, "status")))
+	switch status {
+	case "queued", "queue", "pending", "waiting":
+		h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "queued" })
+	case "rendering", "running", "processing", "in_progress", "progress":
+		h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering" })
+	case "published", "done", "success", "succeeded", "completed", "finished":
+		shareURL := digString(res, "share_url")
+		if validHTTPURL(shareURL) {
+			h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = shareURL })
+			h.Sessions.UpdateJobResult(scope, b.RenderJobID, "已完成", shareURL)
+			h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
+		} else {
+			h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = "微云分享链接缺失" })
+			h.Sessions.UpdateJobResult(scope, b.RenderJobID, "失败", "")
+			h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
+		}
+	case "failed", "error":
+		h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = digString(res, "error") })
+		h.Sessions.UpdateJobResult(scope, b.RenderJobID, "失败", "")
+		h.Sessions.DropBatch(scope, b.ID, b.ProjectID)
+	}
+}
+
 func (h *ImageBatchHandler) Get(c *gin.Context) {
 	sid := h.ensureSession(c)
-	b, err := h.Batches.Get(sid, c.Param("id"))
+	scope := renderQueueOwnerID(sid)
+	b, err := h.Batches.Get(scope, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -111,30 +196,8 @@ func (h *ImageBatchHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "image batch not found"})
 		return
 	}
-	if b.RenderJobID != "" && (b.Status == "rendering" || b.Status == "collecting") {
-		if err := h.ensureBatchSession(sid, b); err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-			return
-		}
-		if res, err := h.Sessions.CallBatch(sid, b.ID, b.ProjectID, "get_render_status", map[string]interface{}{"render_job_id": b.RenderJobID}); err == nil {
-			status := strings.ToLower(strings.TrimSpace(digString(res, "status")))
-			switch status {
-			case "published", "done", "success", "completed", "finished":
-				if b.Status == "rendering" && h.Semaphore != nil {
-					h.Semaphore.ReleaseBatch(b.ID)
-				}
-				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "published"; x.VideoURL = digString(res, "share_url") })
-				h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
-			case "failed", "error":
-				if b.Status == "rendering" && h.Semaphore != nil {
-					h.Semaphore.ReleaseBatch(b.ID)
-				}
-				h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = digString(res, "error") })
-				h.Sessions.DropBatch(sid, b.ID, b.ProjectID)
-			}
-		}
-	}
-	current, err := h.Batches.Get(sid, b.ID)
+	h.refreshBatchFromUpstream(scope, b)
+	current, err := h.Batches.Get(scope, b.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -144,7 +207,11 @@ func (h *ImageBatchHandler) Get(c *gin.Context) {
 
 func (h *ImageBatchHandler) Render(c *gin.Context) {
 	sid := h.ensureSession(c)
-	b, err := h.Batches.Get(sid, c.Param("id"))
+	// Scope the upstream session + batch metadata by the stable WeChat identity
+	// (or device session when anonymous) so a user's image batches and their
+	// rendered videos are consistent across machines.
+	scope := renderQueueOwnerID(sid)
+	b, err := h.Batches.Get(scope, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -157,52 +224,41 @@ func (h *ImageBatchHandler) Render(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("batch status is %s", b.Status)})
 		return
 	}
-	if b.AssetCount == 0 {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "upload at least one image before rendering"})
+	if err := validateImageCount(b.AssetCount); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "asset_count": b.AssetCount, "min": imagebatch.MinBatchImages, "max": imagebatch.MaxBatchImages})
 		return
 	}
-	if err := h.ensureBatchSession(sid, b); err != nil {
+	if err := h.ensureBatchSession(scope, b); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	if h.Semaphore != nil && !h.Semaphore.TryAcquireBatch(sid, b.ID) {
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "render capacity is full; retry shortly"})
 		return
 	}
 	aspectRatio := "9:16"
 	if b.ScriptID == "ecommerce-product-demo" {
 		aspectRatio = "16:9"
 	}
-	res, err := h.Sessions.CallBatch(sid, b.ID, b.ProjectID, "create_remotion_video_share", map[string]interface{}{
+	res, err := h.Sessions.CallBatch(scope, b.ID, b.ProjectID, "create_remotion_video_share", map[string]interface{}{
 		"project_id": b.ProjectID, "script_id": b.ScriptID, "title": "帧流作品 " + b.ID,
-		"duration_per_image": 3.0, "aspect_ratio": aspectRatio,
+		"duration_per_image": 60.0 / float64(b.AssetCount), "aspect_ratio": aspectRatio,
+		"queue_owner_id": scope,
 	})
 	if err != nil {
-		if h.Semaphore != nil {
-			h.Semaphore.ReleaseBatch(b.ID)
-		}
-		h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = err.Error() })
+		log.Printf("[image-batch] render_submit_failed batch_id=%s project_id=%s script_id=%s sid_hash=%s err=%v", b.ID, b.ProjectID, b.ScriptID, mcp.ShortHashForLog(sid), err)
+		h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "failed"; x.Error = err.Error() })
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	jobID := digString(res, "render_job_id")
 	if jobID == "" || res["success"] == false {
-		if h.Semaphore != nil {
-			h.Semaphore.ReleaseBatch(b.ID)
-		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream render submission failed", "result": res})
 		return
 	}
-	if _, updateErr := h.Batches.Update(sid, b.ID, func(x *imagebatch.Batch) { x.Status = "rendering"; x.RenderJobID = jobID }); updateErr != nil {
-		if h.Semaphore != nil {
-			h.Semaphore.ReleaseBatch(b.ID)
-		}
+	if _, updateErr := h.Batches.Update(scope, b.ID, func(x *imagebatch.Batch) { x.Status = "queued"; x.RenderJobID = jobID }); updateErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": updateErr.Error()})
 		return
 	}
-	h.Sessions.RecordJob(sid, mcp.RenderJob{JobID: jobID, BatchID: b.ID, ProjectID: b.ProjectID, Name: "帧流作品 " + b.ID, Res: aspectRatio, Status: "渲染中", CreatedAt: time.Now()})
+	h.Sessions.RecordJob(scope, mcp.RenderJob{JobID: jobID, BatchID: b.ID, ProjectID: b.ProjectID, Name: "帧流作品 " + b.ID, Res: aspectRatio, Status: "排队", CreatedAt: time.Now()})
 	// This batch has been closed by a successful render submission. Reset the
 	// per-submission counter so a later batch starts with its own tier quota.
-	h.Sessions.ResetAsset(sid)
-	c.JSON(http.StatusAccepted, gin.H{"batch_id": b.ID, "render_job_id": jobID, "status": "rendering"})
+	h.Sessions.ResetAsset(scope)
+	c.JSON(http.StatusAccepted, gin.H{"batch_id": b.ID, "render_job_id": jobID, "status": "queued"})
 }

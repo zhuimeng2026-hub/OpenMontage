@@ -262,6 +262,9 @@ def test_image_selector_prefers_official_provider(monkeypatch, isolated_tool_reg
         return ToolResult(success=True, data={"output_path": "out.png"}, artifacts=["out.png"])
 
     monkeypatch.setattr(KlingOfficialImage, "execute", fake_execute)
+    # image_selector now mirrors video_compose: routes output into the
+    # principal's workspace, so non-MCP callers must pass ``userid``
+    # explicitly (the MCP path resolves the principal from the session).
     result = isolated_tool_registry.get("image_selector").execute(
         {
             "prompt": "official image",
@@ -269,9 +272,11 @@ def test_image_selector_prefers_official_provider(monkeypatch, isolated_tool_reg
             "allowed_providers": ["kling_official"],
             "api_family": "omni",
             "image_reference": "subject",
+            "userid": "kling_official_test",
+            "project_id": "kling_official_test_project",
         }
     )
-    assert result.success
+    assert result.success, f"unexpected error: {result.error}"
     assert result.data["selected_provider"] == "kling_official"
 
 

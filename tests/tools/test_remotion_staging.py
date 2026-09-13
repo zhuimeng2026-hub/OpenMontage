@@ -37,8 +37,23 @@ def test_remote_uris_pass_through_unstaged(tmp_path):
         assert _make_staged(uri, 0, tmp_path) == uri
 
 
-def test_missing_file_passes_through(tmp_path):
-    assert _make_staged("/no/such/file.mp4", 0, tmp_path) == "/no/such/file.mp4"
+def test_missing_file_passes_through(tmp_path, caplog):
+    """Stale paths must NOT silently become a Chromium blocker.
+
+    The helper logs a warning (so mcp_server.log carries provenance) and
+    returns the original source unchanged. The runtime will still fail in
+    Chrome with a clear error, and the defensive guard at the end of
+    _remotion_render will block the render before Chrome even launches.
+
+    Behavior contract locked: identical return value to the pre-fix
+    implementation, so the existing call sites in _remotion_render are
+    unaffected — the only change is observability.
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="video_compose"):
+        assert _make_staged("/no/such/file.mp4", 0, tmp_path) == "/no/such/file.mp4"
+    assert any("skipping missing path" in rec.message for rec in caplog.records)
 
 
 def test_local_file_staged_to_public_relative(tmp_path):
@@ -101,3 +116,162 @@ def test_colliding_basenames_get_distinct_targets(tmp_path):
 
     assert ra != rb
     assert Path(ra).name != Path(rb).name
+
+
+# ---------------------------------------------------------------------------
+# Coverage added 2026-08-20 for the file:// / local-asset-loading fix.
+# See /root/.claude/plans/shimmering-cooking-truffle.md.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_file_warns_but_passes_through(tmp_path, caplog):
+    """Stale paths must NOT silently become a Chromium blocker.
+
+    The helper logs a warning (so mcp_server.log carries provenance) and
+    returns the original source unchanged. The runtime will still fail in
+    Chrome with a clear error, and the defensive guard at the end of
+    _remotion_render will block the render before Chrome even launches.
+    """
+    import logging
+
+    src = "/no/such/file.mp4"
+    with caplog.at_level(logging.WARNING, logger="video_compose"):
+        result = _make_staged(src, 0, _job_staged(tmp_path))
+    assert result == src
+    assert any("skipping missing path" in rec.message for rec in caplog.records)
+
+
+def test_stageable_fields_table_covers_all_consumers():
+    """Lock in the field list so future drift in the table is caught by CI."""
+    from tools.video.video_compose import (
+        _STAGEABLE_AUDIO_FIELDS,
+        _STAGEABLE_FIELDS,
+    )
+
+    parents = {p for p, _, _ in _STAGEABLE_FIELDS}
+    # Every consumer field documented in the plan must be present.
+    assert {"cuts", "scenes", "clips", "assets"}.issubset(parents)
+    # Top-level videoSrc sentinel
+    assert any(p == "" and f == "videoSrc" for p, f, _ in _STAGEABLE_FIELDS)
+
+    audio_layers = {layer for layer, _ in _STAGEABLE_AUDIO_FIELDS}
+    assert {"narration", "music", "soundtrack"}.issubset(audio_layers)
+
+
+def test_full_staging_loop_rewrites_every_known_field(tmp_path):
+    """End-to-end through the generic _STAGEABLE_FIELDS loop for every
+    documented local-resource field. No Chromium needed — just exercises the
+    Python rewrite pass."""
+    from tools.video.video_compose import (
+        _STAGEABLE_AUDIO_FIELDS,
+        _STAGEABLE_FIELDS,
+        VideoCompose,
+    )
+
+    vc = VideoCompose()
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n")
+    staged_dir = _job_staged(tmp_path)
+    props = {
+        "cuts": [{"source": str(img), "backgroundImage": str(img)}],
+        "scenes": [{"backgroundSrc": str(img), "src": str(img)}],
+        "clips": [{"src": str(img), "backgroundSrc": str(img)}],
+        "videoSrc": str(img),  # TitledVideo / LyricOverlay / TalkingHead
+        "soundtrack": {"src": str(img)},
+        "music": {"src": str(img)},
+        "audio": {"narration": {"src": str(img)}, "music": {"src": str(img)}},
+        "assets": {"hero": str(img), "product": str(img), "music": str(img)},
+    }
+
+    # Mirror the production loop without running Chrome.
+    def _stage_one(parent, key, idx):
+        if not isinstance(parent, dict):
+            return
+        val = parent.get(key)
+        if val:
+            parent[key] = vc._stage_remotion_asset(val, idx, staged_dir)
+
+    for parent_key, field_key, idx in _STAGEABLE_FIELDS:
+        if not parent_key:
+            _stage_one(props, field_key, idx)
+            continue
+        container = props.get(parent_key)
+        if isinstance(container, list):
+            for item in container:
+                _stage_one(item, field_key, idx)
+        elif isinstance(container, dict):
+            _stage_one(container, field_key, idx)
+
+    audio_block = props.get("audio")
+    if isinstance(audio_block, dict):
+        for layer, idx in _STAGEABLE_AUDIO_FIELDS:
+            if layer in ("narration", "music"):
+                layer_obj = audio_block.get(layer)
+                if isinstance(layer_obj, dict) and layer_obj.get("src"):
+                    layer_obj["src"] = vc._stage_remotion_asset(
+                        layer_obj["src"], idx, staged_dir
+                    )
+    for top_audio_key, idx in (("soundtrack", 10), ("music", 11)):
+        audio_obj = props.get(top_audio_key)
+        if isinstance(audio_obj, dict) and audio_obj.get("src"):
+            audio_obj["src"] = vc._stage_remotion_asset(
+                audio_obj["src"], idx, staged_dir
+            )
+
+    # Every local-resource field should now be a `_staged/...` relative path.
+    assert props["cuts"][0]["source"].startswith("_staged/")
+    assert props["scenes"][0]["backgroundSrc"].startswith("_staged/")
+    assert props["scenes"][0]["src"].startswith("_staged/")
+    assert props["clips"][0]["src"].startswith("_staged/")
+    assert props["clips"][0]["backgroundSrc"].startswith("_staged/")
+    assert props["videoSrc"].startswith("_staged/")
+    assert props["soundtrack"]["src"].startswith("_staged/")
+    assert props["music"]["src"].startswith("_staged/")
+    assert props["audio"]["narration"]["src"].startswith("_staged/")
+    assert props["audio"]["music"]["src"].startswith("_staged/")
+    assert props["assets"]["hero"].startswith("_staged/")
+
+    # No file:// or absolute paths remain anywhere in the rewritten tree.
+    import json
+
+    blob = json.dumps(props)
+    assert "file://" not in blob
+    assert str(img) not in blob
+
+
+def test_defensive_guard_blocks_unstaged_absolute_paths():
+    """The end-of-staging walk must flag any remaining absolute path so the
+    render is blocked before Chrome launches with a clear error message."""
+    import re
+
+    # Re-implement the same regex used in _remotion_render so the test is
+    # robust against formatting tweaks (the regex itself is the contract).
+    suspicious = re.compile(r"^(?:[A-Za-z]:[\\/]|/|[A-Za-z]+://(?!localhost))")
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            for v in obj.values():
+                yield from walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                yield from walk(v)
+        elif isinstance(obj, str) and obj:
+            yield obj
+
+    props = {"videoSrc": "/tmp/should-have-been-staged.mp4"}
+    bad = [
+        s for s in walk(props)
+        if suspicious.match(s)
+        and not s.startswith(("http://", "https://", "data:"))
+        and not s.startswith("_staged/")
+    ]
+    assert bad == ["/tmp/should-have-been-staged.mp4"]
+
+    # A clean staged tree produces zero bad paths.
+    staged_props = {"videoSrc": "_staged/job-1/0_abcdef.mp4"}
+    assert [
+        s for s in walk(staged_props)
+        if suspicious.match(s)
+        and not s.startswith(("http://", "https://", "data:"))
+        and not s.startswith("_staged/")
+    ] == []

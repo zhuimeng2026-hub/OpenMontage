@@ -298,6 +298,7 @@ Cross-cutting skills that apply to all pipelines:
 | Animation Runtime Selector | `meta/animation-runtime-selector.md` | Choose render runtime + animation library per scene |
 | Taste Direction | `meta/taste-direction.md` | Convert a brief into taste dials, anti-patterns, and reference strategy for proposal/playbook/atelier work |
 | Bespoke Composition (Atelier) | `meta/bespoke-composition.md` | Hand-author a composition from scratch (hero work) — no stock scene-types; routes art-direction → motion principles → engine mechanics → atelier render |
+| MCP Decompose-and-Recompose | `mcp-decompose-and-recompose.md` | End-to-end remix: decompose source video (scenes + transcript + keyframes), upload own elements, re-compose — all via the OpenMontage MCP server. Companion: `scripts/mcp_decompose_and_recompose.py` |
 
 ## Style Playbooks
 

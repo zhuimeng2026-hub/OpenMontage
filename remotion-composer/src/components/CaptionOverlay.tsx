@@ -1,3 +1,4 @@
+import { DISPLAY } from "../fonts";
 import {
   AbsoluteFill,
   Sequence,
@@ -127,7 +128,7 @@ export const CaptionOverlay: React.FC<CaptionOverlayProps> = ({
   color = "#F8FAFC",
   highlightColor = "#22D3EE",
   backgroundColor = "rgba(15, 23, 42, 0.75)",
-  fontFamily = "Space Grotesk, Inter, system-ui, sans-serif",
+  fontFamily = DISPLAY,
 }) => {
   const { fps } = useVideoConfig();
   const pages = buildPages(words, wordsPerPage);

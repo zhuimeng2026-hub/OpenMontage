@@ -1,0 +1,99 @@
+phase: 2
+scope: §17.C — Product / Asset 管理
+section_ref: docs/openmontage_product_video_mvp_golang_scope.md#17.1-必须的
+
+status: READY   # 改成 READY 才允许 orchestrator 实际跑 run.sh
+last_edited_by: human
+
+# Phase 2 把"一个商品 + 它的素材 + AI 分类结果 + 人工修正"这块 SaaS 数据模型
+# 落到 3 张表 + 6 条路由。不接 OpenMontage MCP(那是 Phase 3+);AI 分类用 MVP
+# 文件名启发式 + 手工修正,不调真实视觉模型。
+
+files_to_create:
+  - frameflow/bff/internal/productsvc/store.go             # Product / Asset / Manifest DB CRUD
+  - frameflow/bff/internal/productsvc/manifest.go          # BuildManifest: 聚合当前 assets + missing_roles
+  - frameflow/bff/internal/productsvc/classify.go          # MVP 启发式分类(文件名 → role,quality_score=0.5 默认)
+  - frameflow/bff/cmd/mvp/handlers_product.go              # 6 条路由的 HTTP handler
+
+files_to_modify:
+  - frameflow/bff/cmd/mvp/main.go                          # 挂载产品路由(都在 jwtOnly+scoped 分组里)
+
+sql_migrations: |
+  -- 商品
+  CREATE TABLE IF NOT EXISTS products (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    category    TEXT NOT NULL DEFAULT 'general',
+    sku         TEXT NOT NULL DEFAULT '',
+    created_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_products_tenant ON products(tenant_id);
+  CREATE INDEX IF NOT EXISTS idx_products_tenant_name ON products(tenant_id, name);
+
+  -- 素材
+  CREATE TABLE IF NOT EXISTS product_assets (
+    id               TEXT PRIMARY KEY,
+    tenant_id        TEXT NOT NULL,
+    product_id       TEXT NOT NULL,
+    file_key         TEXT NOT NULL,
+    media_type       TEXT NOT NULL DEFAULT 'image',
+    role             TEXT NOT NULL DEFAULT 'unclassified',
+    quality_score    REAL NOT NULL DEFAULT 0.5,
+    ai_metadata_json TEXT NOT NULL DEFAULT '{}',
+    uploaded_by      TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_product_assets_product ON product_assets(product_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_product_assets_file_key ON product_assets(file_key);
+
+  -- 清单:每次分类/修正后写新行,保留历史;current_version 指向最新一行
+  CREATE TABLE IF NOT EXISTS product_manifests (
+    id                 TEXT PRIMARY KEY,
+    product_id         TEXT NOT NULL,
+    version            INTEGER NOT NULL DEFAULT 1,
+    assets_json        TEXT NOT NULL DEFAULT '[]',
+    missing_roles_json TEXT NOT NULL DEFAULT '[]',
+    ai_model           TEXT NOT NULL DEFAULT 'mvp_heuristic_v1',
+    created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_product_manifests_product ON product_manifests(product_id, version);
+
+go_tests: []   # MVP 不写 Go 单测 — gate.sh 的 HTTP 冒烟覆盖核心路径
+
+gate_endpoints:
+  - POST /api/products                                  # 创建商品
+  - GET  /api/products/:id                              # 读商品
+  - POST /api/products/:id/assets                       # 上传素材(分类 + file_acl 注册 + manifest 重算)
+  - GET  /api/products/:id/assets                       # 列出素材
+  - GET  /api/products/:id/manifest                     # 读最新 manifest(role + quality_score 必须可见)
+  - PUT  /api/products/:id/manifest/:asset_id           # 手工修正某素材的 role + quality_score
+
+gate_min_verification: |
+  POST /api/products 创建成功,
+  POST /api/products/:id/assets 上传一张图,
+  GET /api/products/:id/manifest 拿到 role + quality_score;
+  跨 tenant 访问返回 403;
+  手工修正 PUT 之后 manifest 反映新 role。
+
+estimated_changes: "4 新文件 + 1 改文件,约 500 LOC Go + 200 LOC bash"
+
+notes: |
+  实现要点:
+  1. 上传走 multipart/form-data(file 字段),不接 S3/OSS — 把文件落到
+     ${MVP_UPLOAD_DIR:-/tmp/mvp_uploads}/<file_key> 占位。file_key
+     生成走 "pa_<16hex>" 格式,同时 register 进 file_acl(tenant_id 绑)。
+  2. 分类走 MVP 启发式(classify.go):
+     - 文件名包含 "hero" → role=hero_front, quality=0.85
+     - 文件名包含 "detail" → role=detail, quality=0.80
+     - 文件名包含 "lifestyle" → role=lifestyle, quality=0.75
+     - 其他 → role=unclassified, quality=0.50
+     也允许请求体里显式传 role + quality_score 覆盖(等价于"用户标注的更高优先")。
+  3. Manifest 在每次 assets 变化后重建(version+1,assets_json,missing_roles_json)。
+     missing_roles 从固定 11 个常用 role 集合里减已有 role。
+  4. 所有路由挂在 scoped 分组(RequireJWT + TenantScope) — §17.C 资源全部带
+     tenant_id,且 §17.B 已经把 TenantScope 做好,这里只是消费。
+  5. cmd/mvp/main.go 跨 Phase 累积,不重写 Phase 0/1 路由 — 只追加产品路由。
+  6. 不实现真实视觉模型调用(那是 MiniMax M3 侧的活,见 plan §22)— 启发式够
+     gate 通过即可,真实分类 Phase 5+ 接 Agent Gateway 时一起替换。

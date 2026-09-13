@@ -54,7 +54,7 @@ required_skills:
 
 compatible_playbooks:
   recommended: [clean-professional, premium-minimalist]
-  also_works: [flat-motion-graphics]
+  also_works: [flat-motion-graphics, shipinhao-commerce]
   custom_allowed: true
 
 stages:

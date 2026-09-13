@@ -1,0 +1,18 @@
+[Unit]
+Description=Run weiyun share-link expiry sweep hourly
+Documentation=man:systemd.timer
+
+[Timer]
+# Fire 17 minutes past every hour, randomized delay up to 60s to avoid
+# stampeding shared infrastructure (weiyun MCP endpoint).
+OnCalendar=*:00/1
+RandomizedDelaySec=60
+AccuracySec=30
+# If we miss a window (the host was off), catch up at the next boot.
+Persistent=true
+# CPU/IO priority is set on the matching .service unit — see
+# CPUSchedulingPolicy / IOSchedulingClass there. Those directives are not
+# legal in [Timer] sections.
+
+[Install]
+WantedBy=timers.target

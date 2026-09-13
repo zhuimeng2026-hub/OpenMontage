@@ -1,3 +1,4 @@
+import { SANS } from "../../fonts";
 import {
   AbsoluteFill,
   interpolate,
@@ -36,7 +37,7 @@ export const KPIGrid: React.FC<KPIGridProps> = ({
   title,
   columns = 3,
   colors = ["#2563EB", "#F59E0B", "#10B981", "#EC4899"],
-  fontFamily = "Inter, system-ui, sans-serif",
+  fontFamily = SANS,
   textColor = "#1F2937",
   backgroundColor = "#FFFFFF",
   cardBackgroundColor = "#F9FAFB",

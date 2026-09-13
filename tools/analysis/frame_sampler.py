@@ -8,6 +8,7 @@ timestamp-based extraction strategies.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -22,6 +23,69 @@ from tools.base_tool import (
     ToolStability,
     ToolTier,
 )
+
+
+# --------------------------------------------------------------------------- #
+# Workspace-contract guard
+# --------------------------------------------------------------------------- #
+# Per CLAUDE.md invariant 5 ("Tool outputs go under projects/<project-id>/"),
+# every disk write from a tool must land under:
+#   - <repo>/projects/<project-id>/...   — production output, project-attributed
+#   - <repo>/projects/_scratch/<category>/... — ad-hoc / smoke-test output
+# Bare <repo>/projects/ (the root itself) and anything outside projects/ are
+# invisible to the Backlot board and trip the decompose_health_monitor
+# workspace_violation probe. The recent mclaw-demo regression
+# (output_dir="projects" landing 24 frames at the projects/ root) is exactly
+# what this guard is meant to prevent.
+_WORKSPACE_PROJECT_ROOT = Path(
+    os.environ.get("OPENMONTAGE_REPO",
+                   Path(__file__).resolve().parents[2])
+).resolve() / "projects"
+
+
+def _resolve_repo_root() -> Path:
+    """Repo root — used to anchor the workspace-contract check."""
+    return _WORKSPACE_PROJECT_ROOT.parent
+
+
+def _validate_output_dir(output_dir: Path) -> str | None:
+    """Reject output_dir that lands outside the workspace contract.
+
+    Returns an error message string if the path violates the contract,
+    or None if it lands under a real project / _scratch.
+
+    Rules (mirror CLAUDE.md invariant 5 + decompose_health_monitor's
+    allow-list at tools/decompose_health_monitor.py:415-455):
+
+      ✅ <repo>/projects/<project-id>/...          (real project)
+      ✅ <repo>/projects/_scratch/<category>/...    (no-project ad-hoc)
+      ❌ <repo>/projects/                           (bare root — invisible)
+      ❌ anything else outside projects/             (invisible to Backlot)
+    """
+    try:
+        resolved = output_dir.resolve()
+    except OSError as exc:
+        return f"cannot resolve output_dir: {output_dir} ({exc})"
+
+    projects_root = _WORKSPACE_PROJECT_ROOT
+    try:
+        rel = resolved.relative_to(projects_root)
+    except ValueError:
+        return (
+            f"output_dir violates workspace contract: {output_dir} resolves to "
+            f"{resolved}, which is outside {projects_root}. Outputs must land "
+            f"under projects/<project-id>/ or projects/_scratch/<category>/."
+        )
+
+    # rel now is the path under projects/. Bare projects/ has zero parts.
+    if not rel.parts:
+        return (
+            f"output_dir violates workspace contract: {output_dir} resolves to "
+            f"the bare projects/ root. Outputs must land under "
+            f"projects/<project-id>/ or projects/_scratch/<category>/."
+        )
+
+    return None
 
 
 class FrameSampler(BaseTool):
@@ -108,6 +172,15 @@ class FrameSampler(BaseTool):
         fmt = inputs.get("format", "jpg")
         quality = inputs.get("quality", 2)
         output_dir = Path(inputs.get("output_dir", input_path.parent / "frames"))
+
+        # Workspace-contract guard: refuse to write outside projects/<id>/...
+        # or projects/_scratch/<category>/. Prevents the regression where a
+        # caller passed output_dir="projects" and 24 stray frames landed at
+        # the projects/ root.
+        ws_err = _validate_output_dir(output_dir)
+        if ws_err:
+            return ToolResult(success=False, error=ws_err)
+
         output_dir.mkdir(parents=True, exist_ok=True)
 
         start = time.time()

@@ -7,7 +7,7 @@
 
 ## 为什么需要它
 
-- `dw.aixifs.com/mcp` 每次响应都会**轮换 `Mcp-Session-Id`**，且服务端用该会话
+- 上游 MCP 每次响应都可能**轮换 `Mcp-Session-Id`**，且服务端用该会话
   把 `upload_asset_chunk` 上传的图片与后续的 `create_remotion_video_share` 绑定。
   因此每个用户必须复用**同一个长驻 MCP 客户端**（带 mutex 串行），否则素材会
   落到不同会话、生成视频时找不到图。
@@ -40,6 +40,23 @@ cp .env.example .env      # 填写 MCP_API_TOKEN 与微信参数
 go mod tidy               # 拉取 gin / godotenv
 go run .                  # 默认 :8080
 ```
+
+运行参数统一从 BFF 工作目录下的 `.env` 读取（`internal/config.Load` 会在启动时调用
+`godotenv.Load()`）。远程局域网联调示例：
+
+```dotenv
+MCP_BASE_URL=http://192.168.20.173:8900/mcp
+FRONTEND_ORIGIN=http://192.168.20.173:8080
+CUSTOM_COMPOSITION_ENABLED=true
+```
+
+MCP 上游地址的优先级为 `MCP_BASE_URL` > 兼容旧部署的 `UPSTREAM_MCP_URL` >
+本机默认 `http://127.0.0.1:8900/mcp`。`MCP_PROGRESS_URL` 可省略；省略时会从最终
+生效的 MCP 地址派生同一主机的 `/render-progress`（例如 `/mcp` 会对应
+`/render-progress`），不会再固定指向本机。启动日志只记录脱敏后的 scheme、host 和 path。
+
+修改 `.env` 后必须重启 BFF 进程；不需要重新构建前端。不要把真实的
+`MCP_API_TOKEN` 提交到 Git。
 
 ## 前端接线
 
@@ -77,6 +94,39 @@ location /api/render-progress/ {
     proxy_cache off;
     chunked_transfer_encoding on;
 }
+```
+
+## FrameFlow E2E 诊断
+
+`frameflow_e2e.py` 是环境变量驱动的联调工具，调用 BFF 的 `/api/mcp` 完成
+`upload_asset_chunk(start/append/complete)`、`create_remotion_video_share` 和
+`get_render_status`。它不会读取或发送 `MCP_API_TOKEN`；该密钥只能配置在 BFF
+服务端。测试图会在本地生成并带有不同颜色、编号和任务标签。
+
+```bash
+cd frameflow/bff
+python frameflow_e2e.py single --images 8
+python frameflow_e2e.py parallel-two --images 8 \
+  --script-a ecommerce-product-demo --script-b cinematic-montage
+```
+
+可配置变量：`FRAMEFLOW_BFF_URL`（默认 `http://localhost:8080`）、
+`FRAMEFLOW_IMAGES`（必须 5–10）、`FRAMEFLOW_DURATION_PER_IMAGE`、
+`FRAMEFLOW_SCRIPT_A`、`FRAMEFLOW_SCRIPT_B`、`FRAMEFLOW_TIMEOUT_SECONDS` 和
+`FRAMEFLOW_OUTPUT_ROOT`。也可使用同名命令行参数覆盖。`parallel-two` 为两个
+独立 BFF 会话并发提交，输出 JSON 中的 `started_at`、`ended_at`、
+`overlap_seconds` 是判断任务时间重叠的证据；`outputs[].ffprobe` 用于校验本地
+视频的时长、宽高和文件大小。报告分别给出 `render_ok` 与 `publish_ok`；默认只以
+本地渲染产物作为退出码依据，生产发布验收请加 `--require-publish`。若输出在远程机器，设置 `FRAMEFLOW_OUTPUT_ROOT`
+为该机器的共享渲染目录，或仅使用 job 状态/share URL 做远端验证。
+
+本机联调示例环境：
+
+```dotenv
+FRAMEFLOW_BFF_URL=http://render.mengxa.com:8080
+FRAMEFLOW_IMAGES=8
+FRAMEFLOW_SCRIPT_A=ecommerce-product-demo
+FRAMEFLOW_SCRIPT_B=cinematic-montage
 ```
 
 ## 已知边界（骨架，非生产完备）

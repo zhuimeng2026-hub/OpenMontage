@@ -1,0 +1,44 @@
+phase: 7
+scope: §17.D — 用户批准 sample 预览后,才能进入 render。
+section_ref: docs/openmontage_product_video_mvp_golang_scope.md#17.D
+
+status: READY
+last_edited_by: human
+
+files_to_create:
+  - scripts/mvp_dev/phase_7/mcp_stub_server.py   # 扩展 phase_6 的 stub,加 --succeed-render flag
+
+files_to_modify:
+  - frameflow/bff/internal/jobsvc/states.go      # 加 approve 触发器:SAMPLE_READY → WAITING_APPROVAL
+  - frameflow/bff/cmd/mvp/db.go                  # ALTER TABLE video_projects ADD COLUMN approved_by/approved_at
+  - frameflow/bff/cmd/mvp/handlers_project.go    # Approve handler + projectRow + loadProject 增字段
+  - frameflow/bff/cmd/mvp/main.go                # 挂 /api/video-projects/:id/approve
+
+sql_migrations:
+  - "ALTER TABLE video_projects ADD COLUMN approved_by TEXT DEFAULT NULL"
+  - "ALTER TABLE video_projects ADD COLUMN approved_at TEXT DEFAULT NULL"
+
+go_tests: []
+
+gate_endpoints:
+  - "POST /api/video-projects/:id/approve  → 200 status=WAITING_APPROVAL approved_by=<iu>"
+  - "POST /api/video-projects/:id/approve  → 409 illegal transition from CREATED"
+  - "GET  /api/video-projects/:id          → approved_by/approved_at 持久化"
+  - "完整链路: storyboard → animatic → sample → SAMPLE_READY → approve → WAITING_APPROVAL → render → COMPLETED"
+
+gate_min_verification: |
+  1. sample 阶段后项目落到 SAMPLE_READY,artifacts.files 非空。
+  2. /approve 后状态跳到 WAITING_APPROVAL,approved_by 写入 internal_user_id。
+  3. WAITING_APPROVAL 状态再调 /approve 仍然 200,保持 WAITING_APPROVAL(幂等)。
+  4. WAITING_APPROVAL → render → COMPLETED 全链路通,quota 50 credits reserved + consumed,无 Refund。
+  5. CREATED 状态直接调 /approve → 409 illegal transition。
+
+estimated_changes: |
+  新建 ~150 行(stub + scripts + tests);修改 ~50 行(states + handler + main + db)。
+
+notes: |
+  - approve 不调 MCP,纯 Go 侧状态机推进 + DB 写 approved_by/approved_at。
+  - sample_done 仍跳到 SAMPLE_READY,WAITING_APPROVAL 由 approve 显式推进。
+  - render 触发条件放成 SAMPLE_READY|WAITING_APPROVAL — 直接 render 不走 approve 也行(便于 cron / 自动化)。
+  - approve 幂等:再次 approve 仍 200,但 approved_at 会被刷新(每次 approve 覆盖)。
+  - Phase 6 stub 的"render 故意失败"行为保留为默认;Phase 7 用 --succeed-render flag 切到成功模式。

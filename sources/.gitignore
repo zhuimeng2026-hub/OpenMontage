@@ -1,0 +1,8 @@
+# Reference media inputs (large binaries — never commit, regenerable from source)
+*.wav
+*.mp4
+*.mov
+
+# Keep the JSON annotations alongside the binaries
+!*.json
+!*.md

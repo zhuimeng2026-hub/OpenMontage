@@ -1,7 +1,38 @@
-"""Scene detection tool wrapping PySceneDetect.
+"""Scene detection tool.
 
-Detects scene boundaries and shot changes in video. Falls back to
-FFmpeg-based detection if PySceneDetect is not installed.
+Detects scene boundaries and shot changes in video. Three backends,
+auto-tiered by capability:
+
+1. **TransNetV2** (highest accuracy; ~0.3-1× realtime on CPU). Uses the
+   `transnetv2_pytorch` PyPI package — deep CNN trained on synthetic +
+   real cut / fade / dissolve corpora; handles fades, low-contrast hard
+   cuts, flash/strobe, and fast-motion whip-pans that defeat the other
+   backends. CPU-friendly; no GPU required. ``result.data["method"] ==
+   "transnetv2"``.
+2. **PySceneDetect** (good for pure hard cuts). Charles University
+   Prague–style Content / Threshold / Adaptive detectors. Misses fades
+   the way the FFT-based heuristic always does. ``result.data["method"]
+   == "pyscenedetect"`` AND ``result.data["downgraded"] is True`` AND
+   ``result.data["capability_loss"]`` is a non-empty list naming what
+   PySceneDetect misses relative to TransNetV2.
+3. **FFmpeg `scene` filter** (last-resort fallback; always available).
+   Trades accuracy (no fade/dissolve detection, weaker on low-contrast
+   hard cuts, more false positives under flash/strobe/fast motion) for
+   zero extra Python dependencies. ``result.data["method"] == "ffmpeg"``
+   with the larger ``_FFMPEG_FALLBACK_CAPABILITY_LOSS`` list.
+
+Behaviour at runtime:
+
+* If ``transnetv2_pytorch`` is importable → TransNetV2 path runs.
+* Else if ``scenedetect`` is importable → PySceneDetect path runs.
+* Else → FFmpeg fallback path runs.
+
+The ``downgraded`` flag is True for both PySceneDetect and FFmpeg paths
+(False only for the TransNetV2 path). Consumers should branch on it and
+re-prompt for ``pip install transnetv2_pytorch`` when True.
+
+See ``docs/transnetv2-vs-pyscenedetect-2026-09-10.md`` for the
+failure-mode analysis that motivates this three-tier design.
 """
 
 from __future__ import annotations
@@ -35,10 +66,27 @@ class SceneDetect(BaseTool):
     execution_mode = ExecutionMode.SYNC
     determinism = Determinism.DETERMINISTIC
 
+    # Hard requirement: FFmpeg is needed even for the primary PySceneDetect
+    # path (PySceneDetect shells out to ffmpeg to decode frames).
     dependencies = ["cmd:ffmpeg"]
+    # Soft upgrades — when present, we get a real detector and the fallback
+    # is not used.  Tracked as a class constant (NOT ``dependencies``) so
+    # ``check_dependencies()`` does not raise on hosts where these are
+    # absent: the FFmpeg fallback is a real, working alternative.
+    # Order matters for auto-routing when ``method`` is unset/"auto":
+    # TransNetV2 > PySceneDetect > FFmpeg-fallback.
+    _OPTIONAL_DEPENDENCIES = ["python:transnetv2_pytorch", "python:scenedetect"]
     install_instructions = (
-        "FFmpeg is required. For better detection install PySceneDetect:\n"
-        "pip install scenedetect[opencv]"
+        "FFmpeg is required (used for both decode and the FFmpeg fallback path).\n"
+        "Best accuracy (fade/dissolve detection, low-contrast hard cuts, "
+        "flash/strobe/fast-motion suppression) — install TransNetV2:\n"
+        "    pip install transnetv2_pytorch\n"
+        "    # The PyPI wheel bundles the converted .pth weights, no TF install needed.\n"
+        "Good accuracy for pure hard cuts — install PySceneDetect with OpenCV:\n"
+        "    pip install scenedetect[opencv]\n"
+        "Until either is installed, the tool runs the FFmpeg `scene` filter "
+        "fallback and flags the result as `downgraded=True` with a "
+        "`capability_loss` list."
     )
     agent_skills = ["ffmpeg"]
 
@@ -48,6 +96,28 @@ class SceneDetect(BaseTool):
         "detect_threshold",
     ]
 
+    # Capability-loss catalogue: surfaced in ToolResult.data["capability_loss"]
+    # whenever the FFmpeg fallback path runs.  Consumers (e.g.
+    # video_analyzer, video-reference-analyst) use this to flag the result
+    # as lower-confidence and to recommend upgrading PySceneDetect.
+    _FFMPEG_FALLBACK_CAPABILITY_LOSS = (
+        "fade/dissolve detection (PySceneDetect/TransNetV2-only)",
+        "low-contrast hard cuts (e.g. interview cutaways)",
+        "false-positive suppression under flash/strobe/light flicker",
+        "fast-motion / whip-pan discrimination (sports, action)",
+    )
+    # Mid-tier capability loss: PySceneDetect is strictly better than the
+    # FFmpeg fallback (handles most hard cuts reliably, fewer flash false
+    # positives than the FFT heuristic) but still misses what a trained
+    # transition classifier catches.  Consumers reading this should
+    # recommend `pip install transnetv2_pytorch` for the upgrade.
+    _PYSCENEDETECT_CAPABILITY_LOSS = (
+        "fade/dissolve detection (TransNetV2-only — PySceneDetect's 2-frame "
+        "heuristic cannot see gradual transitions)",
+        "frame-precise cut position under low contrast (TransNetV2's CNN "
+        "resolves where the heuristic can only window the boundary)",
+    )
+
     input_schema = {
         "type": "object",
         "required": ["input_path"],
@@ -55,12 +125,28 @@ class SceneDetect(BaseTool):
             "input_path": {"type": "string"},
             "method": {
                 "type": "string",
-                "enum": ["content", "threshold", "adaptive"],
-                "default": "content",
+                "enum": [
+                    "transnetv2", "content", "threshold", "adaptive", "auto"
+                ],
+                "default": "auto",
+                "description": (
+                    "Detector strategy. Auto-routing priority when unset or "
+                    "'auto': TransNetV2 > PySceneDetect > FFmpeg fallback. "
+                    "Set explicitly to force a backend. PySceneDetect values "
+                    "(content/threshold/adaptive) are honoured only when "
+                    "PySceneDetect is importable; FFmpeg fallback always "
+                    "uses the ffmpeg `scene` filter (threshold=0.3)."
+                ),
             },
             "threshold": {
                 "type": "number",
-                "description": "Detection threshold (method-dependent)",
+                "description": (
+                    "Detection threshold (method-dependent). "
+                    "PySceneDetect content detector default 27.0; "
+                    "PySceneDetect threshold detector default 12.0; "
+                    "PySceneDetect adaptive detector default 3.0; "
+                    "FFmpeg `scene` filter default 0.3 (range 0.0-1.0)."
+                ),
             },
             "min_scene_length_seconds": {
                 "type": "number",
@@ -91,6 +177,50 @@ class SceneDetect(BaseTool):
         except ImportError:
             return False
 
+    def _has_transnetv2(self) -> bool:
+        try:
+            import transnetv2_pytorch  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def _select_backend(self, inputs: dict[str, Any]) -> str:
+        """Pick the active backend name based on `method` + availability.
+
+        Returns one of {"transnetv2", "pyscenedetect", "ffmpeg"}. Explicit
+        ``method`` requests are honoured when the matching backend is
+        available; otherwise we fall through to the next-best backend
+        rather than crashing. ``method=None`` / ``"auto"`` means "best
+        available": TransNetV2 > PySceneDetect > FFmpeg fallback.
+        """
+        method = inputs.get("method")
+        has_tn = self._has_transnetv2()
+        has_sd = self._has_pyscenedetect()
+
+        # Explicit TransNetV2 request
+        if method == "transnetv2":
+            return "transnetv2" if has_tn else ("pyscenedetect" if has_sd else "ffmpeg")
+        # Explicit PySceneDetect request (content/threshold/adaptive)
+        if method in ("content", "threshold", "adaptive"):
+            return "pyscenedetect" if has_sd else ("transnetv2" if has_tn else "ffmpeg")
+        # Auto / unset: tier by accuracy
+        if method in (None, "auto"):
+            if has_tn:
+                return "transnetv2"
+            if has_sd:
+                return "pyscenedetect"
+            return "ffmpeg"
+        # Unknown method string: same as auto (don't crash; warn via
+        # diagnostics so the user notices they passed a typo).
+        self._detection_diagnostics.append(
+            f"unknown method {method!r}; falling back to best available backend"
+        )
+        if has_tn:
+            return "transnetv2"
+        if has_sd:
+            return "pyscenedetect"
+        return "ffmpeg"
+
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         input_path = Path(inputs["input_path"])
         if not input_path.exists():
@@ -102,9 +232,11 @@ class SceneDetect(BaseTool):
         self._detection_status = "completed"
         self._detection_diagnostics = []
 
-        use_pyscenedetect = self._has_pyscenedetect()
+        backend = self._select_backend(inputs)
         try:
-            if use_pyscenedetect:
+            if backend == "transnetv2":
+                scenes = self._detect_transnetv2(inputs)
+            elif backend == "pyscenedetect":
                 scenes = self._detect_pyscenedetect(inputs)
             else:
                 scenes = self._detect_ffmpeg(inputs)
@@ -112,8 +244,8 @@ class SceneDetect(BaseTool):
             elapsed = time.time() - start
             return ToolResult(
                 success=False,
-                data={"status": "failed", "scene_count": 0},
-                error=f"Scene detection failed: {exc}",
+                data={"status": "failed", "scene_count": 0, "method": backend},
+                error=f"Scene detection failed (backend={backend}): {exc}",
                 duration_seconds=round(elapsed, 2),
             )
 
@@ -136,12 +268,25 @@ class SceneDetect(BaseTool):
             encoding="utf-8",
         )
 
+        if backend == "transnetv2":
+            capability_loss: list[str] = []
+        elif backend == "pyscenedetect":
+            capability_loss = list(self._PYSCENEDETECT_CAPABILITY_LOSS)
+        else:
+            capability_loss = list(self._FFMPEG_FALLBACK_CAPABILITY_LOSS)
+
         return ToolResult(
             success=status in ("completed", "degraded"),
             data={
                 "scene_count": len(scenes),
                 "scenes": scenes,
-                "method": "pyscenedetect" if use_pyscenedetect else "ffmpeg",
+                "method": backend,
+                # `downgraded` is the single field downstream should branch on.
+                # True  → a fallback ran (PySceneDetect or FFmpeg); see
+                #          capability_loss for what is NOT detected.
+                # False → TransNetV2 ran (highest accuracy available).
+                "downgraded": backend != "transnetv2",
+                "capability_loss": capability_loss,
                 "output": str(output_path),
                 "status": status,
                 "diagnostics": diagnostics,
@@ -200,6 +345,63 @@ class SceneDetect(BaseTool):
              "duration_seconds": round(end - start, 3)}
             for i, (start, end) in enumerate(zip(points, points[1:])) if end > start
         ]
+
+    def _detect_transnetv2(self, inputs: dict[str, Any]) -> list[dict]:
+        """Use TransNetV2 (transnetv2_pytorch) for scene detection.
+
+        Imports the package locally so that the FFmpeg-fallback hosts
+        (where transnetv2_pytorch is not installed) never trigger an
+        ImportError at module load time. The `transnetv2_pytorch` PyPI
+        wheel bundles the converted .pth weights, so instantiation is a
+        pure local CPU operation (~7.6M params).
+        """
+        from transnetv2_pytorch import TransNetV2
+
+        input_path = str(inputs["input_path"])
+        threshold = float(inputs.get("threshold", 0.5))
+        # Clamp into TransNetV2's reasonable range; the model's sigmoid
+        # output is in [0,1] so threshold outside that is meaningless.
+        threshold = max(0.05, min(0.95, threshold))
+        min_scene_len = float(inputs.get("min_scene_length_seconds", 1.0))
+
+        # Probe duration so we can normalize start_frame -> seconds and
+        # so _build_scenes can apply min_scene_len + boundary dedup the
+        # same way the other backends do.
+        total_dur, _, _ = self._probe_media_info(input_path)
+
+        # CPU by default — _detect_best_device inside the model picks MPS
+        # when available, but on this host (per docs/transnetv2-vs-pyscenedetect
+        # -2026-09-10.md § Part 4) there is no GPU, so this stays on CPU.
+        model = TransNetV2()
+        try:
+            analysis = model.analyze_video(
+                input_path,
+                threshold=threshold,
+                quiet=True,
+            )
+        except Exception as exc:
+            # Surface the underlying error so callers can debug (e.g.
+            # ffmpeg missing on a weird host). The wrapped call above
+            # already raises with a helpful message when ffmpeg is gone.
+            raise RuntimeError(
+                f"TransNetV2 inference failed on {input_path}: {exc}"
+            ) from exc
+
+        fps = float(analysis.get("fps") or 25.0)
+        # Map the per-shot `(start_frame, end_frame)` ranges returned by
+        # analyze_video into the same `{start_seconds, end_seconds}`
+        # change-point schema the other backends feed into _build_scenes.
+        # We drop the trailing `end_frame` boundary (it equals the next
+        # scene's start_frame) and keep only the starts so _build_scenes
+        # can dedup + apply min_scene_len consistently.
+        change_points: list[float] = []
+        for shot in analysis.get("scenes", []):
+            start_frame = int(shot["start_frame"])
+            change_points.append(start_frame / fps)
+
+        # Make sure the first/last boundaries anchor at 0.0 / total_dur
+        # the same way the FFmpeg/PySceneDetect paths do (via _build_scenes).
+        return self._build_scenes(change_points, total_dur, min_scene_len)
 
     def _detect_pyscenedetect(self, inputs: dict[str, Any]) -> list[dict]:
         """Use PySceneDetect for scene detection."""
@@ -282,10 +484,12 @@ class SceneDetect(BaseTool):
             )
         escaped_input = self._escape_lavfi_movie_path(input_path)
 
+        # ffprobe lavfi sources don't populate `pts_time`; use `pkt_pts_time`
+        # (we still ask for `pts_time` for back-compat with regular file inputs).
         cmd = [
             "ffprobe",
             "-v", "quiet",
-            "-show_entries", "frame=pts_time",
+            "-show_entries", "frame=pts_time,pkt_pts_time",
             "-of", "json",
             "-f", "lavfi",
             f"movie='{escaped_input}',select='gt(scene,{threshold})'",
@@ -301,7 +505,8 @@ class SceneDetect(BaseTool):
 
         change_points = [0.0]
         for frame in data.get("frames", []):
-            ts = float(frame.get("pts_time", 0))
+            ts_str = frame.get("pkt_pts_time") or frame.get("pts_time") or "0"
+            ts = float(ts_str)
             if ts - change_points[-1] >= min_scene_len:
                 change_points.append(ts)
 

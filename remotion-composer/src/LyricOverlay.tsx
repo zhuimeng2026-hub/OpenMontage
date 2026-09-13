@@ -1,3 +1,4 @@
+import { SERIF } from "./fonts";
 import {
   AbsoluteFill,
   Audio,
@@ -8,16 +9,22 @@ import {
   useVideoConfig,
 } from "remotion";
 import React from "react";
-// Local fallback prevents the renderer from requesting a remote Google Font.
-const playfairItalic = "Georgia, 'Times New Roman', serif";
 
+// Resolve asset path — pass through URLs/data URIs; everything else routes
+// through Remotion's staticFile() (which serves public/_staged/<job>/<file>).
+// Simplified 2026-08-20: dropped the `file://` + absolute-path branches that
+// leaked through to headless Chrome as "Not allowed to load local resource".
+// Python _STAGEABLE_FIELDS + defensive guard now guarantee only relative
+// paths reach the JS layer.
 function resolveAsset(src: string): string {
-  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) return src;
-  const clean = src.replace(/^file:\/\/\/?/, "");
-  if (clean.startsWith("/") || /^[A-Za-z]:[\\/]/.test(clean)) {
-    return `file:///${clean.replace(/\\/g, "/")}`;
+  if (
+    src.startsWith("http://") ||
+    src.startsWith("https://") ||
+    src.startsWith("data:")
+  ) {
+    return src;
   }
-  return staticFile(clean);
+  return staticFile(src.replace(/^file:\/\/\/?/, ""));
 }
 
 export interface Lyric {
@@ -103,7 +110,7 @@ const LyricLine: React.FC<{ lyric: Lyric; bottomY: number }> = ({ lyric, bottomY
       >
         <div
           style={{
-            fontFamily: playfairItalic,
+            fontFamily: SERIF,
             fontStyle: "italic",
             fontWeight: 400,
             fontSize: 54,

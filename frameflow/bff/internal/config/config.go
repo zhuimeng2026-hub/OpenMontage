@@ -2,18 +2,31 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/joho/godotenv"
 )
+
+// Validate rejects unsafe production combinations before opening the listener.
+func Validate(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if cfg.AuthRequired && (cfg.WechatAppID == "" || cfg.WechatAppSecret == "") {
+		return fmt.Errorf("AUTH_REQUIRED=true requires WECHAT_APP_ID and WECHAT_APP_SECRET")
+	}
+	return nil
+}
 
 // Config holds every tunable for the FrameFlow BFF. Secrets (MCP_API_TOKEN,
 // WechatAppSecret, ...) must come from the environment / .env, NEVER from the
 // browser bundle.
 type Config struct {
 	MCPBaseURL     string // Streamable-HTTP MCP endpoint
-	MCPAPIToken    string // Bearer token for dw.aixifs.com/mcp (server-side only)
+	MCPAPIToken    string // Bearer token for the upstream MCP (server-side only)
 	MCPProgressURL string // base URL for the render-progress SSE endpoint
 	// MCPAllowedTools is the server-side allowlist for tools exposed through
 	// POST /api/mcp. The MCP handshake and tools/list are performed internally
@@ -31,15 +44,18 @@ type Config struct {
 	AuthRequired      bool   // require a logged-in WeChat session on /api/mcp + /api/render-progress
 	// DevLoginAllowed enables the DEV-ONLY /api/_dev_login session bootstrap
 	// (see Handlers.DevLogin). It must stay false in production.
-	DevLoginAllowed       bool
-	RateLimitPerMin       int // token-bucket refill rate per session/IP (0 => 30)
-	ImageBatchMaxParallel int // local process-wide image batch render limit (0 => 2)
-	ImageBatchMaxPerUser  int // local per-session image batch render limit (0 => 2)
-	ImageBatchLeaseTTLMin int // SQLite render lease TTL in minutes (0 => 30)
+	DevLoginAllowed bool
+	RateLimitPerMin int // token-bucket refill rate per session/IP (0 => disabled)
 	// CustomCompositionEnabled gates rendering of user-authored Remotion code.
-	// Upstream dw.aixifs.com/mcp does NOT yet accept composition source, so this
+	// The upstream MCP does NOT yet accept composition source, so this
 	// stays false: a render request with custom code returns 501 + a clear note
 	// instead of silently falling back to a template.
+	// RepoRoot is the OpenMontage repository root (the parent of the
+	// ``projects/`` directory where uploaded session assets live). It is used
+	// to serve uploaded-asset thumbnails at /api/assets. Defaults to three
+	// levels above StaticDir (frameflow/bff/web -> repo root) and can be
+	// overridden with REPO_ROOT for non-standard deploy layouts.
+	RepoRoot                 string
 	CustomCompositionEnabled bool
 	// BusinessStubJSON is an optional JSON map (business_key -> [{url,name}])
 	// used by the default StubFetcher. Replace with a real Fetcher impl to pull
@@ -56,10 +72,31 @@ type Config struct {
 	// a real user store / WeChat resolver can replace this later.
 	DefaultTier   string
 	TierOverrides string
+
+	// ExternalAgentToken is a static bearer token accepted by /api/mcp-raw as
+	// an alternative to WeChat auth. When set, external CLI/agent callers can
+	// hit the BFF without a browser session. The token is hashed (SHA-256, first
+	// 16 hex) and used as the SessionStore scope key, so all calls from the same
+	// token share one upstream MCP session. Leave empty to disable the route.
+	ExternalAgentToken string
+
+	// VoiceboxUpstreamURL is the Streamable-HTTP MCP endpoint for the local
+	// voicebox MCP server, served via OpenMontage's :8900 reverse-proxy mount
+	// at /voicebox/mcp/. Proxied verbatim by POST /api/voicebox-mcp with no
+	// state, no SessionStore, and no Mcp-Session-Id rotation pinning. The
+	// trailing slash is required: voicebox's MCP route is mounted at
+	// /voicebox/mcp/ and a bare /voicebox/mcp 301-strips to it. Defaults to
+	// the production upstream (lanes.ymxt.top). Override with
+	// VOICEBOX_UPSTREAM_URL=http://127.0.0.1:8900/voicebox/mcp/ on dev hosts.
+	VoiceboxUpstreamURL string
 }
 
-// DefaultMCPAllowedTools is intentionally small: the BFF only exposes the
-// upload, render, status, and the two FrameFlow media workflows by default.
+// DefaultMCPAllowedTools is the server-side allowlist used when MCP_ALLOWED_TOOLS
+// is unset. Beyond the upload/render/status surface and the two FrameFlow media
+// workflows, it includes the generic tool-inspection and execution tools the
+// script-mode editor drives (execute_tool / get_tool_info / list_tools /
+// dry_run_tool). Those forward to the upstream MCP, where every authorization
+// and resource check still happens — the BFF only relays them.
 func DefaultMCPAllowedTools() []string {
 	return []string{
 		"upload_asset",
@@ -68,6 +105,10 @@ func DefaultMCPAllowedTools() []string {
 		"get_render_status",
 		"create_captioned_video_share",
 		"create_cloned_voice_video_share",
+		"execute_tool",
+		"get_tool_info",
+		"list_tools",
+		"dry_run_tool",
 	}
 }
 
@@ -79,14 +120,19 @@ func Load() *Config {
 		}
 		return def
 	}
+	mcpBaseURL := firstNonEmpty(os.Getenv("MCP_BASE_URL"), os.Getenv("UPSTREAM_MCP_URL"), "http://127.0.0.1:8900/mcp")
+	mcpProgressURL := strings.TrimSpace(os.Getenv("MCP_PROGRESS_URL"))
+	if mcpProgressURL == "" {
+		mcpProgressURL = deriveProgressURL(mcpBaseURL)
+	}
 	allowedTools := parseCSV(os.Getenv("MCP_ALLOWED_TOOLS"))
 	if len(allowedTools) == 0 {
 		allowedTools = DefaultMCPAllowedTools()
 	}
 	return &Config{
-		MCPBaseURL:               get("MCP_BASE_URL", "https://dw.aixifs.com/mcp"),
+		MCPBaseURL:               mcpBaseURL,
 		MCPAPIToken:              os.Getenv("MCP_API_TOKEN"),
-		MCPProgressURL:           get("MCP_PROGRESS_URL", "https://dw.aixifs.com/render-progress"),
+		MCPProgressURL:           mcpProgressURL,
 		MCPAllowedTools:          allowedTools,
 		WechatAppID:              os.Getenv("WECHAT_APP_ID"),
 		WechatAppSecret:          os.Getenv("WECHAT_APP_SECRET"),
@@ -96,19 +142,19 @@ func Load() *Config {
 		Port:                     get("BFF_PORT", "8080"),
 		SessionSecure:            os.Getenv("SESSION_SECURE") == "true",
 		StaticDir:                get("STATIC_DIR", "./web"),
+		RepoRoot:                 get("REPO_ROOT", filepath.Join(get("STATIC_DIR", "./web"), "..", "..", "..")),
 		StateDBPath:              get("STATE_DB_PATH", "./data/frameflow.db"),
 		AuthRequired:             os.Getenv("AUTH_REQUIRED") == "true",
 		DevLoginAllowed:          os.Getenv("DEV_LOGIN_ALLOWED") == "true",
 		RateLimitPerMin:          getInt("RATE_LIMIT_PER_MIN", 30),
-		ImageBatchMaxParallel:    getInt("IMAGE_BATCH_MAX_PARALLEL", 2),
-		ImageBatchMaxPerUser:     getInt("IMAGE_BATCH_MAX_PER_USER", 2),
-		ImageBatchLeaseTTLMin:    getInt("IMAGE_BATCH_LEASE_TTL_MIN", 30),
 		CustomCompositionEnabled: os.Getenv("CUSTOM_COMPOSITION_ENABLED") == "true",
 		BusinessStubJSON:         os.Getenv("BUSINESS_STUB_IMAGES"),
 		WeiyunMCPURL:             get("WEIYUN_MCP_URL", "https://www.weiyun.com/api/v3/mcpserver"),
 		WeiyunAPIToken:           os.Getenv("WEIYUN_API_KEY"),
 		DefaultTier:              get("DEFAULT_TIER", "free"),
 		TierOverrides:            os.Getenv("TIER_OVERRIDES"),
+		ExternalAgentToken:       strings.TrimSpace(os.Getenv("EXTERNAL_AGENT_TOKEN")),
+		VoiceboxUpstreamURL:      strings.TrimRight(get("VOICEBOX_UPSTREAM_URL", "http://lanes.ymxt.top:8900/voicebox/mcp/"), "/") + "/",
 	}
 }
 
@@ -128,6 +174,49 @@ func parseCSV(raw string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// deriveProgressURL keeps the progress endpoint on the same upstream host as
+// the MCP endpoint. The optional /mcp suffix is removed before appending the
+// progress path; any query or fragment is deliberately discarded.
+func deriveProgressURL(mcpBaseURL string) string {
+	u, err := url.Parse(strings.TrimSpace(mcpBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "http://127.0.0.1:8900/render-progress"
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	if path == "/mcp" {
+		path = ""
+	} else if strings.HasSuffix(path, "/mcp") {
+		path = strings.TrimSuffix(path, "/mcp")
+	}
+	u.Path = path + "/render-progress"
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.User = nil
+	return u.String()
+}
+
+// SafeEndpoint returns only non-sensitive URL components for startup logs.
+func SafeEndpoint(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "<invalid>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 // getInt reads an env var as int, falling back to def when unset/invalid.

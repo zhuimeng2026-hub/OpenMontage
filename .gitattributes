@@ -49,3 +49,9 @@ Makefile    text eol=lf
 *.ttf   binary
 *.otf   binary
 *.pdf   binary
+
+# --- Cross-language contract (T01) ----------------------------------------
+# Fixtures and schemas pinned by SHA across Python/Go/TS implementations.
+# They MUST stay LF — any CRLF rewrite breaks the parity contract tests.
+fixtures/remix-v2/*.json  -text eol=lf
+schemas/remix/*.json      -text eol=lf
