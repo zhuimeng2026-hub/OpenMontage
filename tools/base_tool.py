@@ -544,11 +544,44 @@ class BaseTool(ABC):
 
     @abstractmethod
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
-        """Run the tool. Subclasses must implement this."""
+        """Run the tool. Subclasses must implement this.
+
+        **WARNING: ``execute()`` is a real call — not a dry-run.** For paid
+        API tools it consumes quota and costs real money; for publishing
+        tools it produces irreversible side effects (uploads, posted
+        comments, deleted files). Treat every call as a spend.
+
+        For zero-cost preflight (cost estimation, dependency check, input
+        shape validation, "would this work?" look) call
+        :meth:`dry_run` instead — it never hits the network and never
+        mutates state. The same surface is exposed to MCP clients via the
+        ``dry_run_tool`` method on ``mcp_server.py``.
+
+        Subclasses must implement this and return a :class:`ToolResult`.
+        """
         ...
 
     def dry_run(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        """Preflight check without side effects. Override for paid/publishing tools."""
+        """Preflight check without side effects. Override for paid/publishing tools.
+
+        This is the **safe** alternative to :meth:`execute` — use it for
+        any preflight, smoke test, or "is this provider available right
+        now?" check before paying for an :meth:`execute` call:
+
+        - Never hits the network (no API call, no quota consumption).
+        - Never mutates state (no file writes, no publishes, no deletes).
+        - Returns ``estimated_cost_usd``, ``estimated_runtime_seconds``,
+          ``status``, and a ``would_execute`` flag — enough to decide
+          whether to call :meth:`execute` without paying for it.
+
+        Exposed to MCP clients via the ``dry_run_tool`` method on
+        ``mcp_server.py``; reachable from the registry as
+        ``registry.get(name).dry_run(inputs)``.
+
+        Returns:
+            dict with keys ``tool``, ``estimated_cost_usd``,
+            ``estimated_runtime_seconds``, ``status``, ``would_execute``.
+        """
         return {
             "tool": self.name,
             "estimated_cost_usd": self.estimate_cost(inputs),
