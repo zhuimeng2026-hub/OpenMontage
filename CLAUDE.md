@@ -9,9 +9,16 @@ Before responding to ANY user message:
 1. [`AGENT_GUIDE.md`](AGENT_GUIDE.md) — complete operating guide and agent contract. Contains the routing rules (onboarding, reference-video entry, pipeline selection, "Present Both Composition Runtimes" rule, checkpoint gating). Skipping it causes the wrong first action.
 2. [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) — architecture, key files, conventions. Single source of truth.
 3. `skills/pipelines/<pipeline>/<stage>-director.md` for whatever stage you are about to execute.
-4. `MEMORY.md` (repo root) — project-specific auto-memory: prior findings, frozen verdicts, host-specific workarounds. Read it; entries there override generic advice when they conflict.
+4. Project auto-memory (`MEMORY.md` at session-memory root — see Session-local Claude resources below): prior findings, frozen verdicts, host-specific workarounds. Entries there override generic advice when they conflict.
 
 `AGENTS.md`, `CURSOR.md`, `COPILOT.md`, `CODEX.md`, `.cursor/rules/openmontage.mdc` (Cursor: `alwaysApply: true`, `globs: ["**/*"]`), and `.github/copilot-instructions.md` are all thin pointers to the two files above. Do not duplicate content between them.
+
+### First-action routing
+
+`AGENT_GUIDE.md` is authoritative, but two routing skills are called out there as the **first action** depending on the user message — they shape the entire run, not just one stage. If either matches, read the skill before any other work:
+
+- **Vague / exploratory first message** ("make me a video", "what can you do?", "I want to make content"): read `skills/meta/onboarding.md`. Runs discovery, classifies the user's setup, presents capabilities in plain language, and offers starter prompts tailored to available tools. Skip onboarding only when the user arrives with a specific, actionable request (then go straight to Rule Zero in `AGENT_GUIDE.md`).
+- **Reference video URL or local file** ("make me something like this", "I love this Short — make me something similar"): read `skills/meta/video-reference-analyst.md`. This is a first-class workflow, not generic web search. The skill drives transcript + scene + keyframe analysis and produces a grounded summary before concept proposals. Distinguish from **source-footage** requests ("edit this footage"), which route to `source_media_review` and a footage-led pipeline.
 
 ## Identity
 
@@ -39,6 +46,7 @@ make preflight            # dump the full tool provider menu via registry.provid
 make hyperframes-doctor   # runtime check: node/ffmpeg/npx + `hyperframes doctor`
 make hyperframes-warm     # refresh the HyperFrames npx cache to latest (re-fetch the npm package)
 make musicgen-fetch       # pre-download MusicGen-small weights (~300MB) so music_gen_local works offline
+make transnetv2-fetch     # verify TransNetV2 (transnetv2_pytorch) is installed — no separate weight fetch, the wheel bundles the .pth
 
 make demo                 # render zero-key demo videos (Remotion only, no API keys needed)
 make demo-list            # list available demos
@@ -208,3 +216,16 @@ The repo has its own Claude-side state under `.claude/`:
 - `scheduled_tasks.lock` — locks held by autonomous cron/loop tasks.
 
 Do not edit `.claude/` directly from Python — Claude Code owns that subtree.
+
+Sibling files for non-Claude surfaces (all thin pointers — they redirect to `AGENT_GUIDE.md` + `PROJECT_CONTEXT.md`, do not duplicate):
+
+- `AGENTS.md` — generic agent entry.
+- `CURSOR.md` + `.cursor/rules/openmontage.mdc` (Cursor: `alwaysApply: true`, `globs: ["**/*"]`) — Cursor IDE.
+- `COPILOT.md` + `.github/copilot-instructions.md` — GitHub Copilot.
+- `CODEX.md` — Codex CLI.
+
+Auto-memory from prior runs lives in the user's session-memory root (`/root/.claude/projects/<project>/memory/MEMORY.md` on this host) — frozen verdicts and host-specific workarounds from earlier conversations. Read it on every run; entries there override generic advice when they conflict.
+
+## Ink Theater / Ink Puppet (hand-drawn doodle animation)
+
+For briefs that want a **hand-drawn ink doodle** look — "a sketch that comes to life", "a pencil/stick figure that walks or dances", whiteboard-doodle explainers — use the **Ink Theater** engine + **Ink Puppet** mocap system, surfaced in this repo by `/ink-art` (vector doodle from scratch) and `/animated-drawing` (animate a supplied drawing). It is a **style + reusable engine, not a new pipeline**: illustration/contraption pieces run on the `animation` pipeline; mocap characters (draws itself → walks/dances/waves via `InkPuppet.choreograph([...])`) run on `character-animation`. Never hand-tune character motion — the agent only chooses named mocap clips. See `skills/creative/ink-theater.md` and `ink-theater/README.md`.
