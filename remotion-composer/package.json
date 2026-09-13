@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Remotion composition renderer for OpenMontage animated explainer videos",
   "scripts": {
-    "start": "npx remotion studio",
+    "start": "systemd-run --scope --user -- npx remotion studio",
     "build": "npx remotion render src/index.tsx Explainer out/video.mp4",
     "upgrade": "npx remotion upgrade",
     "smoke": "npx remotion compositions src/index.tsx",
